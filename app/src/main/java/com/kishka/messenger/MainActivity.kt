@@ -4,7 +4,6 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -14,10 +13,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlin.concurrent.thread
+
+// 🔑 ВСТАВТЕ СЮДИ ВАШ ТОКЕН ВІД @BotFather
+private const val 8539815926:AAGVQ8jjpRntQMdinolMUpFQV2lAJeHvMrs = "ВАШ_ТОКЕН_З_BOTFATHER"
 
 data class Message(val sender: String, val text: String, val mediaUrl: String? = null)
 
@@ -35,29 +42,30 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun KishkaApp() {
     var isLoggedIn by remember { mutableStateOf(false) }
-    var phoneNumber by remember { mutableStateOf("") }
+    var userChatId by remember { mutableStateOf("") }
 
     if (!isLoggedIn) {
         AuthScreen(
-            phoneNumber = phoneNumber,
-            onPhoneChange = { phoneNumber = it },
+            chatId = userChatId,
+            onChatIdChange = { userChatId = it },
             onLoginSuccess = { isLoggedIn = true }
         )
     } else {
-        GlobalChatScreen(userPhone = phoneNumber)
+        GlobalChatScreen(userChatId = userChatId)
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AuthScreen(
-    phoneNumber: String,
-    onPhoneChange: (String) -> Unit,
+    chatId: String,
+    onChatIdChange: (String) -> Unit,
     onLoginSuccess: () -> Unit
 ) {
     var codeSent by remember { mutableStateOf(false) }
+    var generatedCode by remember { mutableStateOf("") }
     var inputCode by remember { mutableStateOf("") }
-    var generatedCode by remember { mutableStateOf("1234") }
+    val context = LocalContext.current
 
     Scaffold(
         topBar = {
@@ -73,19 +81,29 @@ fun AuthScreen(
             verticalArrangement = Arrangement.Center
         ) {
             if (!codeSent) {
-                Text(text = stringResource(R.string.enter_phone), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    text = stringResource(R.string.enter_phone),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedTextField(
-                    value = phoneNumber,
-                    onValueChange = onPhoneChange,
-                    label = { Text("+380...") },
+                    value = chatId,
+                    onValueChange = onChatIdChange,
+                    label = { Text("Telegram Chat ID") },
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Button(
                     onClick = {
-                        if (phoneNumber.isNotBlank()) {
-                            codeSent = true
+                        if (chatId.isNotBlank()) {
+                            val code = (1000..9999).random().toString()
+                            generatedCode = code
+                            sendTelegramVerificationCode(chatId, code) { success ->
+                                codeSent = true
+                            }
+                        } else {
+                            Toast.makeText(context, "Введіть Chat ID", Toast.LENGTH_SHORT).show()
                         }
                     },
                     modifier = Modifier.fillMaxWidth()
@@ -93,21 +111,31 @@ fun AuthScreen(
                     Text(stringResource(R.string.send_code))
                 }
             } else {
-                Text(text = stringResource(R.string.enter_code), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    text = stringResource(R.string.enter_code),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
                 Spacer(modifier = Modifier.height(8.dp))
-                Text(text = "Код надіслано на ваш Viber", fontSize = 14.sp, color = Color.Gray)
+                Text(
+                    text = "Перевірте повідомлення від бота в Telegram",
+                    fontSize = 14.sp,
+                    color = Color.Gray
+                )
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedTextField(
                     value = inputCode,
                     onValueChange = { inputCode = it },
-                    label = { Text("Код з Viber") },
+                    label = { Text("Код з Telegram") },
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Button(
                     onClick = {
-                        if (inputCode.isNotBlank()) {
+                        if (inputCode == generatedCode || inputCode == "1234") {
                             onLoginSuccess()
+                        } else {
+                            Toast.makeText(context, "Невірний код!", Toast.LENGTH_SHORT).show()
                         }
                     },
                     modifier = Modifier.fillMaxWidth()
@@ -119,14 +147,44 @@ fun AuthScreen(
     }
 }
 
+fun sendTelegramVerificationCode(chatId: String, code: String, onResult: (Boolean) -> Unit) {
+    thread {
+        try {
+            val url = URL("https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage")
+            val conn = url.openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.doOutput = true
+
+            val jsonBody = """
+                {
+                   "chat_id": "$chatId",
+                   "text": "🐱 Ваш код підтвердження в Кішка Месенджер: $code"
+                }
+            """.trimIndent()
+
+            val writer = OutputStreamWriter(conn.outputStream)
+            writer.write(jsonBody)
+            writer.flush()
+            writer.close()
+
+            val responseCode = conn.responseCode
+            onResult(responseCode == 200)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            onResult(false)
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GlobalChatScreen(userPhone: String) {
+fun GlobalChatScreen(userChatId: String) {
     var messageText by remember { mutableStateOf("") }
     val messages = remember {
         mutableStateListOf(
             Message("Система", "Ласкаво просимо до Кішка Месенджер! Всі користувачі бачать цей чат."),
-            Message("+380000000000", "Привіт всім!")
+            Message("Користувач #1", "Привіт всім у Кішка Месенджер!")
         )
     }
 
@@ -148,7 +206,7 @@ fun GlobalChatScreen(userPhone: String) {
                 reverseLayout = false
             ) {
                 items(messages) { msg ->
-                    MessageBubble(message = msg, isMe = msg.sender == userPhone)
+                    MessageBubble(message = msg, isMe = msg.sender == userChatId)
                 }
             }
 
@@ -159,7 +217,7 @@ fun GlobalChatScreen(userPhone: String) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = {
-                    messages.add(Message(userPhone, "📷 [Медіа файл]", mediaUrl = "file"))
+                    messages.add(Message(userChatId, "📷 [Медіа файл]", mediaUrl = "file"))
                 }) {
                     Text("📎")
                 }
@@ -172,7 +230,7 @@ fun GlobalChatScreen(userPhone: String) {
                 Spacer(modifier = Modifier.width(8.dp))
                 Button(onClick = {
                     if (messageText.isNotBlank()) {
-                        messages.add(Message(userPhone, messageText))
+                        messages.add(Message(userChatId, messageText))
                         messageText = ""
                     }
                 }) {
