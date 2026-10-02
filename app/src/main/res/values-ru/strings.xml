@@ -1,8 +1,8 @@
 <resources>
     <string name="app_name">Кошка Мессенджер</string>
-    <string name="enter_phone">Введите номер телефона</string>
-    <string name="send_code">Получить код в Viber</string>
-    <string name="enter_code">Введите код из Viber</string>
+    <string name="enter_phone">Введите ваш Telegram Chat ID</string>
+    <string name="send_code">Получить код в Telegram</string>
+    <string name="enter_code">Введите код из Telegram</string>
     <string name="verify">Подтвердить</string>
     <string name="chat_title">Общий чат Кошка</string>
     <string name="type_message">Введите сообщение...</string>
