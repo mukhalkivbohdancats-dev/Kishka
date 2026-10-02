@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">Кошка Мессенджер</string>
+    <string name="enter_phone">Введите номер телефона</string>
+    <string name="send_code">Получить код в Viber</string>
+    <string name="enter_code">Введите код из Viber</string>
+    <string name="verify">Подтвердить</string>
+    <string name="chat_title">Общий чат Кошка</string>
+    <string name="type_message">Введите сообщение...</string>
+    <string name="send">Отправить</string>
+    <string name="attach_media">Прикрепить медиа</string>
+    <string name="contacts">Все контакты</string>
+</resources>
