@@ -1,11 +1,20 @@
-buildscript {
+import org.gradle.api.initialization.resolve.RepositoriesMode
+
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOSITORIES)
     repositories {
         google()
         mavenCentral()
     }
 }
 
-plugins {
-    id("com.android.application") version "8.2.2" apply false
-    id("org.jetbrains.kotlin.android") version "1.9.22" apply false
-}
+rootProject.name = "KishkaMessenger"
+include(":app")
