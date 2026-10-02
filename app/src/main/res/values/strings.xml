@@ -1,12 +1,3 @@
 <resources>
-    <string name="app_name">Кішка Месенджер</string>
-    <string name="enter_phone">Введіть ваш Telegram Chat ID</string>
-    <string name="send_code">Отримати код у Telegram</string>
-    <string name="enter_code">Введіть код з Telegram</string>
-    <string name="verify">Підтвердити</string>
-    <string name="chat_title">Загальний чат Кішка</string>
-    <string name="type_message">Напишіть повідомлення...</string>
-    <string name="send">Надіслати</string>
-    <string name="attach_media">Додати медіа</string>
-    <string name="contacts">Усі контакти</string>
+    <string name="app_name">Kishka Messenger</string>
 </resources>
