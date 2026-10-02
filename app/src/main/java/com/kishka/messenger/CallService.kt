@@ -36,7 +36,7 @@ class CallService : Service() {
         createNotificationChannel()
 
         val notificationIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
         val pendingIntent = PendingIntent.getActivity(
             this, 0, notificationIntent,
@@ -70,10 +70,10 @@ class CallService : Service() {
             ringtone = RingtoneManager.getRingtone(applicationContext, ringtoneUri)
             ringtone?.play()
 
-            vibrator = getSystemService(Context.Vibrator_SERVICE) as Vibrator
+            vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 vibrator?.vibrate(
-                    VibrationEffect.createWaveForm(longArrayOf(0, 1000, 1000), 0)
+                    VibrationEffect.createWaveform(longArrayOf(0, 1000, 1000), 0)
                 )
             } else {
                 @Suppress("DEPRECATION")
