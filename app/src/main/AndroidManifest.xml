@@ -1,18 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.kishka.messenger">
 
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android.permission.INTERNET />
+    <uses-permission android.permission.ACCESS_NETWORK_STATE />
+    <uses-permission android.permission.VIBRATE />
+    <uses-permission android.permission.FOREGROUND_SERVICE />
+    <uses-permission android.permission.FOREGROUND_SERVICE_PHONE_CALL />
+    <uses-permission android.permission.POST_NOTIFICATIONS />
+    <uses-permission android.permission.READ_EXTERNAL_STORAGE" />
 
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_name"
+        android:label="Kishka Messenger"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.KishkaMessenger">
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
         <activity
             android:name=".MainActivity"
@@ -26,9 +30,9 @@
 
         <service
             android:name=".CallService"
-            android:foregroundServiceType="microphone"
-            android:exported="false" />
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="phoneCall" />
 
     </application>
-
 </manifest>
