@@ -19,7 +19,7 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-    - name: Prepare App Icon from app-image.jpg
+    - name: Convert app-image.jpg to PNG launcher icon
       run: |
         mkdir -p app/src/main/res/mipmap-mdpi
         mkdir -p app/src/main/res/mipmap-hdpi
@@ -27,11 +27,13 @@ jobs:
         mkdir -p app/src/main/res/mipmap-xxhdpi
         mkdir -p app/src/main/res/mipmap-xxxhdpi
         if [ -f "app-image.jpg" ]; then
-          cp app-image.jpg app/src/main/res/mipmap-mdpi/ic_launcher.jpg
-          cp app-image.jpg app/src/main/res/mipmap-hdpi/ic_launcher.jpg
-          cp app-image.jpg app/src/main/res/mipmap-xhdpi/ic_launcher.jpg
-          cp app-image.jpg app/src/main/res/mipmap-xxhdpi/ic_launcher.jpg
-          cp app-image.jpg app/src/main/res/mipmap-xxxhdpi/ic_launcher.jpg
+          sudo apt-get update && sudo apt-get install -y imagemagick
+          convert app-image.jpg app-image.png
+          cp app-image.png app/src/main/res/mipmap-mdpi/ic_launcher.png
+          cp app-image.png app/src/main/res/mipmap-hdpi/ic_launcher.png
+          cp app-image.png app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          cp app-image.png app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          cp app-image.png app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
         fi
 
     - name: Setup Gradle
