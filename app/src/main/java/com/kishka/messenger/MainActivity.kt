@@ -1,5 +1,6 @@
 package com.kishka.messenger
 
+import android.content.Context
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -41,17 +42,42 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun KishkaApp() {
-    var isLoggedIn by remember { mutableStateOf(false) }
-    var userChatId by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    // Отримуємо доступ до локального сховища пристрою (SharedPreferences)
+    val sharedPref = remember { context.getSharedPreferences("KishkaPrefs", Context.MODE_PRIVATE) }
+
+    // Зчитуємо збережений стан входу та ID користувача
+    var isLoggedIn by remember {
+        mutableStateOf(sharedPref.getBoolean("is_logged_in", false))
+    }
+    var userChatId by remember {
+        mutableStateOf(sharedPref.getString("user_chat_id", "") ?: "")
+    }
 
     if (!isLoggedIn) {
         AuthScreen(
             chatId = userChatId,
             onChatIdChange = { userChatId = it },
-            onLoginSuccess = { isLoggedIn = true }
+            onLoginSuccess = { finalChatId ->
+                userChatId = finalChatId
+                // Зберігаємо сесію в пам'ять телефону
+                sharedPref.edit()
+                    .putBoolean("is_logged_in", true)
+                    .putString("user_chat_id", finalChatId)
+                    .apply()
+                isLoggedIn = true
+            }
         )
     } else {
-        GlobalChatScreen(userChatId = userChatId)
+        GlobalChatScreen(
+            userChatId = userChatId,
+            onLogout = {
+                // Очищаємо пам'ять при виході з акаунта
+                sharedPref.edit().clear().apply()
+                isLoggedIn = false
+                userChatId = ""
+            }
+        )
     }
 }
 
@@ -60,7 +86,7 @@ fun KishkaApp() {
 fun AuthScreen(
     chatId: String,
     onChatIdChange: (String) -> Unit,
-    onLoginSuccess: () -> Unit
+    onLoginSuccess: (String) -> Unit
 ) {
     var codeSent by remember { mutableStateOf(false) }
     var generatedCode by remember { mutableStateOf("") }
@@ -133,7 +159,7 @@ fun AuthScreen(
                 Button(
                     onClick = {
                         if (inputCode == generatedCode || inputCode == "1234") {
-                            onLoginSuccess()
+                            onLoginSuccess(chatId)
                         } else {
                             Toast.makeText(context, "Невірний код!", Toast.LENGTH_SHORT).show()
                         }
@@ -179,7 +205,10 @@ fun sendTelegramVerificationCode(chatId: String, code: String, onResult: (Boolea
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GlobalChatScreen(userChatId: String) {
+fun GlobalChatScreen(
+    userChatId: String,
+    onLogout: () -> Unit
+) {
     var messageText by remember { mutableStateOf("") }
     val messages = remember {
         mutableStateListOf(
@@ -190,7 +219,14 @@ fun GlobalChatScreen(userChatId: String) {
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text(stringResource(R.string.chat_title)) })
+            TopAppBar(
+                title = { Text(stringResource(R.string.chat_title)) },
+                actions = {
+                    TextButton(onClick = onLogout) {
+                        Text("Вийти", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            )
         }
     ) { padding ->
         Column(
