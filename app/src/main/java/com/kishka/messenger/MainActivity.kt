@@ -10,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -36,7 +37,7 @@ private const val TELEGRAM_BOT_TOKEN = "8539815926:AAGVQ8jjpRntQMdinolMUpFQV2lAJ
 private const val TELEGRAM_CHAT_ID = "8539815926"
 
 data class Contact(val name: String, val phone: String)
-data class Message(val sender: String, val text: String, val mediaUrl: String? = null)
+data class Message(val sender: String, val text: String)
 
 enum class CallState { IDLE, INCOMING, ACTIVE }
 
@@ -68,7 +69,9 @@ fun KishkaApp() {
     ) { }
 
     LaunchedEffect(Unit) {
-        val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
+        val permissions = mutableListOf(
+            Manifest.permission.RECORD_AUDIO
+        )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -103,6 +106,11 @@ fun KishkaApp() {
                 onSimulateIncomingCall = {
                     activeCallerName = "Олександр (+380937044394)"
                     callState = CallState.INCOMING
+                    val intent = Intent(context, CallService::class.java).apply {
+                        putExtra("CALLER_NAME", activeCallerName)
+                        action = "ACTION_INCOMING"
+                    }
+                    ContextCompat.startForegroundService(context, intent)
                 },
                 onLogout = {
                     sharedPref.edit().clear().apply()
@@ -122,6 +130,10 @@ fun KishkaApp() {
                 },
                 onDecline = {
                     callState = CallState.IDLE
+                    val intent = Intent(context, CallService::class.java).apply {
+                        action = "ACTION_HANGUP"
+                    }
+                    context.stopService(intent)
                 }
             )
             CallState.ACTIVE -> ActiveCallScreen(
@@ -153,6 +165,7 @@ fun AuthScreen(
     var codeSent by remember { mutableStateOf(false) }
     var generatedCode by remember { mutableStateOf("") }
     var inputCode by remember { mutableStateOf("") }
+    var isLoading by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     Scaffold(
@@ -162,80 +175,94 @@ fun AuthScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp),
+                .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
             if (!codeSent) {
                 Text(
-                    text = "Введіть номер телефону",
-                    fontSize = 20.sp,
+                    text = "Вхід до Kishka Messenger",
+                    fontSize = 22.sp,
                     fontWeight = FontWeight.Bold
                 )
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(16.dp))
                 OutlinedTextField(
                     value = phone,
                     onValueChange = { phone = it },
                     label = { Text("Приклад: +380937044394") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
                 )
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(20.dp))
                 Button(
                     onClick = {
                         if (phone.length >= 10) {
+                            isLoading = true
                             val code = (100000..999999).random().toString()
                             generatedCode = code
-                            codeSent = true
 
-                            sendTelegramNotification("🔐 Your code is $code")
-                            Toast.makeText(context, "Код надіслано в Telegram!", Toast.LENGTH_SHORT).show()
+                            sendTelegramNotification("🔐 Ваш код авторизації для $phone: $code") { success ->
+                                isLoading = false
+                                if (success) {
+                                    codeSent = true
+                                    Toast.makeText(context, "Код надіслано в Telegram!", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "Помилка відправки. Перевірте з'єднання!", Toast.LENGTH_LONG).show()
+                                }
+                            }
                         } else {
-                            Toast.makeText(context, "Введіть коректний номер!", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Введіть правильний номер!", Toast.LENGTH_SHORT).show()
                         }
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    enabled = !isLoading
                 ) {
-                    Text("Отримати код підтвердження")
+                    if (isLoading) {
+                        CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
+                    } else {
+                        Text("Отримати код підтвердження", fontSize = 16.sp)
+                    }
                 }
             } else {
                 Text(
-                    text = "Введіть код підтвердження",
-                    fontSize = 20.sp,
+                    text = "Введіть 6-значний код",
+                    fontSize = 22.sp,
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Код надіслано в Telegram для номера: $phone",
+                    text = "Код надіслано у бот для $phone",
                     fontSize = 14.sp,
                     color = Color.Gray
                 )
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(16.dp))
                 OutlinedTextField(
                     value = inputCode,
                     onValueChange = { inputCode = it },
-                    label = { Text("Введіть 6-значний код") },
-                    modifier = Modifier.fillMaxWidth()
+                    label = { Text("Код з Telegram") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
                 )
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(20.dp))
                 Button(
                     onClick = {
-                        if (inputCode == generatedCode || inputCode == "1234" || inputCode == "123456") {
+                        if (inputCode == generatedCode || inputCode == "123456" || inputCode == "1234") {
                             onLoginSuccess(phone)
                         } else {
-                            Toast.makeText(context, "Невірний код! Перевірте бот у Telegram", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Невірний код підтвердження!", Toast.LENGTH_SHORT).show()
                         }
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().height(50.dp)
                 ) {
-                    Text("Підтвердити")
+                    Text("Підтвердити", fontSize = 16.sp)
                 }
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 OutlinedButton(
                     onClick = {
                         codeSent = false
                         inputCode = ""
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().height(50.dp)
                 ) {
                     Text("Змінити номер")
                 }
@@ -264,8 +291,8 @@ fun MainScreen(
     var messageText by remember { mutableStateOf("") }
     val messages = remember {
         mutableStateListOf(
-            Message("Система", "Ласкаво просимо до Kishka Messenger!"),
-            Message("+380937044394", "Привіт всім!")
+            Message("Система", "Вітаємо у Kishka Messenger! Все працює в реальному часі."),
+            Message("+380937044394", "Привіт! Тестове повідомлення.")
         )
     }
 
@@ -275,7 +302,7 @@ fun MainScreen(
                 title = { Text("Kishka Messenger") },
                 actions = {
                     IconButton(onClick = onSimulateIncomingCall) {
-                        Text("📞", fontSize = 20.sp)
+                        Text("📞", fontSize = 22.sp)
                     }
                     TextButton(onClick = onLogout) {
                         Text("Вийти", color = MaterialTheme.colorScheme.error)
@@ -288,7 +315,7 @@ fun MainScreen(
                 NavigationBarItem(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
-                    label = { Text("Загальний Чат") },
+                    label = { Text("Чат") },
                     icon = { Text("💬") }
                 )
                 NavigationBarItem(
@@ -307,7 +334,7 @@ fun MainScreen(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
-                            .padding(8.dp)
+                            .padding(12.dp)
                     ) {
                         items(messages) { msg ->
                             MessageBubble(message = msg, isMe = msg.sender == userPhone)
@@ -320,23 +347,25 @@ fun MainScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(onClick = {
-                            val newMsg = "🖼️ [Фото надіслано користувачем $userPhone]"
-                            messages.add(Message(userPhone, newMsg))
-                            sendTelegramNotification("📸 $userPhone надіслав фото у чат")
+                            val photoMsg = "🖼️ [Фотографія від $userPhone]"
+                            messages.add(Message(userPhone, photoMsg))
+                            sendTelegramNotification("📸 Надіслано фото у чат від $userPhone") {}
                         }) {
-                            Text("🖼️", fontSize = 22.sp)
+                            Text("🖼️", fontSize = 24.sp)
                         }
                         OutlinedTextField(
                             value = messageText,
                             onValueChange = { messageText = it },
-                            placeholder = { Text("Напишіть повідомлення...") },
-                            modifier = Modifier.weight(1f)
+                            placeholder = { Text("Повідомлення...") },
+                            modifier = Modifier.weight(1f),
+                            maxLines = 3
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Button(onClick = {
                             if (messageText.isNotBlank()) {
-                                messages.add(Message(userPhone, messageText))
-                                sendTelegramNotification("💬 $userPhone: $messageText")
+                                val textToSend = messageText
+                                messages.add(Message(userPhone, textToSend))
+                                sendTelegramNotification("💬 $userPhone: $textToSend") {}
                                 messageText = ""
                             }
                         }) {
@@ -396,16 +425,17 @@ fun IncomingCallScreen(
 
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Surface(
-                modifier = Modifier.size(100.dp),
+                modifier = Modifier.size(110.dp),
                 shape = CircleShape,
                 color = Color.DarkGray
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Text("🐱", fontSize = 50.sp)
+                    Text("🐱", fontSize = 60.sp)
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(20.dp))
             Text("Вхідний дзвінок...", color = Color.Gray, fontSize = 18.sp)
+            Spacer(modifier = Modifier.height(8.dp))
             Text(callerName, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
         }
 
@@ -452,9 +482,9 @@ fun ActiveCallScreen(
         Spacer(modifier = Modifier.height(40.dp))
 
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("Дзвінок активний (працює у фоні)", color = Color(0xFF4CAF50), fontSize = 16.sp)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(callerName, color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+            Text("🟢 Дзвінок активний (працює у фоновому режимі)", color = Color(0xFF4CAF50), fontSize = 14.sp)
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(callerName, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
         }
 
         Column(
@@ -464,17 +494,18 @@ fun ActiveCallScreen(
             Button(
                 onClick = onToggleMute,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isMuted) Color.Red else Color.DarkGray
+                    containerColor = if (isMuted) Color.Red else Color(0xFF333333)
                 ),
-                modifier = Modifier.fillMaxWidth(0.8f)
+                modifier = Modifier.fillMaxWidth(0.85f).height(50.dp)
             ) {
                 Text(
                     text = if (isMuted) "Включити мікрофон 🎙️" else "Вимкнути мікрофон 🔇",
-                    fontSize = 18.sp
+                    fontSize = 16.sp,
+                    color = Color.White
                 )
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
             Button(
                 onClick = onHangUp,
@@ -482,7 +513,7 @@ fun ActiveCallScreen(
                 modifier = Modifier.size(80.dp),
                 shape = CircleShape
             ) {
-                Text("Вибити", color = Color.White, fontWeight = FontWeight.Bold)
+                Text("Вибити", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
             }
         }
         Spacer(modifier = Modifier.height(40.dp))
@@ -498,26 +529,30 @@ fun MessageBubble(message: Message, isMe: Boolean) {
         horizontalAlignment = if (isMe) Alignment.End else Alignment.Start
     ) {
         Text(text = message.sender, fontSize = 11.sp, color = Color.Gray)
+        Spacer(modifier = Modifier.height(2.dp))
         Card(
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(
                 containerColor = if (isMe) Color(0xFFDCF8C6) else Color(0xFFEFEFEF)
             )
         ) {
-            Column(modifier = Modifier.padding(10.dp)) {
-                Text(text = message.text, color = Color.Black)
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(text = message.text, color = Color.Black, fontSize = 15.sp)
             }
         }
     }
 }
 
-fun sendTelegramNotification(text: String) {
+fun sendTelegramNotification(text: String, onResult: (Boolean) -> Unit) {
     thread {
+        var success = false
         try {
             val url = URL("https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage")
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
             conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
             conn.doOutput = true
 
             val jsonBody = """
@@ -531,9 +566,13 @@ fun sendTelegramNotification(text: String) {
             writer.write(jsonBody)
             writer.flush()
             writer.close()
-            conn.responseCode
+
+            if (conn.responseCode == 200) {
+                success = true
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        onResult(success)
     }
 }
