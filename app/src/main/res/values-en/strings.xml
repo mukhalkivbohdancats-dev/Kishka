@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">Kishka Messenger</string>
+    <string name="enter_phone">Enter phone number</string>
+    <string name="send_code">Get code via Viber</string>
+    <string name="enter_code">Enter code from Viber</string>
+    <string name="verify">Verify</string>
+    <string name="chat_title">Kishka Global Chat</string>
+    <string name="type_message">Type a message...</string>
+    <string name="send">Send</string>
+    <string name="attach_media">Attach media</string>
+    <string name="contacts">All contacts</string>
+</resources>
