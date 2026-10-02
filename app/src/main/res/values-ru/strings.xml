@@ -1,12 +1,12 @@
 <resources>
-    <string name="app_name">Кошка Мессенджер</string>
-    <string name="enter_phone">Введите ваш Telegram Chat ID</string>
-    <string name="send_code">Получить код в Telegram</string>
-    <string name="enter_code">Введите код из Telegram</string>
-    <string name="verify">Подтвердить</string>
-    <string name="chat_title">Общий чат Кошка</string>
-    <string name="type_message">Введите сообщение...</string>
-    <string name="send">Отправить</string>
-    <string name="attach_media">Прикрепить медиа</string>
-    <string name="contacts">Все контакты</string>
+    <string name="app_name">Kishka Messenger</string>
+    <string name="enter_phone">Enter your Telegram Chat ID</string>
+    <string name="send_code">Get code via Telegram</string>
+    <string name="enter_code">Enter code from Telegram</string>
+    <string name="verify">Verify</string>
+    <string name="chat_title">Kishka Global Chat</string>
+    <string name="type_message">Type a message...</string>
+    <string name="send">Send</string>
+    <string name="attach_media">Attach media</string>
+    <string name="contacts">All contacts</string>
 </resources>
