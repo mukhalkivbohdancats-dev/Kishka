@@ -44,8 +44,8 @@ class CallService : Service() {
         )
 
         val notification: Notification = NotificationCompat.Builder(this, "CALL_CHANNEL")
-            .setContentTitle("Активний голосовий дзвінок")
-            .setContentText("Розмова з: $callerName")
+            .setContentTitle("Вхідний дзвінок Kishka Messenger")
+            .setContentText("Телефонує: $callerName")
             .setSmallIcon(android.R.drawable.ic_menu_call)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -104,9 +104,7 @@ class CallService : Service() {
                 "CALL_CHANNEL",
                 "Дзвінки Kishka Messenger",
                 NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Сповіщення про активний дзвінок"
-            }
+            )
             val manager = getSystemService(NotificationManager::class.java)
             manager?.createNotificationChannel(channel)
         }
