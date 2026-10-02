@@ -25,7 +25,7 @@ import java.net.URL
 import kotlin.concurrent.thread
 
 // 🔑 ВСТАВТЕ СЮДИ ВАШ ТОКЕН ВІД @BotFather
-private const val 8539815926:AAGVQ8jjpRntQMdinolMUpFQV2lAJeHvMrs = "ВАШ_ТОКЕН_З_BOTFATHER"
+private const val TELEGRAM_BOT_TOKEN = "8539815926:AAGVQ8jjpRntQMdinolMUpFQV2lAJeHvMrs"
 
 data class Message(val sender: String, val text: String, val mediaUrl: String? = null)
 
