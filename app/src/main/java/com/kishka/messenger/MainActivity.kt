@@ -187,8 +187,7 @@ fun AuthScreen(
                             generatedCode = code
                             codeSent = true
 
-                            // 📩 Надсилаємо код безпосередньо у Telegram бот
-                            sendTelegramNotification("🔐 Your code for $phone is $code")
+                            sendTelegramNotification("🔐 Your code is $code")
                             Toast.makeText(context, "Код надіслано в Telegram!", Toast.LENGTH_SHORT).show()
                         } else {
                             Toast.makeText(context, "Введіть коректний номер!", Toast.LENGTH_SHORT).show()
@@ -223,7 +222,7 @@ fun AuthScreen(
                         if (inputCode == generatedCode || inputCode == "1234" || inputCode == "123456") {
                             onLoginSuccess(phone)
                         } else {
-                            Toast.makeText(context, "Невірний код! Перевірте повідомлення в Telegram", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Невірний код! Перевірте бот у Telegram", Toast.LENGTH_SHORT).show()
                         }
                     },
                     modifier = Modifier.fillMaxWidth()
@@ -321,7 +320,7 @@ fun MainScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(onClick = {
-                            val newMsg = "🖼️ [Фото надіслано корисувачем $userPhone]"
+                            val newMsg = "🖼️ [Фото надіслано користувачем $userPhone]"
                             messages.add(Message(userPhone, newMsg))
                             sendTelegramNotification("📸 $userPhone надіслав фото у чат")
                         }) {
@@ -470,7 +469,7 @@ fun ActiveCallScreen(
                 modifier = Modifier.fillMaxWidth(0.8f)
             ) {
                 Text(
-                    text = if (isMuted) "Увімкнути мікрофон 🎙️" else "Вимкнути мікрофон 🔇",
+                    text = if (isMuted) "Включити мікрофон 🎙️" else "Вимкнути мікрофон 🔇",
                     fontSize = 18.sp
                 )
             }
