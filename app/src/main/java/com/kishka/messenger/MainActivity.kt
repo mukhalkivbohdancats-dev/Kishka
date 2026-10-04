@@ -16,6 +16,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -52,10 +58,10 @@ object Strings {
             "account_settings" to "Налаштування акаунту",
             "app_language" to "Мова інтерфейсу",
             "your_name" to "Ваше ім'я в месенджері",
-            "choose_photo" to "📁 Обрати фото з галереї",
+            "choose_photo" to "Обрати фото з галереї",
             "email_label" to "Пошта",
             "save_changes" to "Зберегти зміни",
-            "logout" to "Вийти з акаунта 🚪",
+            "logout" to "Вийти з акаунта",
             "login_title" to "Вхід у Kishka",
             "register_title" to "Створити акаунт",
             "ask_name" to "Як вас звати?",
@@ -65,8 +71,8 @@ object Strings {
             "has_account" to "Вже є акаунт? Увійти",
             "no_account" to "Немає акаунта? Зареєструватися",
             "active_call" to "Активний дзвінок Kishka",
-            "end_call" to "Завершити дзвінок 🔴",
-            "calling_in_progress" to "Триває розмова... 📞",
+            "end_call" to "Завершити дзвінок",
+            "calling_in_progress" to "Триває розмова...",
             "type_message" to "Повідомлення..."
         ),
         "en" to mapOf(
@@ -84,10 +90,10 @@ object Strings {
             "account_settings" to "Account Settings",
             "app_language" to "Interface Language",
             "your_name" to "Your Display Name",
-            "choose_photo" to "📁 Choose photo from gallery",
+            "choose_photo" to "Choose photo from gallery",
             "email_label" to "Email",
             "save_changes" to "Save Changes",
-            "logout" to "Log Out 🚪",
+            "logout" to "Log Out",
             "login_title" to "Sign in to Kishka",
             "register_title" to "Create Account",
             "ask_name" to "What is your name?",
@@ -97,8 +103,8 @@ object Strings {
             "has_account" to "Already have an account? Sign In",
             "no_account" to "No account? Register",
             "active_call" to "Active Kishka Call",
-            "end_call" to "End Call 🔴",
-            "calling_in_progress" to "Call in progress... 📞",
+            "end_call" to "End Call",
+            "calling_in_progress" to "Call in progress...",
             "type_message" to "Message..."
         )
     )
@@ -156,7 +162,6 @@ fun KishkaApp() {
     var activeCallTargetPhone by remember { mutableStateOf<String?>(null) }
     var isCallMinimized by remember { mutableStateOf(false) }
 
-    // Завантаження профілю з БД
     LaunchedEffect(currentUserEmail) {
         if (currentUserEmail.isNotEmpty()) {
             manager.registerUserInGlobalContacts(currentUserEmail)
@@ -170,7 +175,6 @@ fun KishkaApp() {
         }
     }
 
-    // Дзвінок дозволяється ТІЛЬКИ якщо користувач є в Kishka Messenger
     val startCallAction: (String) -> Unit = { targetPhone ->
         manager.checkUserExists(targetPhone) { exists ->
             if (exists) {
@@ -285,19 +289,19 @@ fun KishkaApp() {
                     NavigationBarItem(
                         selected = selectedBottomTab == 0,
                         onClick = { selectedBottomTab = 0 },
-                        icon = { Text("💬", fontSize = 20.sp) },
+                        icon = { Icon(Icons.Default.Call, contentDescription = null) },
                         label = { Text(Strings.get("chats", currentLanguage)) }
                     )
                     NavigationBarItem(
                         selected = selectedBottomTab == 1,
                         onClick = { selectedBottomTab = 1 },
-                        icon = { Text("📞", fontSize = 20.sp) },
+                        icon = { Icon(Icons.Default.VolumeUp, contentDescription = null) },
                         label = { Text(Strings.get("calls", currentLanguage)) }
                     )
                     NavigationBarItem(
                         selected = selectedBottomTab == 2,
-                        onClick = { selectedBottomTab = 2 },
-                        icon = { Text("👤", fontSize = 20.sp) },
+                        onClick = { selectedBottomTab == 2 },
+                        icon = { Icon(Icons.Default.Mic, contentDescription = null) },
                         label = { Text(Strings.get("account", currentLanguage)) }
                     )
                 }
@@ -322,7 +326,6 @@ fun AccountTab(
     var isLoading by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
-    // Обирач зображення з галереї
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -451,7 +454,7 @@ fun CallsTab(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(if (log.isMissed) "📉" else "📈", fontSize = 20.sp)
+                                Icon(Icons.Default.Call, contentDescription = null, tint = ViberPurple)
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Column {
                                     Text(
@@ -463,7 +466,7 @@ fun CallsTab(
                                 }
                             }
                             IconButton(onClick = { onStartCall(log.callerPhone) }) {
-                                Text("📞", fontSize = 22.sp)
+                                Icon(Icons.Default.Call, contentDescription = null, tint = ViberPurple)
                             }
                         }
                     }
@@ -476,7 +479,7 @@ fun CallsTab(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LanguageSelector(currentLang: String, onLangSelected: (String) -> Unit) {
-    val languages = listOf("uk" to "🇺🇦 Українська", "en" to "🇬🇧 English")
+    val languages = listOf("uk" to "Українська", "en" to "English")
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Text(
             text = Strings.get("select_lang", currentLang),
@@ -660,7 +663,7 @@ fun ChatsTab(
                 title = { Text("Rakuten Kishka", fontWeight = FontWeight.Bold, color = ViberPurple) },
                 actions = {
                     IconButton(onClick = { showAddContactDialog = true }) {
-                        Text("➕", fontSize = 20.sp)
+                        Icon(Icons.Default.Call, contentDescription = null, tint = ViberPurple)
                     }
                 }
             )
@@ -769,9 +772,17 @@ fun ChatScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                navigationIcon = { IconButton(onClick = onBack) { Text("⬅️") } },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.Close, contentDescription = null)
+                    }
+                },
                 title = { Text(targetUser.name.ifEmpty { targetUser.phone }) },
-                actions = { IconButton(onClick = { onStartCall(targetUser.phone) }) { Text("📞", fontSize = 20.sp) } }
+                actions = {
+                    IconButton(onClick = { onStartCall(targetUser.phone) }) {
+                        Icon(Icons.Default.Call, contentDescription = null, tint = ViberPurple)
+                    }
+                }
             )
         }
     ) { padding ->
@@ -802,7 +813,9 @@ fun ChatScreen(
                 modifier = Modifier.fillMaxWidth().padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { filePicker.launch("*/*") }) { Text("📎", fontSize = 20.sp) }
+                IconButton(onClick = { filePicker.launch("*/*") }) {
+                    Icon(Icons.Default.Mic, contentDescription = null, tint = ViberPurple)
+                }
                 OutlinedTextField(
                     value = textInput,
                     onValueChange = { textInput = it },
@@ -817,7 +830,9 @@ fun ChatScreen(
                             textInput = ""
                         }
                     }
-                ) { Text("🚀", fontSize = 20.sp) }
+                ) {
+                    Icon(Icons.Default.Call, contentDescription = null, tint = ViberPurple)
+                }
             }
         }
     }
@@ -836,7 +851,11 @@ fun ActiveCallScreen(
         topBar = {
             TopAppBar(
                 title = { Text(Strings.get("active_call", lang)) },
-                navigationIcon = { IconButton(onClick = onMinimize) { Text("❌", fontSize = 20.sp) } }
+                navigationIcon = {
+                    IconButton(onClick = onMinimize) {
+                        Icon(Icons.Default.Close, contentDescription = null)
+                    }
+                }
             )
         }
     ) { padding ->
@@ -864,7 +883,11 @@ fun ActiveCallScreen(
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                 modifier = Modifier.fillMaxWidth().padding(24.dp).height(56.dp)
             ) {
-                Text(Strings.get("end_call", lang), fontSize = 18.sp, color = Color.White)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.CallEnd, contentDescription = null, tint = Color.White)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(Strings.get("end_call", lang), fontSize = 18.sp, color = Color.White)
+                }
             }
         }
     }
@@ -886,7 +909,7 @@ fun ActiveCallBanner(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("📞", fontSize = 18.sp)
+                Icon(Icons.Default.Call, contentDescription = null, tint = Color.White)
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
                     Text("Дзвінок з $targetPhone", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
@@ -894,7 +917,7 @@ fun ActiveCallBanner(
                 }
             }
             IconButton(onClick = onEndCall, modifier = Modifier.size(36.dp)) {
-                Text("🔴", fontSize = 18.sp)
+                Icon(Icons.Default.CallEnd, contentDescription = null, tint = Color.White)
             }
         }
     }
