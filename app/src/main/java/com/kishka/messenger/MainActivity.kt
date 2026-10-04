@@ -178,9 +178,7 @@ fun KishkaApp() {
     var currentUserEmail by remember {
         mutableStateOf(if (auth.currentUser?.isEmailVerified == true) auth.currentUser?.email ?: "" else "")
     }
-    var currentDisplayName by remember {
-        mutableStateOf(auth.currentUser?.displayName ?: "Користувач")
-    }
+    var currentDisplayName by remember { mutableStateOf("") }
     var avatarUrl by remember { mutableStateOf(DEFAULT_AVATAR_URL) }
 
     var selectedUserForChat by remember { mutableStateOf<User?>(null) }
@@ -189,14 +187,27 @@ fun KishkaApp() {
     var activeCallTargetPhone by remember { mutableStateOf<String?>(null) }
     var isCallMinimized by remember { mutableStateOf(false) }
 
+    // Завантаження профілю з Firestore при вході або запуску
     LaunchedEffect(currentUserEmail) {
         if (currentUserEmail.isNotEmpty()) {
-            manager.registerOrUpdateUserInDb(currentUserEmail, currentDisplayName)
             manager.listenForIncomingCalls(currentUserEmail)
+            
+            // Завантажуємо збережені дані з бази без передчасного перезапису
             manager.getUserProfile(currentUserEmail) { user ->
-                user?.let {
-                    if (it.name.isNotEmpty()) currentDisplayName = it.name
-                    if (!it.avatarUrl.isNullOrEmpty()) avatarUrl = it.avatarUrl
+                if (user != null) {
+                    if (user.name.isNotEmpty()) {
+                        currentDisplayName = user.name
+                    } else if (currentDisplayName.isEmpty()) {
+                        currentDisplayName = currentUserEmail.substringBefore("@")
+                    }
+                    if (!user.avatarUrl.isNullOrEmpty()) {
+                        avatarUrl = user.avatarUrl
+                    }
+                } else {
+                    // Якщо акаунта у Firestore ще немає — створюємо початковий запис
+                    val nameToSave = if (currentDisplayName.isNotEmpty()) currentDisplayName else currentUserEmail.substringBefore("@")
+                    manager.registerOrUpdateUserInDb(currentUserEmail, nameToSave)
+                    currentDisplayName = nameToSave
                 }
             }
         }
@@ -252,8 +263,10 @@ fun KishkaApp() {
                         currentLang = currentLanguage,
                         onLangChanged = { currentLanguage = it },
                         onLoginSuccess = { email, name ->
+                            if (name.isNotEmpty()) {
+                                currentDisplayName = name
+                            }
                             currentUserEmail = email
-                            currentDisplayName = name
                         }
                     )
                 } else if (selectedUserForChat != null) {
@@ -295,6 +308,8 @@ fun KishkaApp() {
                             onLogout = {
                                 auth.signOut()
                                 currentUserEmail = ""
+                                currentDisplayName = ""
+                                avatarUrl = DEFAULT_AVATAR_URL
                             }
                         )
                     }
@@ -484,7 +499,7 @@ fun AccountTab(
     onProfileUpdated: (String, String?) -> Unit,
     onLogout: () -> Unit
 ) {
-    var nameInput by remember { mutableStateOf(displayName) }
+    var nameInput by remember(displayName) { mutableStateOf(displayName) }
     var selectedPhotoUri by remember { mutableStateOf<Uri?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -737,7 +752,7 @@ fun AuthScreen(
                             AuthManager.loginUser(email, password) { success, msg ->
                                 isLoading = false
                                 if (success) {
-                                    onLoginSuccess(email, displayName.ifEmpty { "User" })
+                                    onLoginSuccess(email, displayName)
                                 } else {
                                     Toast.makeText(context, msg ?: "Помилка входу", Toast.LENGTH_SHORT).show()
                                 }
