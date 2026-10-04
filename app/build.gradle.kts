@@ -61,13 +61,13 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
 
-    // Material Icons Extended (Обов'язково для CallEnd, Mic, VolumeUp)
+    // Material Icons Extended
     implementation(libs.androidx.material.icons.extended)
 
-    // Coil для завантаження зображень/аватарів
+    // Coil
     implementation(libs.coil.compose)
 
-    // Firebase (BOM керує версіями бібліотек)
+    // Firebase
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.auth.ktx)
     implementation(libs.firebase.firestore.ktx)
