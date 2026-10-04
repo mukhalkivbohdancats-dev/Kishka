@@ -1,6 +1,8 @@
 [versions]
 agp = "8.2.2"
 kotlin = "1.9.22"
+# Версія Compose Compiler сумісна з Kotlin 1.9.22
+kotlinCompilerExtensionVersion = "1.5.10"
 googleServices = "4.4.2"
 coreKtx = "1.12.0"
 lifecycleRuntimeKtx = "2.7.0"
@@ -25,6 +27,9 @@ androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-man
 androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
 
+# Іконки Material (CallEnd, Mic, VolumeUp тощо)
+androidx-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-firestore-ktx = { group = "com.google.firebase", name = "firebase-firestore-ktx" }
 firebase-auth-ktx = { group = "com.google.firebase", name = "firebase-auth-ktx" }
@@ -39,4 +44,5 @@ androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-co
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 jetbrains-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
