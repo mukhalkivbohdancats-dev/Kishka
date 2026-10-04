@@ -51,10 +51,10 @@ android {
 }
 
 dependencies {
-    // Firebase BOM (управління сумісністю версій)
+    // Firebase BOM (автоматично керує сумісністю версій)
     implementation(platform("com.google.firebase:firebase-bom:33.1.0"))
 
-    // Сервіси Firebase (Firestore, Auth, Storage)
+    // Сервіси Firebase
     implementation("com.google.firebase:firebase-firestore-ktx")
     implementation("com.google.firebase:firebase-auth-ktx")
     implementation("com.google.firebase:firebase-storage-ktx")
@@ -69,7 +69,7 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
 
-    // Відображення аватарок та зображень
+    // Завантаження зображень (аватарки)
     implementation("io.coil-kt:coil-compose:2.6.0")
 
     // Тестові залежності
