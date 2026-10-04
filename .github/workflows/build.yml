@@ -1,39 +1,39 @@
-name: Build Kishka Messenger APK V1.1
+name: Build Kishka Messenger V1.2
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
+    tags:
+      - 'v1.2*'
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
   build:
+    name: Build Android APK (V1.2)
     runs-on: ubuntu-latest
 
     steps:
-      - name: Клонування репозиторію
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Налаштування Java JDK 17
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
+          cache: gradle
 
-      - name: Налаштування Gradle
-        uses: gradle/actions/setup-gradle@v3
+      - name: Grant Execute Permission for Gradlew
+        run: chmod +x gradlew
 
-      - name: Збірка APK (системний Gradle)
-        run: gradle assembleDebug
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --stacktrace
 
-      - name: Створення папки V1.1 та підготовка APK
-        run: |
-          mkdir -p V1.1
-          cp app/build/outputs/apk/debug/app-debug.apk V1.1/KishkaMessenger_V1.1.apk
-
-      - name: Завантаження артефакту V1.1
+      - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KishkaMessenger_V1.1
-          path: V1.1/KishkaMessenger_V1.1.apk
+          name: KishkaMessenger-v1.2-Debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
