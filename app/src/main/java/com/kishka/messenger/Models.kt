@@ -4,7 +4,8 @@ data class User(
     val uid: String = "",
     val phone: String = "",
     val name: String = "Користувач Kishka",
-    val status: String = "Online"
+    val status: String = "Online",
+    val avatarUrl: String? = null
 )
 
 data class Message(
