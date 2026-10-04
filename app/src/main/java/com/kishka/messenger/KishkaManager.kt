@@ -3,28 +3,19 @@ package com.kishka.messenger
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Handler
-import android.os.Looper
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.storage.FirebaseStorage
-import java.io.OutputStreamWriter
-import java.net.HttpURLConnection
-import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
-import kotlin.concurrent.thread
 
 class KishkaManager(private val context: Context) {
 
     private val db = FirebaseFirestore.getInstance()
     private val storage = FirebaseStorage.getInstance()
 
-    /**
-     * Реєстрація або створення профілю користувача в БД Firestore
-     */
     fun registerUserInGlobalContacts(phone: String, name: String = "Користувач Kishka") {
         val userRef = db.collection("users").document(phone)
         userRef.get().addOnSuccessListener { doc ->
@@ -41,18 +32,12 @@ class KishkaManager(private val context: Context) {
         }
     }
 
-    /**
-     * Перевірка: чи існує користувач у базі даних Kishka Messenger
-     */
     fun checkUserExists(phone: String, onResult: (Boolean) -> Unit) {
         db.collection("users").document(phone).get()
             .addOnSuccessListener { doc -> onResult(doc.exists()) }
             .addOnFailureListener { onResult(false) }
     }
 
-    /**
-     * Завантаження аватарки з галереї пристрою у Firebase Storage та збереження даних профілю у Firestore
-     */
     fun updateUserProfile(
         email: String,
         newName: String,
@@ -81,9 +66,6 @@ class KishkaManager(private val context: Context) {
         }
     }
 
-    /**
-     * Отримання профілю користувача з БД
-     */
     fun getUserProfile(email: String, onResult: (User?) -> Unit) {
         db.collection("users").document(email).get().addOnSuccessListener { snapshot ->
             onResult(snapshot.toObject(User::class.java))
@@ -99,9 +81,6 @@ class KishkaManager(private val context: Context) {
         }
     }
 
-    /**
-     * Збереження повідомлень у Firestore
-     */
     fun sendMessage(senderPhone: String, receiverPhone: String, text: String) {
         if (text.isBlank()) return
         val chatId = getChatId(senderPhone, receiverPhone)
@@ -126,7 +105,7 @@ class KishkaManager(private val context: Context) {
                     id = fileId,
                     senderPhone = senderPhone,
                     receiverPhone = receiverPhone,
-                    text = "📎 Надіслано файл ($fileType)",
+                    text = "Надіслано файл: $fileType",
                     fileUrl = downloadUri.toString(),
                     fileType = fileType
                 )
@@ -146,9 +125,6 @@ class KishkaManager(private val context: Context) {
             }
     }
 
-    /**
-     * Запис історії дзвінків у базу даних Firestore
-     */
     fun recordCallLog(myPhone: String, targetPhone: String, isMissed: Boolean = false) {
         val logId = UUID.randomUUID().toString()
         val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
@@ -163,9 +139,6 @@ class KishkaManager(private val context: Context) {
         db.collection("users").document(myPhone).collection("call_history").document(logId).set(log)
     }
 
-    /**
-     * Зчитування історії дзвінків із Firestore
-     */
     fun listenForCallHistory(myPhone: String, onLogsUpdated: (List<CallLogItem>) -> Unit) {
         db.collection("users").document(myPhone).collection("call_history")
             .addSnapshotListener { snapshot, _ ->
@@ -175,9 +148,6 @@ class KishkaManager(private val context: Context) {
             }
     }
 
-    /**
-     * Початок дзвінка
-     */
     fun startCall(callerPhone: String, receiverPhone: String) {
         val callSignal = CallSignal(
             callId = UUID.randomUUID().toString(),
