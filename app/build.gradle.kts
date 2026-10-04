@@ -51,13 +51,16 @@ android {
 }
 
 dependencies {
+    // Google Material Components (необхідно для XML-тем Material3)
+    implementation("com.google.android.material:material:1.12.0")
+
     // Firebase
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.firestore.ktx)
     implementation(libs.firebase.auth.ktx)
     implementation(libs.firebase.storage.ktx)
 
-    // AndroidX & Compose
+    // AndroidX & Jetpack Compose
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
@@ -67,10 +70,10 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
 
-    // Image loading
+    // Завантаження зображень (аватарки)
     implementation(libs.coil.compose)
 
-    // Tests
+    // Тести
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
