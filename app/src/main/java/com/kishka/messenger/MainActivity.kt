@@ -26,12 +26,13 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.google.firebase.auth.FirebaseAuth
 
-// Колірна гама Viber
 val ViberPurple = Color(0xFF6F32E2)
 val ViberLightPurple = Color(0xFFEFEBFB)
 val ViberBg = Color(0xFFF5F6FA)
 
-// Словник перекладів для трьох мов (uk, en, ru)
+// Пряме посилання на нову картинку котика з вашого репозиторію
+const val DEFAULT_AVATAR_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/ic_launcher.png"
+
 object Strings {
     private val dictionary = mapOf(
         "uk" to mapOf(
@@ -169,7 +170,6 @@ fun KishkaApp() {
     val manager = remember { KishkaManager(context) }
     val auth = FirebaseAuth.getInstance()
 
-    // Поточна мова додатка: "uk", "en", "ru"
     var currentLanguage by remember { mutableStateOf("uk") }
 
     var currentUserEmail by remember {
@@ -179,7 +179,7 @@ fun KishkaApp() {
         mutableStateOf(auth.currentUser?.displayName ?: "Користувач")
     }
     var avatarUrl by remember {
-        mutableStateOf("https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app-image.png")
+        mutableStateOf(DEFAULT_AVATAR_URL)
     }
 
     var selectedUserForChat by remember { mutableStateOf<User?>(null) }
@@ -197,6 +197,7 @@ fun KishkaApp() {
     if (activeCallTargetPhone != null && !isCallMinimized) {
         ActiveCallScreen(
             targetPhone = activeCallTargetPhone!!,
+            avatarUrl = avatarUrl,
             lang = currentLanguage,
             onMinimize = { isCallMinimized = true },
             onEndCall = {
@@ -258,8 +259,8 @@ fun KishkaApp() {
                             onLangChanged = { currentLanguage = it },
                             onUpdateProfile = { newName, newAvatar ->
                                 currentDisplayName = newName
-                                avatarUrl = newAvatar
-                                Toast.makeText(context, "Saved!", Toast.LENGTH_SHORT).show()
+                                avatarUrl = newAvatar.ifEmpty { DEFAULT_AVATAR_URL }
+                                Toast.makeText(context, "Збережено!", Toast.LENGTH_SHORT).show()
                             },
                             onLogout = {
                                 auth.signOut()
@@ -296,9 +297,6 @@ fun KishkaApp() {
     }
 }
 
-/**
- * Компонент вибору мови (Українська, English, Русский)
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LanguageSelector(
@@ -363,14 +361,13 @@ fun AuthScreen(
             verticalArrangement = Arrangement.Center
         ) {
             AsyncImage(
-                model = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app-image.png",
+                model = R.drawable.ic_launcher,
                 contentDescription = "Logo",
-                modifier = Modifier.size(80.dp).clip(CircleShape)
+                modifier = Modifier.size(90.dp).clip(CircleShape)
             )
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Перемикач мови перед реєстрацією
             LanguageSelector(currentLang = currentLang, onLangSelected = onLangChanged)
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -429,10 +426,10 @@ fun AuthScreen(
                             AuthManager.registerUser(email, password) { success, msg ->
                                 isLoading = false
                                 if (success) {
-                                    infoMessage = msg ?: "Verification email sent!"
+                                    infoMessage = msg ?: "Лист підтвердження надіслано!"
                                     isRegisterMode = false
                                 } else {
-                                    Toast.makeText(context, msg ?: "Error", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, msg ?: "Помилка", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         } else {
@@ -441,12 +438,12 @@ fun AuthScreen(
                                 if (success) {
                                     onLoginSuccess(email, displayName.ifEmpty { "User" })
                                 } else {
-                                    Toast.makeText(context, msg ?: "Login error", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, msg ?: "Помилка входу", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
                     } else {
-                        Toast.makeText(context, "Check email and password (min 6 chars)", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Перевірте пошту та пароль (мін. 6 символів)", Toast.LENGTH_SHORT).show()
                     }
                 },
                 modifier = Modifier.fillMaxWidth().height(50.dp),
@@ -537,7 +534,7 @@ fun ChatsTab(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             AsyncImage(
-                                model = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app-image.png",
+                                model = if (user.avatarUrl.isNullOrEmpty()) R.drawable.ic_launcher else user.avatarUrl,
                                 contentDescription = "Avatar",
                                 modifier = Modifier.size(52.dp).clip(CircleShape)
                             )
@@ -660,14 +657,13 @@ fun AccountTab(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             AsyncImage(
-                model = avatarInput,
+                model = avatarInput.ifEmpty { R.drawable.ic_launcher },
                 contentDescription = "Avatar",
                 modifier = Modifier.size(90.dp).clip(CircleShape)
             )
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Перемикач мови в налаштуваннях
             LanguageSelector(currentLang = currentLang, onLangSelected = onLangChanged)
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -796,6 +792,7 @@ fun ChatScreen(
 @Composable
 fun ActiveCallScreen(
     targetPhone: String,
+    avatarUrl: String,
     lang: String,
     onMinimize: () -> Unit,
     onEndCall: () -> Unit
@@ -817,7 +814,7 @@ fun ActiveCallScreen(
 
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 AsyncImage(
-                    model = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app-image.png",
+                    model = avatarUrl.ifEmpty { R.drawable.ic_launcher },
                     contentDescription = "Avatar",
                     modifier = Modifier.size(120.dp).clip(CircleShape)
                 )
@@ -857,8 +854,8 @@ fun ActiveCallBanner(
                 Text("📞", fontSize = 18.sp)
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
-                    Text("Call with $targetPhone", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Text("Tap to return", color = Color.White.copy(alpha = 0.8f), fontSize = 11.sp)
+                    Text("Дзвінок з $targetPhone", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Натисніть для повернення", color = Color.White.copy(alpha = 0.8f), fontSize = 11.sp)
                 }
             }
             IconButton(onClick = onEndCall, modifier = Modifier.size(36.dp)) {
