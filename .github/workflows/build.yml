@@ -39,8 +39,8 @@ jobs:
       - name: Save APK into repository
         run: |
           mkdir -p apk
-          cp app/build/outputs/apk/debug/app-debug.apk apk/app-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk apk/KishkaMessenger_V1.3.apk
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add apk/app-debug.apk
-          git diff --staged --quiet || (git commit -m "Auto-build: update APK [skip ci]" && git push)
+          git add apk/KishkaMessenger_V1.3.apk
+          git diff --staged --quiet || (git commit -m "Auto-build: update KishkaMessenger_V1.3.apk [skip ci]" && git push)
