@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "29002685597",
+    "project_id": "kishka-1a8a4",
+    "storage_bucket": "kishka-1a8a4.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:29002685597:android:7a60be6c01b051763c0874",
+        "android_client_info": {
+          "package_name": "com.kishka.messenger"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCLhV2fuB0ayvyIIBDPnoH_-O4SNZxRRWM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
