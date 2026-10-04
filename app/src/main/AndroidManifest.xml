@@ -2,17 +2,17 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.kishka.messenger">
 
-    <!-- Дозволи для роботи з мережею та завантаження аватарок -->
+    <!-- Дозволи для мережі -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Дозволи для звуку, мікрофона, вібрації та датчика наближення -->
+    <!-- Дозволи для аудіо, мікрофона та датчика наближення -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- Дозволи для фонової служби дзвінків та сповіщень (Android 12/13/14+) -->
+    <!-- Дозволи для фонової служби дзвінків -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
@@ -26,7 +26,6 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.KishkaMessenger">
 
-        <!-- Головна Activity додатка -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -38,7 +37,6 @@
             </intent-filter>
         </activity>
 
-        <!-- Фонова служба дзвінків CallService -->
         <service
             android:name=".CallService"
             android:enabled="true"
