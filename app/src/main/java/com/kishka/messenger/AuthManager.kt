@@ -39,6 +39,10 @@ object AuthManager {
             }
     }
 
+    /**
+     * Розумний вхід: якщо користувач намагається увійти, але такого акаунта ще немає,
+     * додаток автоматично створює його та надсилає лист верифікації, щоб уникнути помилок блокування.
+     */
     fun loginUser(
         email: String,
         pass: String,
@@ -55,7 +59,14 @@ object AuthManager {
                         onResult(false, "Пошта не підтверджена! Перевірте скриньку $email")
                     }
                 } else {
-                    onResult(false, task.exception?.message ?: "Помилка авторизації")
+                    // Якщо акаунта не існує, але користувач натиснув "Увійти" — реєструємо його автоматично
+                    val errorCode = task.exception?.message ?: ""
+                    if (errorCode.contains("no user record", ignoreCase = true) || 
+                        errorCode.contains("user-not-found", ignoreCase = true)) {
+                        registerUser(email, pass, onResult)
+                    } else {
+                        onResult(false, "Невірний пароль або пошта. Перевірте дані.")
+                    }
                 }
             }
     }
