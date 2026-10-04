@@ -3,27 +3,94 @@ package com.kishka.messenger
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Handler
-import android.os.Looper
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.storage.FirebaseStorage
-import java.io.OutputStreamWriter
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.UUID
-import kotlin.concurrent.thread
+
+data class User(
+    val uid: String = "",
+    val phone: String = "",
+    val name: String = "",
+    val avatarUrl: String = "",
+    val status: String = "Online"
+)
+
+data class Message(
+    val id: String = "",
+    val senderPhone: String = "",
+    val receiverPhone: String = "",
+    val text: String = "",
+    val fileUrl: String? = null,
+    val fileType: String? = null,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+data class CallLogItem(
+    val id: String = "",
+    val callerName: String = "",
+    val callerPhone: String = "",
+    val receiverPhone: String = "",
+    val timestamp: Long = System.currentTimeMillis(),
+    val duration: String = "00:00",
+    val isMissed: Boolean = false
+)
+
+data class CallSignal(
+    val callId: String = "",
+    val callerPhone: String = "",
+    val receiverPhone: String = "",
+    val status: String = "IDLE", // RINGING, ACCEPTED, ENDED
+    val sdpOffer: String? = null,
+    val sdpAnswer: String? = null
+)
 
 class KishkaManager(private val context: Context) {
 
     private val db = FirebaseFirestore.getInstance()
     private val storage = FirebaseStorage.getInstance()
 
-    fun registerUserInGlobalContacts(phone: String, name: String = "Користувач Kishka") {
-        val user = User(uid = phone, phone = phone, name = name, status = "Online")
-        db.collection("users").document(phone).set(user)
+    // 1. Збереження/Оновлення користувача в БД
+    fun registerOrUpdateUser(phone: String, name: String, avatarUrl: String = "", onComplete: (() -> Unit)? = null) {
+        val userMap = mutableMapOf<String, Any>(
+            "uid" to phone,
+            "phone" to phone,
+            "name" to name,
+            "status" to "Online"
+        )
+        if (avatarUrl.isNotEmpty()) {
+            userMap["avatarUrl"] = avatarUrl
+        }
+
+        db.collection("users").document(phone)
+            .set(userMap, com.google.firebase.firestore.SetOptions.merge())
+            .addOnSuccessListener { onComplete?.invoke() }
     }
 
+    // Завантаження аватарки з галереї у Firebase Storage
+    fun uploadAvatarImage(phone: String, imageUri: Uri, onSuccess: (String) -> Unit, onFailure: (String) -> Unit) {
+        val avatarRef = storage.reference.child("avatars/$phone.jpg")
+        avatarRef.putFile(imageUri)
+            .addOnSuccessListener {
+                avatarRef.downloadUrl.addOnSuccessListener { uri ->
+                    val url = uri.toString()
+                    registerOrUpdateUser(phone, name = "", avatarUrl = url)
+                    onSuccess(url)
+                }
+            }
+            .addOnFailureListener { e ->
+                onFailure(e.localizedMessage ?: "Помилка завантаження фото")
+            }
+    }
+
+    // Слухати дані користувача
+    fun listenToUserData(phone: String, onUserLoaded: (User) -> Unit) {
+        db.collection("users").document(phone).addSnapshotListener { snapshot, _ ->
+            snapshot?.toObject(User::class.java)?.let { onUserLoaded(it) }
+        }
+    }
+
+    // 2. Список контактів
     fun listenToAllContacts(onContactsUpdated: (List<User>) -> Unit) {
         db.collection("users").addSnapshotListener { snapshot, _ ->
             if (snapshot != null) {
@@ -33,6 +100,7 @@ class KishkaManager(private val context: Context) {
         }
     }
 
+    // 3. Листування у БД
     fun sendMessage(senderPhone: String, receiverPhone: String, text: String) {
         if (text.isBlank()) return
         val chatId = getChatId(senderPhone, receiverPhone)
@@ -41,29 +109,10 @@ class KishkaManager(private val context: Context) {
             id = msgId,
             senderPhone = senderPhone,
             receiverPhone = receiverPhone,
-            text = text
+            text = text,
+            timestamp = System.currentTimeMillis()
         )
         db.collection("chats").document(chatId).collection("messages").document(msgId).set(message)
-    }
-
-    fun sendFileMessage(senderPhone: String, receiverPhone: String, fileUri: Uri, fileType: String) {
-        val fileId = UUID.randomUUID().toString()
-        val ref = storage.reference.child("chat_files/$fileId")
-
-        ref.putFile(fileUri).addOnSuccessListener {
-            ref.downloadUrl.addOnSuccessListener { downloadUri ->
-                val chatId = getChatId(senderPhone, receiverPhone)
-                val message = Message(
-                    id = fileId,
-                    senderPhone = senderPhone,
-                    receiverPhone = receiverPhone,
-                    text = "📎 Надіслано файл ($fileType)",
-                    fileUrl = downloadUri.toString(),
-                    fileType = fileType
-                )
-                db.collection("chats").document(chatId).collection("messages").document(fileId).set(message)
-            }
-        }
     }
 
     fun listenForMessages(senderPhone: String, receiverPhone: String, onMessages: (List<Message>) -> Unit) {
@@ -77,6 +126,7 @@ class KishkaManager(private val context: Context) {
             }
     }
 
+    // 4. Дзвінки в межах Кішка Месенджера
     fun startCall(callerPhone: String, receiverPhone: String) {
         val callSignal = CallSignal(
             callId = UUID.randomUUID().toString(),
@@ -85,6 +135,18 @@ class KishkaManager(private val context: Context) {
             status = "RINGING"
         )
         db.collection("calls").document(receiverPhone).set(callSignal)
+
+        // Фіксація в історії викликів Кішка Месенджера
+        addCallLog(
+            callerName = callerPhone,
+            callerPhone = callerPhone,
+            receiverPhone = receiverPhone,
+            isMissed = false
+        )
+    }
+
+    fun endCall(receiverPhone: String) {
+        db.collection("calls").document(receiverPhone).delete()
     }
 
     fun listenForIncomingCalls(myPhone: String) {
@@ -92,8 +154,9 @@ class KishkaManager(private val context: Context) {
             val signal = snapshot?.toObject(CallSignal::class.java)
             if (signal != null && signal.status == "RINGING") {
                 val intent = Intent(context, CallService::class.java).apply {
-                    action = "ACTION_INCOMING"
-                    putExtra("CALLER_NAME", signal.callerPhone)
+                    action = CallService.ACTION_START_CALL
+                    putExtra(CallService.EXTRA_TARGET_NAME, signal.callerPhone)
+                    putExtra(CallService.EXTRA_TARGET_PHONE, signal.callerPhone)
                 }
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                     context.startForegroundService(intent)
@@ -104,53 +167,33 @@ class KishkaManager(private val context: Context) {
         }
     }
 
+    // 5. Історія дзвінків у БД Кішка Месенджера
+    private fun addCallLog(callerName: String, callerPhone: String, receiverPhone: String, isMissed: Boolean) {
+        val logId = UUID.randomUUID().toString()
+        val log = CallLogItem(
+            id = logId,
+            callerName = callerName,
+            callerPhone = callerPhone,
+            receiverPhone = receiverPhone,
+            timestamp = System.currentTimeMillis(),
+            duration = "01:23",
+            isMissed = isMissed
+        )
+        db.collection("users").document(callerPhone).collection("call_logs").document(logId).set(log)
+        db.collection("users").document(receiverPhone).collection("call_logs").document(logId).set(log)
+    }
+
+    fun listenForCallLogs(myPhone: String, onLogsUpdated: (List<CallLogItem>) -> Unit) {
+        db.collection("users").document(myPhone).collection("call_logs")
+            .orderBy("timestamp", Query.Direction.DESCENDING)
+            .addSnapshotListener { snapshot, _ ->
+                if (snapshot != null) {
+                    onLogsUpdated(snapshot.toObjects(CallLogItem::class.java))
+                }
+            }
+    }
+
     private fun getChatId(phone1: String, phone2: String): String {
         return if (phone1 < phone2) "${phone1}_${phone2}" else "${phone2}_${phone1}"
-    }
-}
-
-fun sendTelegramVerificationCode(
-    botToken: String,
-    chatId: String,
-    phone: String,
-    code: String,
-    onResult: (Boolean) -> Unit
-) {
-    thread {
-        var success = false
-        try {
-            val message = "🔐 Ваш код верифікації для Kishka Messenger ($phone):\n\n👉 $code\n\nНе передавайте цей код нікому!"
-            val apiUrl = "https://api.telegram.org/bot$botToken/sendMessage"
-
-            val url = URL(apiUrl)
-            val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-            conn.connectTimeout = 5000
-            conn.readTimeout = 5000
-            conn.doOutput = true
-
-            val jsonBody = """
-                {
-                   "chat_id": "$chatId",
-                   "text": "$message"
-                }
-            """.trimIndent()
-
-            val writer = OutputStreamWriter(conn.outputStream, "UTF-8")
-            writer.write(jsonBody)
-            writer.flush()
-            writer.close()
-
-            if (conn.responseCode == 200) {
-                success = true
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        Handler(Looper.getMainLooper()).post {
-            onResult(success)
-        }
     }
 }
