@@ -1,46 +1,46 @@
-name: Build Kishka Messenger V1.2
+name: Build Android APK
 
 on:
   push:
-    branches: [ "main", "master" ]
-    tags:
-      - 'v1.2*'
+    branches: [ "main" ]
   pull_request:
-    branches: [ "main", "master" ]
-  workflow_dispatch:
+    branches: [ "main" ]
+
+# Надаємо права на автоматичний commit у репозиторій
+permissions:
+  contents: write
 
 jobs:
   build:
-    name: Build Android APK (V1.2)
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-          cache: gradle
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
 
-      - name: Setup Gradle CLI
-        uses: gradle/actions/setup-gradle@v3
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v3
 
-      - name: Generate Gradle Wrapper if missing
-        run: |
-          if [ ! -f gradlew ]; then
-            gradle wrapper
-          fi
-          chmod +x gradlew
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
 
-      - name: Build Debug APK
-        run: ./gradlew clean assembleDebug --stacktrace --info
+    - name: Build Debug APK
+      run: ./gradlew assembleDebug --no-daemon
 
-      - name: Upload Debug APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: KishkaMessenger-v1.2-Debug
-          path: app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 14
+    - name: Prepare APK folder
+      run: |
+        mkdir -p apk
+        cp app/build/outputs/apk/debug/app-debug.apk apk/KishkaMessangerV1.2.apk
+
+    - name: Commit and push APK to repository
+      if: github.event_name == 'push'
+      uses: stefanzweifel/git-auto-commit-action@v5
+      with:
+        commit_message: "Auto-build: add KishkaMessangerV1.2.apk"
+        file_pattern: 'apk/*.apk'
