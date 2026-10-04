@@ -43,8 +43,7 @@ object AuthManager {
     }
 
     /**
-     * Авторизація користувача.
-     * Перевіряє підтвердження Email перед входом.
+     * Авторизація користувача з перевіркою верифікації Email.
      */
     fun loginUser(
         email: String,
@@ -103,17 +102,11 @@ object AuthManager {
             }
     }
 
-    /**
-     * Перевірка, чи авторизований користувач і чи підтверджена пошта.
-     */
     fun isUserLoggedInAndVerified(): Boolean {
         val user = auth.currentUser
         return user != null && user.isEmailVerified
     }
 
-    /**
-     * Отримання пошти поточного авторизованого користувача.
-     */
     fun getCurrentUserEmail(): String? {
         val user = auth.currentUser
         return if (user != null && user.isEmailVerified) user.email else null
