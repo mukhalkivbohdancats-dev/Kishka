@@ -1,6 +1,7 @@
 package com.kishka.messenger
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
@@ -47,23 +48,23 @@ object Strings {
             "enter_email" to "Введіть пошту (Email)",
             "add" to "Додати",
             "cancel" to "Скасувати",
-            "call_history" to "Історія дзвінків",
+            "call_history" to "Історія дзвінків Kishka",
             "account_settings" to "Налаштування акаунту",
             "app_language" to "Мова інтерфейсу",
             "your_name" to "Ваше ім'я в месенджері",
-            "photo_url" to "Посилання на фото профілю (URL)",
+            "choose_photo" to "📁 Обрати фото з галереї",
             "email_label" to "Пошта",
             "save_changes" to "Зберегти зміни",
             "logout" to "Вийти з акаунта 🚪",
             "login_title" to "Вхід у Kishka",
             "register_title" to "Створити акаунт",
-            "ask_name" to "Як вас звати? (Ім'я для контактів)",
+            "ask_name" to "Як вас звати?",
             "password" to "Пароль",
             "register_btn" to "Зареєструватися",
             "login_btn" to "Увійти",
             "has_account" to "Вже є акаунт? Увійти",
             "no_account" to "Немає акаунта? Зареєструватися",
-            "active_call" to "Активний дзвінок",
+            "active_call" to "Активний дзвінок Kishka",
             "end_call" to "Завершити дзвінок 🔴",
             "calling_in_progress" to "Триває розмова... 📞",
             "type_message" to "Повідомлення..."
@@ -79,11 +80,11 @@ object Strings {
             "enter_email" to "Enter Email",
             "add" to "Add",
             "cancel" to "Cancel",
-            "call_history" to "Call History",
+            "call_history" to "Kishka Call History",
             "account_settings" to "Account Settings",
             "app_language" to "Interface Language",
             "your_name" to "Your Display Name",
-            "photo_url" to "Profile Picture URL",
+            "choose_photo" to "📁 Choose photo from gallery",
             "email_label" to "Email",
             "save_changes" to "Save Changes",
             "logout" to "Log Out 🚪",
@@ -95,42 +96,10 @@ object Strings {
             "login_btn" to "Log In",
             "has_account" to "Already have an account? Sign In",
             "no_account" to "No account? Register",
-            "active_call" to "Active Call",
+            "active_call" to "Active Kishka Call",
             "end_call" to "End Call 🔴",
             "calling_in_progress" to "Call in progress... 📞",
             "type_message" to "Message..."
-        ),
-        "ru" to mapOf(
-            "select_lang" to "Выберите язык приложения",
-            "chats" to "Чаты",
-            "calls" to "Звонки",
-            "account" to "Аккаунт",
-            "all" to "Все",
-            "unread" to "Непрочитанные",
-            "add_contact" to "Добавить контакт",
-            "enter_email" to "Введите почту (Email)",
-            "add" to "Добавить",
-            "cancel" to "Отмена",
-            "call_history" to "История звонков",
-            "account_settings" to "Настройки аккаунта",
-            "app_language" to "Язык интерфейса",
-            "your_name" to "Ваше имя в мессенджере",
-            "photo_url" to "Ссылка на фото профиля (URL)",
-            "email_label" to "Почта",
-            "save_changes" to "Сохранить изменения",
-            "logout" to "Выйти из аккаунта 🚪",
-            "login_title" to "Вход в Kishka",
-            "register_title" to "Создать аккаунт",
-            "ask_name" to "Как вас зовут? (Имя для контактов)",
-            "password" to "Пароль",
-            "register_btn" to "Зарегистрироваться",
-            "login_btn" to "Войти",
-            "has_account" to "Уже есть аккаунт? Войти",
-            "no_account" to "Нет аккаунта? Зарегистрироваться",
-            "active_call" to "Активный звонок",
-            "end_call" to "Завершить звонок 🔴",
-            "calling_in_progress" to "Идет разговор... 📞",
-            "type_message" to "Сообщение..."
         )
     )
 
@@ -158,10 +127,10 @@ class MainActivity : ComponentActivity() {
 
 data class CallLogItem(
     val id: String = "",
-    val callerName: String,
-    val callerPhone: String,
-    val time: String,
-    val duration: String,
+    val callerName: String = "",
+    val callerPhone: String = "",
+    val time: String = "",
+    val duration: String = "",
     val isMissed: Boolean = false
 )
 
@@ -179,9 +148,7 @@ fun KishkaApp() {
     var currentDisplayName by remember {
         mutableStateOf(auth.currentUser?.displayName ?: "Користувач")
     }
-    var avatarUrl by remember {
-        mutableStateOf(DEFAULT_AVATAR_URL)
-    }
+    var avatarUrl by remember { mutableStateOf(DEFAULT_AVATAR_URL) }
 
     var selectedUserForChat by remember { mutableStateOf<User?>(null) }
     var selectedBottomTab by remember { mutableStateOf(0) }
@@ -189,21 +156,46 @@ fun KishkaApp() {
     var activeCallTargetPhone by remember { mutableStateOf<String?>(null) }
     var isCallMinimized by remember { mutableStateOf(false) }
 
-    val startCallAction: (String) -> Unit = { targetPhone ->
-        activeCallTargetPhone = targetPhone
-        isCallMinimized = false
+    // Завантаження профілю з БД
+    LaunchedEffect(currentUserEmail) {
+        if (currentUserEmail.isNotEmpty()) {
+            manager.registerUserInGlobalContacts(currentUserEmail)
+            manager.listenForIncomingCalls(currentUserEmail)
+            manager.getUserProfile(currentUserEmail) { user ->
+                user?.let {
+                    if (it.name.isNotEmpty()) currentDisplayName = it.name
+                    if (!it.avatarUrl.isNullOrEmpty()) avatarUrl = it.avatarUrl
+                }
+            }
+        }
+    }
 
-        val serviceIntent = Intent(context, CallService::class.java).apply {
-            action = CallService.ACTION_START_CALL
-            putExtra(CallService.EXTRA_TARGET_NAME, targetPhone)
-            putExtra(CallService.EXTRA_TARGET_PHONE, targetPhone)
+    // Дзвінок дозволяється ТІЛЬКИ якщо користувач є в Kishka Messenger
+    val startCallAction: (String) -> Unit = { targetPhone ->
+        manager.checkUserExists(targetPhone) { exists ->
+            if (exists) {
+                activeCallTargetPhone = targetPhone
+                isCallMinimized = false
+
+                val serviceIntent = Intent(context, CallService::class.java).apply {
+                    action = CallService.ACTION_START_CALL
+                    putExtra(CallService.EXTRA_TARGET_NAME, targetPhone)
+                    putExtra(CallService.EXTRA_TARGET_PHONE, targetPhone)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(serviceIntent)
+                } else {
+                    context.startService(serviceIntent)
+                }
+                manager.startCall(currentUserEmail, targetPhone)
+            } else {
+                Toast.makeText(
+                    context,
+                    "Дзвінок неможливий: користувач $targetPhone не має Kishka Messenger!",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(serviceIntent)
-        } else {
-            context.startService(serviceIntent)
-        }
-        manager.startCall(currentUserEmail, targetPhone)
     }
 
     val stopCallAction: () -> Unit = {
@@ -241,8 +233,6 @@ fun KishkaApp() {
                         onLoginSuccess = { email, name ->
                             currentUserEmail = email
                             currentDisplayName = name
-                            manager.registerUserInGlobalContacts(email)
-                            manager.listenForIncomingCalls(email)
                         }
                     )
                 } else if (selectedUserForChat != null) {
@@ -263,19 +253,23 @@ fun KishkaApp() {
                             onUserSelected = { selectedUserForChat = it }
                         )
                         1 -> CallsTab(
+                            manager = manager,
+                            currentEmail = currentUserEmail,
                             lang = currentLanguage,
                             onStartCall = { phone -> startCallAction(phone) }
                         )
                         2 -> AccountTab(
+                            manager = manager,
                             displayName = currentDisplayName,
                             email = currentUserEmail,
                             avatarUrl = avatarUrl,
                             currentLang = currentLanguage,
                             onLangChanged = { currentLanguage = it },
-                            onUpdateProfile = { newName, newAvatar ->
+                            onProfileUpdated = { newName, newAvatarUrl ->
                                 currentDisplayName = newName
-                                avatarUrl = newAvatar.ifEmpty { DEFAULT_AVATAR_URL }
-                                Toast.makeText(context, "Збережено!", Toast.LENGTH_SHORT).show()
+                                if (!newAvatarUrl.isNullOrEmpty()) {
+                                    avatarUrl = newAvatarUrl
+                                }
                             },
                             onLogout = {
                                 auth.signOut()
@@ -312,18 +306,177 @@ fun KishkaApp() {
     }
 }
 
+@Composable
+fun AccountTab(
+    manager: KishkaManager,
+    displayName: String,
+    email: String,
+    avatarUrl: String,
+    currentLang: String,
+    onLangChanged: (String) -> Unit,
+    onProfileUpdated: (String, String?) -> Unit,
+    onLogout: () -> Unit
+) {
+    var nameInput by remember { mutableStateOf(displayName) }
+    var selectedPhotoUri by remember { mutableStateOf<Uri?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    // Обирач зображення з галереї
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        selectedPhotoUri = uri
+    }
+
+    Scaffold(
+        topBar = { TopAppBar(title = { Text(Strings.get("account_settings", currentLang), fontWeight = FontWeight.Bold) }) }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            AsyncImage(
+                model = selectedPhotoUri ?: avatarUrl.ifEmpty { R.drawable.ic_launcher },
+                contentDescription = "Avatar",
+                modifier = Modifier
+                    .size(100.dp)
+                    .clip(CircleShape)
+                    .clickable { photoPickerLauncher.launch("image/*") }
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(onClick = { photoPickerLauncher.launch("image/*") }) {
+                Text(Strings.get("choose_photo", currentLang))
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            LanguageSelector(currentLang = currentLang, onLangSelected = onLangChanged)
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = nameInput,
+                onValueChange = { nameInput = it },
+                label = { Text(Strings.get("your_name", currentLang)) },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("${Strings.get("email_label", currentLang)}: $email", color = Color.Gray, fontSize = 14.sp)
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Button(
+                onClick = {
+                    isLoading = true
+                    manager.updateUserProfile(email, nameInput, selectedPhotoUri) { success, newUrl ->
+                        isLoading = false
+                        if (success) {
+                            onProfileUpdated(nameInput, newUrl)
+                            Toast.makeText(context, "Профіль оновлено та збережено в БД!", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "Помилка збереження", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = ViberPurple),
+                enabled = !isLoading
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
+                } else {
+                    Text(Strings.get("save_changes", currentLang), fontSize = 16.sp)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OutlinedButton(
+                onClick = onLogout,
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red)
+            ) {
+                Text(Strings.get("logout", currentLang), fontSize = 16.sp)
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LanguageSelector(
-    currentLang: String,
-    onLangSelected: (String) -> Unit
+fun CallsTab(
+    manager: KishkaManager,
+    currentEmail: String,
+    lang: String,
+    onStartCall: (String) -> Unit
 ) {
-    val languages = listOf(
-        "uk" to "🇺🇦 Українська",
-        "en" to "🇬🇧 English",
-        "ru" to "🌐 Русский"
-    )
+    var callLogs by remember { mutableStateOf(listOf<CallLogItem>()) }
 
+    LaunchedEffect(currentEmail) {
+        manager.listenForCallHistory(currentEmail) { logs ->
+            callLogs = logs
+        }
+    }
+
+    Scaffold(
+        topBar = { TopAppBar(title = { Text(Strings.get("call_history", lang), fontWeight = FontWeight.Bold) }) }
+    ) { padding ->
+        if (callLogs.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("Історія дзвінків порожня", color = Color.Gray)
+            }
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
+                items(callLogs) { log ->
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        color = Color.White
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(if (log.isMissed) "📉" else "📈", fontSize = 20.sp)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        log.callerName,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (log.isMissed) Color.Red else Color.Unspecified
+                                    )
+                                    Text("${log.time} • ${log.duration}", color = Color.Gray, fontSize = 12.sp)
+                                }
+                            }
+                            IconButton(onClick = { onStartCall(log.callerPhone) }) {
+                                Text("📞", fontSize = 22.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LanguageSelector(currentLang: String, onLangSelected: (String) -> Unit) {
+    val languages = listOf("uk" to "🇺🇦 Українська", "en" to "🇬🇧 English")
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Text(
             text = Strings.get("select_lang", currentLang),
@@ -332,10 +485,7 @@ fun LanguageSelector(
             color = Color.Gray,
             modifier = Modifier.padding(bottom = 6.dp)
         )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             languages.forEach { (code, label) ->
                 FilterChip(
                     selected = currentLang == code,
@@ -382,9 +532,7 @@ fun AuthScreen(
             )
 
             Spacer(modifier = Modifier.height(12.dp))
-
             LanguageSelector(currentLang = currentLang, onLangSelected = onLangChanged)
-
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
@@ -594,134 +742,6 @@ fun ChatsTab(
                 }
             }
         )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun CallsTab(lang: String, onStartCall: (String) -> Unit) {
-    val callLogs = remember {
-        listOf(
-            CallLogItem("1", "Олексій", "alex@gmail.com", "14:20", "03:45", false),
-            CallLogItem("2", "Кирило", "kirill@gmail.com", "18:10", "00:00", true),
-            CallLogItem("3", "Лариса Петрівна", "larisa@gmail.com", "20.09", "12:05", false)
-        )
-    }
-
-    Scaffold(
-        topBar = { TopAppBar(title = { Text(Strings.get("call_history", lang), fontWeight = FontWeight.Bold) }) }
-    ) { padding ->
-        LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
-            items(callLogs) { log ->
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    color = Color.White
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(if (log.isMissed) "📉" else "📈", fontSize = 20.sp)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column {
-                                Text(
-                                    log.callerName,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (log.isMissed) Color.Red else Color.Unspecified
-                                )
-                                Text("${log.time} • ${log.duration}", color = Color.Gray, fontSize = 12.sp)
-                            }
-                        }
-                        IconButton(onClick = { onStartCall(log.callerPhone) }) {
-                            Text("📞", fontSize = 22.sp)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun AccountTab(
-    displayName: String,
-    email: String,
-    avatarUrl: String,
-    currentLang: String,
-    onLangChanged: (String) -> Unit,
-    onUpdateProfile: (String, String) -> Unit,
-    onLogout: () -> Unit
-) {
-    var nameInput by remember { mutableStateOf(displayName) }
-    var avatarInput by remember { mutableStateOf(avatarUrl) }
-
-    Scaffold(
-        topBar = { TopAppBar(title = { Text(Strings.get("account_settings", currentLang), fontWeight = FontWeight.Bold) }) }
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            AsyncImage(
-                model = avatarInput.ifEmpty { R.drawable.ic_launcher },
-                contentDescription = "Avatar",
-                modifier = Modifier.size(90.dp).clip(CircleShape)
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            LanguageSelector(currentLang = currentLang, onLangSelected = onLangChanged)
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            OutlinedTextField(
-                value = nameInput,
-                onValueChange = { nameInput = it },
-                label = { Text(Strings.get("your_name", currentLang)) },
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            OutlinedTextField(
-                value = avatarInput,
-                onValueChange = { avatarInput = it },
-                label = { Text(Strings.get("photo_url", currentLang)) },
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("${Strings.get("email_label", currentLang)}: $email", color = Color.Gray, fontSize = 14.sp)
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            Button(
-                onClick = { onUpdateProfile(nameInput, avatarInput) },
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = ViberPurple)
-            ) {
-                Text(Strings.get("save_changes", currentLang), fontSize = 16.sp)
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            OutlinedButton(
-                onClick = onLogout,
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red)
-            ) {
-                Text(Strings.get("logout", currentLang), fontSize = 16.sp)
-            }
-        }
     }
 }
 
