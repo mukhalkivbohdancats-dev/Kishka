@@ -12,21 +12,19 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-
-private const val BOT_TOKEN = "8539815926:AAGVQ8jjpRntQMdinolMUpFQV2lAJeHvMrs"
-private const val BOT_USERNAME = "kishka_messenger_app_bot"
-private const val BOT_LINK = "https://t.me/kishka_messenger_app_bot"
-private const val TARGET_CHAT_ID = "8539815926"
+import coil.compose.AsyncImage
+import com.google.firebase.auth.FirebaseAuth
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -43,26 +41,33 @@ class MainActivity : ComponentActivity() {
 fun KishkaApp() {
     val context = LocalContext.current
     val manager = remember { KishkaManager(context) }
+    val auth = FirebaseAuth.getInstance()
     
-    var currentUserPhone by remember { mutableStateOf("") }
+    var currentUserEmail by remember { 
+        mutableStateOf(if (auth.currentUser?.isEmailVerified == true) auth.currentUser?.email ?: "" else "") 
+    }
     var selectedUserForChat by remember { mutableStateOf<User?>(null) }
 
-    if (currentUserPhone.isEmpty()) {
-        AuthScreen { phone ->
-            currentUserPhone = phone
-            manager.registerUserInGlobalContacts(phone)
-            manager.listenForIncomingCalls(phone)
+    if (currentUserEmail.isEmpty()) {
+        AuthScreen { email ->
+            currentUserEmail = email
+            manager.registerUserInGlobalContacts(email)
+            manager.listenForIncomingCalls(email)
         }
     } else if (selectedUserForChat == null) {
         ContactsScreen(
             manager = manager,
-            currentPhone = currentUserPhone,
-            onUserSelected = { user -> selectedUserForChat = user }
+            currentEmail = currentUserEmail,
+            onUserSelected = { user -> selectedUserForChat = user },
+            onLogout = {
+                auth.signOut()
+                currentUserEmail = ""
+            }
         )
     } else {
         ChatScreen(
             manager = manager,
-            currentPhone = currentUserPhone,
+            currentEmail = currentUserEmail,
             targetUser = selectedUserForChat!!,
             onBack = { selectedUserForChat = null }
         )
@@ -72,15 +77,15 @@ fun KishkaApp() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AuthScreen(onLoginSuccess: (String) -> Unit) {
-    var phone by remember { mutableStateOf("+380937044394") }
-    var codeSent by remember { mutableStateOf(false) }
-    var generatedCode by remember { mutableStateOf("") }
-    var inputCode by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var isRegisterMode by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
+    var infoMessage by remember { mutableStateOf("") }
     val context = LocalContext.current
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Авторизація Kishka Messenger") }) }
+        topBar = { TopAppBar(title = { Text("Kishka Messenger — Вхід") }) }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -90,107 +95,105 @@ fun AuthScreen(onLoginSuccess: (String) -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            if (!codeSent) {
-                Text("Вхід до Kishka Messenger", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(16.dp))
+            // Аватарка додатку з GitHub
+            AsyncImage(
+                model = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app-image.png",
+                contentDescription = "Логотип Kishka Messenger",
+                modifier = Modifier
+                    .size(96.dp)
+                    .clip(CircleShape)
+            )
 
-                OutlinedTextField(
-                    value = phone,
-                    onValueChange = { phone = it },
-                    label = { Text("Номер телефону") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
+            Spacer(modifier = Modifier.height(16.dp))
 
-                Spacer(modifier = Modifier.height(20.dp))
+            Text(
+                text = if (isRegisterMode) "Створити акаунт" else "Авторизація поштою",
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold
+            )
 
-                Text("⚠️ Спочатку запустіть бота в Telegram:", fontSize = 14.sp, color = Color.Gray)
-                Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-                Text(
-                    text = "👉 @$BOT_USERNAME",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                    textDecoration = TextDecoration.Underline,
-                    modifier = Modifier.clickable {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(BOT_LINK)))
-                    }
-                )
+            OutlinedTextField(
+                value = email,
+                onValueChange = { email = it.trim() },
+                label = { Text("Електронна пошта (Email)") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
 
-                Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-                OutlinedButton(
-                    onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(BOT_LINK))) },
-                    modifier = Modifier.fillMaxWidth().height(50.dp)
-                ) {
-                    Text("1. Перейти в бота і натиснути /start 🤖")
-                }
+            OutlinedTextField(
+                value = password,
+                onValueChange = { password = it },
+                label = { Text("Пароль") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
 
+            if (infoMessage.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = infoMessage,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontSize = 14.sp
+                )
+            }
 
-                Button(
-                    onClick = {
-                        if (phone.length >= 10) {
-                            isLoading = true
-                            val code = (100000..999999).random().toString()
-                            generatedCode = code
+            Spacer(modifier = Modifier.height(20.dp))
 
-                            sendTelegramVerificationCode(
-                                botToken = BOT_TOKEN,
-                                chatId = TARGET_CHAT_ID,
-                                phone = phone,
-                                code = code
-                            ) { success ->
+            Button(
+                onClick = {
+                    if (email.contains("@") && password.length >= 6) {
+                        isLoading = true
+                        infoMessage = ""
+                        if (isRegisterMode) {
+                            AuthManager.registerUser(email, password) { success, msg ->
                                 isLoading = false
                                 if (success) {
-                                    codeSent = true
-                                    Toast.makeText(context, "Код надіслано в Telegram!", Toast.LENGTH_SHORT).show()
+                                    infoMessage = msg ?: "Лист надіслано! Підтвердіть пошту."
+                                    isRegisterMode = false
                                 } else {
-                                    Toast.makeText(context, "Помилка! Натисніть /start у боті @$BOT_USERNAME", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, msg ?: "Помилка реєстрації", Toast.LENGTH_LONG).show()
                                 }
                             }
                         } else {
-                            Toast.makeText(context, "Введіть коректний номер!", Toast.LENGTH_SHORT).show()
+                            AuthManager.loginUser(email, password) { success, msg ->
+                                isLoading = false
+                                if (success) {
+                                    onLoginSuccess(email)
+                                } else {
+                                    Toast.makeText(context, msg ?: "Помилка входу", Toast.LENGTH_LONG).show()
+                                }
+                            }
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
-                    enabled = !isLoading
-                ) {
-                    if (isLoading) {
-                        CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
                     } else {
-                        Text("2. Отримати код підтвердження", fontSize = 16.sp)
+                        Toast.makeText(context, "Введіть правильну пошту та пароль (від 6 символів)", Toast.LENGTH_SHORT).show()
                     }
+                },
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                enabled = !isLoading
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
+                } else {
+                    Text(if (isRegisterMode) "Зареєструватися та надіслати лист" else "Увійти", fontSize = 16.sp)
                 }
-            } else {
-                Text("Введіть код з Telegram", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("Код надіслано для $phone", fontSize = 14.sp, color = Color.Gray)
-                Spacer(modifier = Modifier.height(16.dp))
+            }
 
-                OutlinedTextField(
-                    value = inputCode,
-                    onValueChange = { inputCode = it },
-                    label = { Text("6-значний код") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
+            Spacer(modifier = Modifier.height(12.dp))
+
+            TextButton(
+                onClick = { 
+                    isRegisterMode = !isRegisterMode 
+                    infoMessage = ""
+                }
+            ) {
+                Text(
+                    if (isRegisterMode) "Вже є акаунт? Увійти" else "Немає акаунта? Зареєструватися",
+                    fontSize = 14.sp
                 )
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                Button(
-                    onClick = {
-                        if (inputCode == generatedCode || inputCode == "123456") {
-                            onLoginSuccess(phone)
-                        } else {
-                            Toast.makeText(context, "Невірний код!", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth().height(50.dp)
-                ) {
-                    Text("Підтвердити та увійти", fontSize = 16.sp)
-                }
             }
         }
     }
@@ -198,21 +201,42 @@ fun AuthScreen(onLoginSuccess: (String) -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ContactsScreen(manager: KishkaManager, currentPhone: String, onUserSelected: (User) -> Unit) {
+fun ContactsScreen(
+    manager: KishkaManager,
+    currentEmail: String,
+    onUserSelected: (User) -> Unit,
+    onLogout: () -> Unit
+) {
     var contacts by remember { mutableStateOf(listOf<User>()) }
 
     LaunchedEffect(Unit) {
         manager.listenToAllContacts { fetched ->
-            contacts = fetched.filter { it.phone != currentPhone }
+            contacts = fetched.filter { it.phone != currentEmail }
         }
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Контакты ($currentPhone)") }) }
+        topBar = {
+            TopAppBar(
+                title = { Text("Контакты ($currentEmail)") },
+                actions = {
+                    TextButton(onClick = onLogout) {
+                        Text("Вийти", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            )
+        }
     ) { padding ->
         LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
             items(contacts) { user ->
                 ListItem(
+                    leadingContent = {
+                        AsyncImage(
+                            model = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app-image.png",
+                            contentDescription = "Аватар",
+                            modifier = Modifier.size(40.dp).clip(CircleShape)
+                        )
+                    },
                     headlineContent = { Text(user.name, fontWeight = FontWeight.Bold) },
                     supportingContent = { Text(user.phone) },
                     modifier = Modifier.clickable { onUserSelected(user) }
@@ -225,18 +249,24 @@ fun ContactsScreen(manager: KishkaManager, currentPhone: String, onUserSelected:
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(manager: KishkaManager, currentPhone: String, targetUser: User, onBack: () -> Unit) {
+fun ChatScreen(
+    manager: KishkaManager,
+    currentEmail: String,
+    targetUser: User,
+    onBack: () -> Unit
+) {
     var messages by remember { mutableStateOf(listOf<Message>()) }
     var textInput by remember { mutableStateOf("") }
+    val context = LocalContext.current
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
-        uri?.let { manager.sendFileMessage(currentPhone, targetUser.phone, it, "file") }
+        uri?.let { manager.sendFileMessage(currentEmail, targetUser.phone, it, "file") }
     }
 
     LaunchedEffect(targetUser.phone) {
-        manager.listenForMessages(currentPhone, targetUser.phone) { newMsgs ->
+        manager.listenForMessages(currentEmail, targetUser.phone) { newMsgs ->
             messages = newMsgs
         }
     }
@@ -244,9 +274,24 @@ fun ChatScreen(manager: KishkaManager, currentPhone: String, targetUser: User, o
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(targetUser.phone) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Text("⬅️")
+                    }
+                },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        AsyncImage(
+                            model = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app-image.png",
+                            contentDescription = "Аватар чату",
+                            modifier = Modifier.size(36.dp).clip(CircleShape)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(targetUser.phone, fontSize = 16.sp)
+                    }
+                },
                 actions = {
-                    IconButton(onClick = { manager.startCall(currentPhone, targetUser.phone) }) {
+                    IconButton(onClick = { manager.startCall(currentEmail, targetUser.phone) }) {
                         Text("📞")
                     }
                 }
@@ -259,7 +304,7 @@ fun ChatScreen(manager: KishkaManager, currentPhone: String, targetUser: User, o
                 verticalArrangement = Arrangement.Bottom
             ) {
                 items(messages) { msg ->
-                    val isMe = msg.senderPhone == currentPhone
+                    val isMe = msg.senderPhone == currentEmail
                     Box(
                         modifier = Modifier.fillMaxWidth(),
                         contentAlignment = if (isMe) Alignment.CenterEnd else Alignment.CenterStart
@@ -279,24 +324,41 @@ fun ChatScreen(manager: KishkaManager, currentPhone: String, targetUser: User, o
                 }
             }
 
+            // Нижня панель із динамічною кнопкою (Мікрофон / Відправити)
             Row(
                 modifier = Modifier.fillMaxWidth().padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // Кнопка прикріплення файлів 📎
                 IconButton(onClick = { filePickerLauncher.launch("*/*") }) {
-                    Text("📎")
+                    Text("📎", fontSize = 20.sp)
                 }
+
+                // Поле введення повідомлення
                 OutlinedTextField(
                     value = textInput,
                     onValueChange = { textInput = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Повідомлення...") }
+                    placeholder = { Text("Повідомлення...") },
+                    singleLine = true
                 )
-                IconButton(onClick = {
-                    manager.sendMessage(currentPhone, targetUser.phone, textInput)
-                    textInput = ""
-                }) {
-                    Text("🚀")
+
+                Spacer(modifier = Modifier.width(4.dp))
+
+                // ДИНАМІЧНА КНОПКА: Якщо порожньо — мікрофон, якщо є текст — відправити
+                if (textInput.trim().isEmpty()) {
+                    IconButton(onClick = {
+                        Toast.makeText(context, "Затисніть для запису голосового", Toast.LENGTH_SHORT).show()
+                    }) {
+                        Text("🎙", fontSize = 22.sp)
+                    }
+                } else {
+                    IconButton(onClick = {
+                        manager.sendMessage(currentEmail, targetUser.phone, textInput)
+                        textInput = ""
+                    }) {
+                        Text("🚀", fontSize = 22.sp)
+                    }
                 }
             }
         }
