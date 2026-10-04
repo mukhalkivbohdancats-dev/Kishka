@@ -6,6 +6,9 @@ object AuthManager {
 
     private val auth: FirebaseAuth = FirebaseAuth.getInstance()
 
+    /**
+     * Реєстрація нового користувача та відправка листа з підтвердженням пошти.
+     */
     fun registerUser(
         email: String,
         pass: String,
@@ -40,8 +43,8 @@ object AuthManager {
     }
 
     /**
-     * Розумний вхід: якщо користувач намагається увійти, але такого акаунта ще немає,
-     * додаток автоматично створює його та надсилає лист верифікації, щоб уникнути помилок блокування.
+     * Авторизація користувача.
+     * Перевіряє підтвердження Email перед входом.
      */
     fun loginUser(
         email: String,
@@ -59,7 +62,6 @@ object AuthManager {
                         onResult(false, "Пошта не підтверджена! Перевірте скриньку $email")
                     }
                 } else {
-                    // Якщо акаунта не існує, але користувач натиснув "Увійти" — реєструємо його автоматично
                     val errorCode = task.exception?.message ?: ""
                     if (errorCode.contains("no user record", ignoreCase = true) || 
                         errorCode.contains("user-not-found", ignoreCase = true)) {
@@ -71,6 +73,9 @@ object AuthManager {
             }
     }
 
+    /**
+     * Повторна відправка листа верифікації.
+     */
     fun resendVerificationEmail(
         email: String,
         pass: String,
@@ -98,8 +103,19 @@ object AuthManager {
             }
     }
 
+    /**
+     * Перевірка, чи авторизований користувач і чи підтверджена пошта.
+     */
     fun isUserLoggedInAndVerified(): Boolean {
         val user = auth.currentUser
         return user != null && user.isEmailVerified
+    }
+
+    /**
+     * Отримання пошти поточного авторизованого користувача.
+     */
+    fun getCurrentUserEmail(): String? {
+        val user = auth.currentUser
+        return if (user != null && user.isEmailVerified) user.email else null
     }
 }
