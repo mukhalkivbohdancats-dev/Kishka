@@ -75,7 +75,8 @@ object Strings {
             "calling_in_progress" to "Триває розмова...",
             "type_message" to "Повідомлення...",
             "user_not_found" to "Користувача з такою поштою не знайдено!",
-            "contact_added" to "Контакт успішно додано!"
+            "contact_added" to "Контакт успішно додано!",
+            "loading_data" to "Завантажуємо ваші дані..."
         ),
         "ru" to mapOf(
             "select_lang" to "Язык интерфейса",
@@ -108,7 +109,8 @@ object Strings {
             "calling_in_progress" to "Идет разговор...",
             "type_message" to "Сообщение...",
             "user_not_found" to "Пользователь с такой почтой не найден!",
-            "contact_added" to "Контакт успешно добавлен!"
+            "contact_added" to "Контакт успешно добавлен!",
+            "loading_data" to "Загружаем ваши данные..."
         ),
         "en" to mapOf(
             "select_lang" to "Interface Language",
@@ -141,7 +143,8 @@ object Strings {
             "calling_in_progress" to "Call in progress...",
             "type_message" to "Message...",
             "user_not_found" to "User with this email not found!",
-            "contact_added" to "Contact successfully added!"
+            "contact_added" to "Contact successfully added!",
+            "loading_data" to "Loading your data..."
         )
     )
 
@@ -168,6 +171,34 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
+fun LoadingDataScreen(lang: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(ViberBg),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            CircularProgressIndicator(
+                color = ViberPurple,
+                modifier = Modifier.size(54.dp),
+                strokeWidth = 4.dp
+            )
+            Spacer(modifier = Modifier.height(20.dp))
+            Text(
+                text = Strings.get("loading_data", lang),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color.DarkGray
+            )
+        }
+    }
+}
+
+@Composable
 fun KishkaApp() {
     val context = LocalContext.current
     val manager = remember { KishkaManager(context) }
@@ -181,6 +212,8 @@ fun KishkaApp() {
     var currentDisplayName by remember { mutableStateOf("") }
     var avatarUrl by remember { mutableStateOf(DEFAULT_AVATAR_URL) }
 
+    var isDataLoading by remember { mutableStateOf(false) }
+
     var selectedUserForChat by remember { mutableStateOf<User?>(null) }
     var selectedBottomTab by remember { mutableStateOf(0) }
 
@@ -190,9 +223,9 @@ fun KishkaApp() {
     // Завантаження профілю з Firestore при вході або запуску
     LaunchedEffect(currentUserEmail) {
         if (currentUserEmail.isNotEmpty()) {
+            isDataLoading = true
             manager.listenForIncomingCalls(currentUserEmail)
             
-            // Завантажуємо збережені дані з бази без передчасного перезапису
             manager.getUserProfile(currentUserEmail) { user ->
                 if (user != null) {
                     if (user.name.isNotEmpty()) {
@@ -204,12 +237,14 @@ fun KishkaApp() {
                         avatarUrl = user.avatarUrl
                     }
                 } else {
-                    // Якщо акаунта у Firestore ще немає — створюємо початковий запис
                     val nameToSave = if (currentDisplayName.isNotEmpty()) currentDisplayName else currentUserEmail.substringBefore("@")
                     manager.registerOrUpdateUserInDb(currentUserEmail, nameToSave)
                     currentDisplayName = nameToSave
                 }
+                isDataLoading = false
             }
+        } else {
+            isDataLoading = false
         }
     }
 
@@ -247,6 +282,9 @@ fun KishkaApp() {
             onMinimize = { isCallMinimized = true },
             onEndCall = stopCallAction
         )
+    } else if (isDataLoading && currentUserEmail.isNotEmpty()) {
+        // Екран під час завантаження даних із Firebase
+        LoadingDataScreen(lang = currentLanguage)
     } else {
         Column(modifier = Modifier.fillMaxSize().background(ViberBg)) {
             if (activeCallTargetPhone != null && isCallMinimized) {
