@@ -22,13 +22,14 @@
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher"
         android:roundIcon="@drawable/ic_launcher"
-        android:label="Kishka Messenger"
+        android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.KishkaMessenger">
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:label="@string/app_name"
             android:launchMode="singleTop"
             android:theme="@style/Theme.KishkaMessenger">
             <intent-filter>
