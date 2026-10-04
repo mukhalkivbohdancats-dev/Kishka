@@ -287,7 +287,7 @@ fun KishkaApp() {
             }
 
             if (currentUserEmail.isNotEmpty() && selectedUserForChat == null) {
-                NavigationBar(containerColor = Color.White, elevation = 8.dp) {
+                NavigationBar(containerColor = Color.White, tonalElevation = 8.dp) {
                     NavigationBarItem(
                         selected = selectedBottomTab == 0,
                         onClick = { selectedBottomTab = 0 },
