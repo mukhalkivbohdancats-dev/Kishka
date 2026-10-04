@@ -2,7 +2,7 @@ package com.kishka.messenger
 
 data class User(
     val uid: String = "",
-    val phone: String = "",
+    val email: String = "",
     val name: String = "Користувач Kishka",
     val status: String = "Online",
     val avatarUrl: String? = null
@@ -10,8 +10,8 @@ data class User(
 
 data class Message(
     val id: String = "",
-    val senderPhone: String = "",
-    val receiverPhone: String = "",
+    val senderEmail: String = "",
+    val receiverEmail: String = "",
     val text: String = "",
     val fileUrl: String? = null,
     val fileType: String? = null,
@@ -20,7 +20,16 @@ data class Message(
 
 data class CallSignal(
     val callId: String = "",
-    val callerPhone: String = "",
-    val receiverPhone: String = "",
+    val callerEmail: String = "",
+    val receiverEmail: String = "",
     val status: String = "RINGING"
+)
+
+data class CallLogItem(
+    val id: String = "",
+    val callerName: String = "",
+    val callerEmail: String = "",
+    val time: String = "",
+    val duration: String = "",
+    val isMissed: Boolean = false
 )
