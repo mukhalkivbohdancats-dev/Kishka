@@ -7,8 +7,8 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.google.firebase.auth.FirebaseAuth
+import com.kishka.messenger.R
 
 val ViberPurple = Color(0xFF6F32E2)
 val ViberLightPurple = Color(0xFFEFEBFB)
@@ -300,7 +301,7 @@ fun KishkaApp() {
                     )
                     NavigationBarItem(
                         selected = selectedBottomTab == 2,
-                        onClick = { selectedBottomTab == 2 },
+                        onClick = { selectedBottomTab = 2 },
                         icon = { Icon(Icons.Default.Mic, contentDescription = null) },
                         label = { Text(Strings.get("account", currentLanguage)) }
                     )
@@ -310,6 +311,7 @@ fun KishkaApp() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AccountTab(
     manager: KishkaManager,
@@ -343,7 +345,7 @@ fun AccountTab(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             AsyncImage(
-                model = selectedPhotoUri ?: avatarUrl.ifEmpty { R.drawable.ic_launcher },
+                model = selectedPhotoUri ?: if (avatarUrl.isNotEmpty()) avatarUrl else R.drawable.ic_launcher,
                 contentDescription = "Avatar",
                 modifier = Modifier
                     .size(100.dp)
@@ -868,7 +870,7 @@ fun ActiveCallScreen(
 
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 AsyncImage(
-                    model = avatarUrl.ifEmpty { R.drawable.ic_launcher },
+                    model = if (avatarUrl.isNotEmpty()) avatarUrl else R.drawable.ic_launcher,
                     contentDescription = "Avatar",
                     modifier = Modifier.size(120.dp).clip(CircleShape)
                 )
