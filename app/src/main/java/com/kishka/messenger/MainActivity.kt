@@ -1,5 +1,7 @@
 package com.kishka.messenger
 
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -30,7 +32,6 @@ val ViberPurple = Color(0xFF6F32E2)
 val ViberLightPurple = Color(0xFFEFEBFB)
 val ViberBg = Color(0xFFF5F6FA)
 
-// Пряме посилання на нову картинку котика з вашого репозиторію
 const val DEFAULT_AVATAR_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/ic_launcher.png"
 
 object Strings {
@@ -191,7 +192,27 @@ fun KishkaApp() {
     val startCallAction: (String) -> Unit = { targetPhone ->
         activeCallTargetPhone = targetPhone
         isCallMinimized = false
+
+        val serviceIntent = Intent(context, CallService::class.java).apply {
+            action = CallService.ACTION_START_CALL
+            putExtra(CallService.EXTRA_TARGET_NAME, targetPhone)
+            putExtra(CallService.EXTRA_TARGET_PHONE, targetPhone)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(serviceIntent)
+        } else {
+            context.startService(serviceIntent)
+        }
         manager.startCall(currentUserEmail, targetPhone)
+    }
+
+    val stopCallAction: () -> Unit = {
+        val serviceIntent = Intent(context, CallService::class.java).apply {
+            action = CallService.ACTION_END_CALL
+        }
+        context.startService(serviceIntent)
+        activeCallTargetPhone = null
+        isCallMinimized = false
     }
 
     if (activeCallTargetPhone != null && !isCallMinimized) {
@@ -200,10 +221,7 @@ fun KishkaApp() {
             avatarUrl = avatarUrl,
             lang = currentLanguage,
             onMinimize = { isCallMinimized = true },
-            onEndCall = {
-                activeCallTargetPhone = null
-                isCallMinimized = false
-            }
+            onEndCall = stopCallAction
         )
     } else {
         Column(modifier = Modifier.fillMaxSize().background(ViberBg)) {
@@ -211,10 +229,7 @@ fun KishkaApp() {
                 ActiveCallBanner(
                     targetPhone = activeCallTargetPhone!!,
                     onExpandCall = { isCallMinimized = false },
-                    onEndCall = {
-                        activeCallTargetPhone = null
-                        isCallMinimized = false
-                    }
+                    onEndCall = stopCallAction
                 )
             }
 
