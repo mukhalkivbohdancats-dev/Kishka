@@ -2,14 +2,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.kishka.messenger">
 
-    <!-- Дозволи для мережі та аватарок -->
+    <!-- Дозволи для роботи з мережею та завантаження аватарок -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Дозволи для дзвінків, сповіщень та мікрофона -->
+    <!-- Дозволи для звуку, мікрофона та вібрації -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- Дозволи для фонової служби дзвінків та сповіщень (Android 12/13/14+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
@@ -18,12 +20,12 @@
     <application
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher"
-        android:label="Kishka Messenger"
         android:roundIcon="@drawable/ic_launcher"
+        android:label="Kishka Messenger"
         android:supportsRtl="true"
         android:theme="@style/Theme.KishkaMessenger">
 
-        <!-- Головне вікно додатка -->
+        <!-- Головна Activity додатка -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
