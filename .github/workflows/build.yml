@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [ "main" ]
 
-# Надаємо права на автоматичний commit у репозиторій
+# Надаємо права боту на запис створеного APK у репозиторій
 permissions:
   contents: write
 
@@ -27,11 +27,8 @@ jobs:
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
 
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew
-
     - name: Build Debug APK
-      run: ./gradlew assembleDebug --no-daemon
+      run: gradle assembleDebug --no-daemon
 
     - name: Prepare APK folder
       run: |
