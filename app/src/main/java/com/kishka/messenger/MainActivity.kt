@@ -48,29 +48,170 @@ fun KishkaApp() {
     }
     var selectedUserForChat by remember { mutableStateOf<User?>(null) }
 
-    if (currentUserEmail.isEmpty()) {
-        AuthScreen { email ->
-            currentUserEmail = email
-            manager.registerUserInGlobalContacts(email)
-            manager.listenForIncomingCalls(email)
-        }
-    } else if (selectedUserForChat == null) {
-        ContactsScreen(
-            manager = manager,
-            currentEmail = currentUserEmail,
-            onUserSelected = { user -> selectedUserForChat = user },
-            onLogout = {
-                auth.signOut()
-                currentUserEmail = ""
+    // Стан активного дзвінка
+    var activeCallTargetPhone by remember { mutableStateOf<String?>(null) }
+    var isCallMinimized by remember { mutableStateOf(false) }
+
+    val startCallAction: (String) -> Unit = { targetPhone ->
+        activeCallTargetPhone = targetPhone
+        isCallMinimized = false
+        manager.startCall(currentUserEmail, targetPhone)
+    }
+
+    // Якщо йде дзвінок і він НЕ згорнутий — показуємо повноцінний екран дзвінка
+    if (activeCallTargetPhone != null && !isCallMinimized) {
+        ActiveCallScreen(
+            targetPhone = activeCallTargetPhone!!,
+            onMinimize = {
+                // Хрестик натиснуто: ховаємо вікно, розмова триває!
+                isCallMinimized = true
+            },
+            onEndCall = {
+                // Завершуємо дзвінок
+                activeCallTargetPhone = null
+                isCallMinimized = false
             }
         )
     } else {
-        ChatScreen(
-            manager = manager,
-            currentEmail = currentUserEmail,
-            targetUser = selectedUserForChat!!,
-            onBack = { selectedUserForChat = null }
-        )
+        // Основний інтерфейс додатку
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Зелений банер активного дзвінка, коли екран згорнуто
+            if (activeCallTargetPhone != null && isCallMinimized) {
+                ActiveCallBanner(
+                    targetPhone = activeCallTargetPhone!!,
+                    onExpandCall = { isCallMinimized = false },
+                    onEndCall = {
+                        activeCallTargetPhone = null
+                        isCallMinimized = false
+                    }
+                )
+            }
+
+            Box(modifier = Modifier.weight(1f)) {
+                if (currentUserEmail.isEmpty()) {
+                    AuthScreen { email ->
+                        currentUserEmail = email
+                        manager.registerUserInGlobalContacts(email)
+                        manager.listenForIncomingCalls(email)
+                    }
+                } else if (selectedUserForChat == null) {
+                    ContactsScreen(
+                        manager = manager,
+                        currentEmail = currentUserEmail,
+                        onUserSelected = { user -> selectedUserForChat = user },
+                        onLogout = {
+                            auth.signOut()
+                            currentUserEmail = ""
+                        }
+                    )
+                } else {
+                    ChatScreen(
+                        manager = manager,
+                        currentEmail = currentUserEmail,
+                        targetUser = selectedUserForChat!!,
+                        onBack = { selectedUserForChat = null },
+                        onStartCall = { phone -> startCallAction(phone) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Екран активного дзвінка з кнопкою хрестика ❌ для згортання
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ActiveCallScreen(
+    targetPhone: String,
+    onMinimize: () -> Unit,
+    onEndCall: () -> Unit
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Активний дзвінок") },
+                navigationIcon = {
+                    // Хрестик ❌ - згортає вікно дзвінка, щоб можна було писати в чатах
+                    IconButton(onClick = onMinimize) {
+                        Text("❌", fontSize = 20.sp)
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                AsyncImage(
+                    model = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app-image.png",
+                    contentDescription = "Аватар",
+                    modifier = Modifier
+                        .size(120.dp)
+                        .clip(CircleShape)
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(targetPhone, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Іде розмова... 📞", fontSize = 16.sp, color = Color.Gray)
+            }
+
+            Button(
+                onClick = onEndCall,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp)
+                    .height(56.dp)
+            ) {
+                Text("Завершити дзвінок 🔴", fontSize = 18.sp, color = Color.White)
+            }
+        }
+    }
+}
+
+/**
+ * Верхній зелений банер про те, що дзвінок згорнуто й розмова триває
+ */
+@Composable
+fun ActiveCallBanner(
+    targetPhone: String,
+    onExpandCall: () -> Unit,
+    onEndCall: () -> Unit
+) {
+    Surface(
+        color = Color(0xFF2E7D32),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onExpandCall() }
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("📞", fontSize = 18.sp)
+                Spacer(modifier = Modifier.width(8.dp))
+                Column {
+                    Text("Дзвінок із $targetPhone", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Торкніться, щоб відкрити дзвінок", color = Color.White.copy(alpha = 0.8f), fontSize = 11.sp)
+                }
+            }
+            IconButton(onClick = onEndCall, modifier = Modifier.size(36.dp)) {
+                Text("🔴", fontSize = 18.sp)
+            }
+        }
     }
 }
 
@@ -95,7 +236,6 @@ fun AuthScreen(onLoginSuccess: (String) -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // Аватарка додатку з GitHub
             AsyncImage(
                 model = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app-image.png",
                 contentDescription = "Логотип Kishka Messenger",
@@ -253,7 +393,8 @@ fun ChatScreen(
     manager: KishkaManager,
     currentEmail: String,
     targetUser: User,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onStartCall: (String) -> Unit
 ) {
     var messages by remember { mutableStateOf(listOf<Message>()) }
     var textInput by remember { mutableStateOf("") }
@@ -291,7 +432,7 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { manager.startCall(currentEmail, targetUser.phone) }) {
+                    IconButton(onClick = { onStartCall(targetUser.phone) }) {
                         Text("📞")
                     }
                 }
@@ -324,17 +465,14 @@ fun ChatScreen(
                 }
             }
 
-            // Нижня панель із динамічною кнопкою (Мікрофон / Відправити)
             Row(
                 modifier = Modifier.fillMaxWidth().padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Кнопка прикріплення файлів 📎
                 IconButton(onClick = { filePickerLauncher.launch("*/*") }) {
                     Text("📎", fontSize = 20.sp)
                 }
 
-                // Поле введення повідомлення
                 OutlinedTextField(
                     value = textInput,
                     onValueChange = { textInput = it },
@@ -345,7 +483,6 @@ fun ChatScreen(
 
                 Spacer(modifier = Modifier.width(4.dp))
 
-                // ДИНАМІЧНА КНОПКА: Якщо порожньо — мікрофон, якщо є текст — відправити
                 if (textInput.trim().isEmpty()) {
                     IconButton(onClick = {
                         Toast.makeText(context, "Затисніть для запису голосового", Toast.LENGTH_SHORT).show()
