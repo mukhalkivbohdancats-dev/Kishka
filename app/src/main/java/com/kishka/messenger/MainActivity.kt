@@ -210,7 +210,7 @@ fun KishkaApp() {
     var currentLanguage by remember { mutableStateOf("uk") }
 
     var currentUserEmail by remember {
-        mutableStateOf(if (auth.currentUser?.isEmailVerified == true) auth.currentUser?.email ?: "" else "")
+        mutableStateOf(if (auth.currentUser?.isEmailVerified == true) auth.currentUser?.email?.lowercase() ?: "" else "")
     }
     var currentDisplayName by remember { mutableStateOf("") }
     var avatarUrl by remember { mutableStateOf(DEFAULT_AVATAR_URL) }
@@ -305,7 +305,7 @@ fun KishkaApp() {
                             if (name.isNotEmpty()) {
                                 currentDisplayName = name
                             }
-                            currentUserEmail = email
+                            currentUserEmail = email.lowercase()
                         }
                     )
                 } else if (selectedUserForChat != null) {
@@ -421,6 +421,7 @@ fun ChatsTab(
     var selectedFilter by remember { mutableStateOf(Strings.get("all", lang)) }
     var showAddContactDialog by remember { mutableStateOf(false) }
     var newContactEmail by remember { mutableStateOf("") }
+    var isAddingContact by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     LaunchedEffect(currentEmail) {
@@ -490,35 +491,44 @@ fun ChatsTab(
 
     if (showAddContactDialog) {
         AlertDialog(
-            onDismissRequest = { showAddContactDialog = false },
+            onDismissRequest = { if (!isAddingContact) showAddContactDialog = false },
             title = { Text(Strings.get("add_contact", lang)) },
             text = {
                 OutlinedTextField(
                     value = newContactEmail,
                     onValueChange = { newContactEmail = it },
                     label = { Text(Strings.get("enter_email", lang)) },
-                    singleLine = true
+                    singleLine = true,
+                    enabled = !isAddingContact
                 )
             },
             confirmButton = {
-                Button(onClick = {
-                    if (newContactEmail.contains("@")) {
-                        manager.addContactByEmail(currentEmail, newContactEmail) { success, _ ->
+                Button(
+                    onClick = {
+                        isAddingContact = true
+                        manager.addContactByEmail(currentEmail, newContactEmail) { success, _, message ->
+                            isAddingContact = false
+                            Toast.makeText(context, message ?: "", Toast.LENGTH_LONG).show()
                             if (success) {
-                                Toast.makeText(context, Strings.get("contact_added", lang), Toast.LENGTH_SHORT).show()
                                 showAddContactDialog = false
                                 newContactEmail = ""
-                            } else {
-                                Toast.makeText(context, Strings.get("user_not_found", lang), Toast.LENGTH_LONG).show()
                             }
                         }
+                    },
+                    enabled = !isAddingContact && newContactEmail.isNotBlank()
+                ) {
+                    if (isAddingContact) {
+                        CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp))
+                    } else {
+                        Text(Strings.get("add", lang))
                     }
-                }) {
-                    Text(Strings.get("add", lang))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showAddContactDialog = false }) {
+                TextButton(
+                    onClick = { showAddContactDialog = false },
+                    enabled = !isAddingContact
+                ) {
                     Text(Strings.get("cancel", lang))
                 }
             }
