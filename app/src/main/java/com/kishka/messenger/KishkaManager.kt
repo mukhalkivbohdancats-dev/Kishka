@@ -26,8 +26,7 @@ class KishkaManager(private val context: Context) {
     private var currentActiveChatId: String? = null
 
     companion object {
-        // Заміни це посилання на своє, яке дасть Render (збережи https:// на початку)
-        var SERVER_URL = "https://kishka-main.onrender.com"
+        var SERVER_URL = "https://kishka.onrender.com"
         const val DEFAULT_AVATAR_URL = "https://via.placeholder.com/150"
     }
 
@@ -53,41 +52,101 @@ class KishkaManager(private val context: Context) {
     }
 
     fun registerOrUpdateUserInDb(email: String, name: String, avatarUrl: String? = null) {
-        val docId = sanitizeEmail(email)
+        val cleanEmail = email.trim().lowercase()
+        val docId = sanitizeEmail(cleanEmail)
         val userRef = db.collection("users").document(docId)
+        
         userRef.get().addOnSuccessListener { doc ->
             if (!doc.exists()) {
                 val newUser = User(
                     uid = docId,
-                    email = email.trim().lowercase(),
+                    email = cleanEmail,
                     name = name.ifEmpty { "Користувач Kishka" },
                     status = "Online",
                     avatarUrl = avatarUrl ?: DEFAULT_AVATAR_URL
                 )
                 userRef.set(newUser)
+            } else {
+                val updates = mutableMapOf<String, Any>("email" to cleanEmail)
+                if (name.isNotEmpty()) updates["name"] = name
+                if (!avatarUrl.isNullOrEmpty()) updates["avatarUrl"] = avatarUrl
+                userRef.update(updates)
             }
         }
     }
 
-    fun addContactByEmail(myEmail: String, targetEmail: String, onResult: (Boolean, User?) -> Unit) {
-        val targetDocId = sanitizeEmail(targetEmail)
+    /**
+     * Покращене додавання контактів з подвійною перевіркою Firestore
+     */
+    fun addContactByEmail(myEmail: String, targetEmail: String, onResult: (Boolean, User?, String?) -> Unit) {
+        val cleanTargetEmail = targetEmail.trim().lowercase()
+        val cleanMyEmail = myEmail.trim().lowercase()
+
+        if (cleanTargetEmail.isEmpty() || !cleanTargetEmail.contains("@")) {
+            onResult(false, null, "Некоректний формат пошти!")
+            return
+        }
+
+        if (cleanTargetEmail == cleanMyEmail) {
+            onResult(false, null, "Ви не можете додати самі себе!")
+            return
+        }
+
+        val targetDocId = sanitizeEmail(cleanTargetEmail)
+
+        // 1. Спочатку шукаємо за прямим ID документа
         db.collection("users").document(targetDocId).get()
             .addOnSuccessListener { doc ->
                 if (doc.exists()) {
                     val user = doc.toObject(User::class.java)
                     if (user != null) {
-                        val myDocId = sanitizeEmail(myEmail)
-                        db.collection("users").document(myDocId)
-                            .collection("my_contacts").document(targetDocId).set(user)
-                        onResult(true, user)
+                        saveContactToMyList(cleanMyEmail, targetDocId, user, onResult)
                     } else {
-                        onResult(false, null)
+                        onResult(false, null, "Не вдалося зчитати дані користувача.")
                     }
                 } else {
-                    onResult(false, null)
+                    // 2. Якщо за ID не знайшло, робимо пошук по полю 'email'
+                    db.collection("users")
+                        .whereEqualTo("email", cleanTargetEmail)
+                        .get()
+                        .addOnSuccessListener { querySnapshot ->
+                            if (!querySnapshot.isEmpty) {
+                                val foundDoc = querySnapshot.documents[0]
+                                val user = foundDoc.toObject(User::class.java)
+                                if (user != null) {
+                                    saveContactToMyList(cleanMyEmail, foundDoc.id, user, onResult)
+                                } else {
+                                    onResult(false, null, "Помилка обробки контакту.")
+                                }
+                            } else {
+                                onResult(false, null, "Користувача з поштою $cleanTargetEmail не знайдено!")
+                            }
+                        }
+                        .addOnFailureListener { e ->
+                            onResult(false, null, "Помилка пошуку: ${e.localizedMessage}")
+                        }
                 }
             }
-            .addOnFailureListener { onResult(false, null) }
+            .addOnFailureListener { e ->
+                onResult(false, null, "Помилка мережі: ${e.localizedMessage}")
+            }
+    }
+
+    private fun saveContactToMyList(
+        myEmail: String,
+        contactDocId: String,
+        targetUser: User,
+        onResult: (Boolean, User?, String?) -> Unit
+    ) {
+        val myDocId = sanitizeEmail(myEmail)
+        db.collection("users").document(myDocId)
+            .collection("my_contacts").document(contactDocId).set(targetUser)
+            .addOnSuccessListener {
+                onResult(true, targetUser, "Контакт успішно додано!")
+            }
+            .addOnFailureListener { e ->
+                onResult(false, null, "Не вдалося зберегти контакт: ${e.localizedMessage}")
+            }
     }
 
     fun updateUserProfile(
