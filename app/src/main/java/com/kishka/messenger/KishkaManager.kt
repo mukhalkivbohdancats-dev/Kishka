@@ -26,8 +26,9 @@ class KishkaManager(private val context: Context) {
     private var currentActiveChatId: String? = null
 
     companion object {
-        // Вкажіть тут адреси вашого сервера (наприклад, "http://192.168.1.100:3000" або "http://10.0.2.2:3000" для емулятора)
-        var SERVER_URL = "http://10.0.2.2:3000"
+        // Заміни це посилання на своє, яке дасть Render (збережи https:// на початку)
+        var SERVER_URL = "https://kishka-main.onrender.com"
+        const val DEFAULT_AVATAR_URL = "https://via.placeholder.com/150"
     }
 
     init {
