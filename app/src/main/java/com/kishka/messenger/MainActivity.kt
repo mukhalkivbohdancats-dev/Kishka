@@ -60,6 +60,7 @@ object Strings {
             "your_name" to "Ваше ім'я в месенджері",
             "choose_photo" to "Обрати фото з галереї",
             "email_label" to "Пошта",
+            "server_url" to "URL сервера Node.js (Socket.io)",
             "save_changes" to "Зберегти зміни",
             "logout" to "Вийти з акаунта",
             "login_title" to "Вхід у Kishka",
@@ -94,6 +95,7 @@ object Strings {
             "your_name" to "Ваше имя в мессенджере",
             "choose_photo" to "Выбрать фото из галереи",
             "email_label" to "Почта",
+            "server_url" to "URL сервера Node.js (Socket.io)",
             "save_changes" to "Сохранить изменения",
             "logout" to "Выйти из аккаунта",
             "login_title" to "Вход в Kishka",
@@ -128,6 +130,7 @@ object Strings {
             "your_name" to "Your Display Name",
             "choose_photo" to "Choose photo from gallery",
             "email_label" to "Email",
+            "server_url" to "Node.js Server URL (Socket.io)",
             "save_changes" to "Save Changes",
             "logout" to "Log Out",
             "login_title" to "Sign in to Kishka",
@@ -220,7 +223,6 @@ fun KishkaApp() {
     var activeCallTargetPhone by remember { mutableStateOf<String?>(null) }
     var isCallMinimized by remember { mutableStateOf(false) }
 
-    // Завантаження профілю з Firestore при вході або запуску
     LaunchedEffect(currentUserEmail) {
         if (currentUserEmail.isNotEmpty()) {
             isDataLoading = true
@@ -283,7 +285,6 @@ fun KishkaApp() {
             onEndCall = stopCallAction
         )
     } else if (isDataLoading && currentUserEmail.isNotEmpty()) {
-        // Екран під час завантаження даних із Firebase
         LoadingDataScreen(lang = currentLanguage)
     } else {
         Column(modifier = Modifier.fillMaxSize().background(ViberBg)) {
@@ -538,6 +539,7 @@ fun AccountTab(
     onLogout: () -> Unit
 ) {
     var nameInput by remember(displayName) { mutableStateOf(displayName) }
+    var serverUrlInput by remember { mutableStateOf(KishkaManager.SERVER_URL) }
     var selectedPhotoUri by remember { mutableStateOf<Uri?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -586,6 +588,18 @@ fun AccountTab(
                 modifier = Modifier.fillMaxWidth()
             )
 
+            Spacer(modifier = Modifier.height(10.dp))
+
+            OutlinedTextField(
+                value = serverUrlInput,
+                onValueChange = {
+                    serverUrlInput = it
+                    KishkaManager.SERVER_URL = it
+                },
+                label = { Text(Strings.get("server_url", currentLang)) },
+                modifier = Modifier.fillMaxWidth()
+            )
+
             Spacer(modifier = Modifier.height(8.dp))
             Text("${Strings.get("email_label", currentLang)}: $email", color = Color.Gray, fontSize = 14.sp)
 
@@ -598,7 +612,7 @@ fun AccountTab(
                         isLoading = false
                         if (success) {
                             onProfileUpdated(nameInput, newUrl)
-                            Toast.makeText(context, "Оновлено у хмарі!", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Оновлено успішно!", Toast.LENGTH_SHORT).show()
                         } else {
                             Toast.makeText(context, "Помилка збереження", Toast.LENGTH_SHORT).show()
                         }
@@ -843,15 +857,23 @@ fun ChatScreen(
         uri?.let { manager.sendFileMessage(currentEmail, targetUser.email, it, "file") }
     }
 
-    LaunchedEffect(targetUser.email) {
-        manager.listenForMessages(currentEmail, targetUser.email) { messages = it }
+    DisposableEffect(targetUser.email) {
+        manager.connectAndListenForMessages(currentEmail, targetUser.email) { updatedList ->
+            messages = updatedList
+        }
+        onDispose {
+            manager.leaveChatRoom()
+        }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = {
+                        manager.leaveChatRoom()
+                        onBack()
+                    }) {
                         Icon(Icons.Default.Close, contentDescription = null)
                     }
                 },
@@ -865,7 +887,10 @@ fun ChatScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            LazyColumn(modifier = Modifier.weight(1f).padding(8.dp)) {
+            LazyColumn(
+                modifier = Modifier.weight(1f).padding(8.dp),
+                reverseLayout = false
+            ) {
                 items(messages) { msg ->
                     val isMe = msg.senderEmail == currentEmail
                     Box(
