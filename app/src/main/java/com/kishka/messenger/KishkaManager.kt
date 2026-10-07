@@ -1,7 +1,9 @@
 package com.kishka.messenger
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import com.google.firebase.storage.FirebaseStorage
@@ -9,6 +11,9 @@ import io.socket.client.IO
 import io.socket.client.Socket
 import org.json.JSONArray
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 
 class KishkaManager(private val context: Context) {
@@ -46,6 +51,10 @@ class KishkaManager(private val context: Context) {
         if (socket == null || socket?.connected() != true) {
             initSocket()
         }
+    }
+
+    fun sanitizeEmail(email: String): String {
+        return email.trim().lowercase().replace(".", "_dot_")
     }
 
     fun registerOrUpdateUserInDb(email: String, name: String, avatarUrl: String? = null) {
@@ -281,6 +290,41 @@ class KishkaManager(private val context: Context) {
         currentActiveChatId = null
         socket?.off("load_history")
         socket?.off("receive_message")
+    }
+
+    fun recordCallLog(myEmail: String, targetEmail: String, isMissed: Boolean = false) {
+    }
+
+    fun listenForCallHistory(myEmail: String, onLogsUpdated: (List<CallLogItem>) -> Unit) {
+        onLogsUpdated(emptyList())
+    }
+
+    fun startCall(callerEmail: String, receiverEmail: String) {
+        ensureConnected()
+        val json = JSONObject().apply {
+            put("callerEmail", callerEmail)
+            put("receiverEmail", receiverEmail)
+        }
+        socket?.emit("start_call", json)
+    }
+
+    fun listenForIncomingCalls(myEmail: String) {
+        ensureConnected()
+        socket?.on("incoming_call") { args ->
+            if (args.isNotEmpty() && args[0] is JSONObject) {
+                val obj = args[0] as JSONObject
+                val callerEmail = obj.optString("callerEmail", "")
+                val intent = Intent(context, CallService::class.java).apply {
+                    action = "ACTION_INCOMING"
+                    putExtra("CALLER_NAME", callerEmail)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            }
+        }
     }
 
     private fun getChatId(email1: String, email2: String): String {
