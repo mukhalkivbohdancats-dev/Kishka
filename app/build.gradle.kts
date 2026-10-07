@@ -61,15 +61,15 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
 
-    // Firebase (Auth, Firestore, Storage)
+    // Firebase
     implementation(platform("com.google.firebase:firebase-bom:33.1.0"))
     implementation("com.google.firebase:firebase-auth-ktx")
     implementation("com.google.firebase:firebase-firestore-ktx")
     implementation("com.google.firebase:firebase-storage-ktx")
 
-    // Socket.IO Client для зв'язку з Node.js
+    // Socket.IO Client
     implementation("io.socket:socket.io-client:2.1.0")
 
-    // Coil для завантаження аватарок
+    // Coil
     implementation("io.coil-kt:coil-compose:2.6.0")
 }
