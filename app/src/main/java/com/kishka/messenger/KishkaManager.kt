@@ -6,6 +6,8 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreSettings
+import com.google.firebase.firestore.Query
 import com.google.firebase.storage.FirebaseStorage
 import io.socket.client.IO
 import io.socket.client.Socket
@@ -27,10 +29,18 @@ class KishkaManager(private val context: Context) {
 
     companion object {
         var SERVER_URL = "https://kishka.onrender.com"
-        const val DEFAULT_AVATAR_URL = "https://via.placeholder.com/150"
+        const val DEFAULT_AVATAR_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/ic_launcher.png"
     }
 
     init {
+        try {
+            val settings = FirebaseFirestoreSettings.Builder()
+                .setPersistenceEnabled(true)
+                .build()
+            db.firestoreSettings = settings
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
         initSocket()
     }
 
@@ -39,6 +49,7 @@ class KishkaManager(private val context: Context) {
             val options = IO.Options().apply {
                 forceNew = true
                 reconnection = true
+                timeout = 20000
             }
             socket = IO.socket(SERVER_URL, options)
             socket?.connect()
@@ -47,21 +58,23 @@ class KishkaManager(private val context: Context) {
         }
     }
 
-    private fun sanitizeEmail(email: String): String {
+    fun sanitizeEmail(email: String): String {
         return email.trim().lowercase().replace(".", "_dot_")
     }
 
     fun registerOrUpdateUserInDb(email: String, name: String, avatarUrl: String? = null) {
         val cleanEmail = email.trim().lowercase()
+        if (cleanEmail.isEmpty()) return
         val docId = sanitizeEmail(cleanEmail)
         val userRef = db.collection("users").document(docId)
-        
+
         userRef.get().addOnSuccessListener { doc ->
+            val defaultName = if (name.isNotEmpty()) name else cleanEmail.substringBefore("@")
             if (!doc.exists()) {
                 val newUser = User(
                     uid = docId,
                     email = cleanEmail,
-                    name = name.ifEmpty { "Користувач Kishka" },
+                    name = defaultName,
                     status = "Online",
                     avatarUrl = avatarUrl ?: DEFAULT_AVATAR_URL
                 )
@@ -72,11 +85,22 @@ class KishkaManager(private val context: Context) {
                 if (!avatarUrl.isNullOrEmpty()) updates["avatarUrl"] = avatarUrl
                 userRef.update(updates)
             }
+        }.addOnFailureListener {
+            val defaultName = if (name.isNotEmpty()) name else cleanEmail.substringBefore("@")
+            val newUser = User(
+                uid = docId,
+                email = cleanEmail,
+                name = defaultName,
+                status = "Online",
+                avatarUrl = avatarUrl ?: DEFAULT_AVATAR_URL
+            )
+            userRef.set(newUser)
         }
     }
 
     /**
-     * Покращене додавання контактів з подвійною перевіркою Firestore
+     * Взаємне (двостороннє) додавання контактів у Firebase.
+     * Після видалення/перевстановлення додатка всі контакти відновлюються з хмари!
      */
     fun addContactByEmail(myEmail: String, targetEmail: String, onResult: (Boolean, User?, String?) -> Unit) {
         val cleanTargetEmail = targetEmail.trim().lowercase()
@@ -94,27 +118,25 @@ class KishkaManager(private val context: Context) {
 
         val targetDocId = sanitizeEmail(cleanTargetEmail)
 
-        // 1. Спочатку шукаємо за прямим ID документа
         db.collection("users").document(targetDocId).get()
             .addOnSuccessListener { doc ->
                 if (doc.exists()) {
-                    val user = doc.toObject(User::class.java)
-                    if (user != null) {
-                        saveContactToMyList(cleanMyEmail, targetDocId, user, onResult)
+                    val targetUser = doc.toObject(User::class.java)
+                    if (targetUser != null) {
+                        saveMutualContacts(cleanMyEmail, cleanTargetEmail, targetUser, onResult)
                     } else {
-                        onResult(false, null, "Не вдалося зчитати дані користувача.")
+                        onResult(false, null, "Помилка даних користувача.")
                     }
                 } else {
-                    // 2. Якщо за ID не знайшло, робимо пошук по полю 'email'
                     db.collection("users")
                         .whereEqualTo("email", cleanTargetEmail)
                         .get()
                         .addOnSuccessListener { querySnapshot ->
                             if (!querySnapshot.isEmpty) {
                                 val foundDoc = querySnapshot.documents[0]
-                                val user = foundDoc.toObject(User::class.java)
-                                if (user != null) {
-                                    saveContactToMyList(cleanMyEmail, foundDoc.id, user, onResult)
+                                val targetUser = foundDoc.toObject(User::class.java)
+                                if (targetUser != null) {
+                                    saveMutualContacts(cleanMyEmail, cleanTargetEmail, targetUser, onResult)
                                 } else {
                                     onResult(false, null, "Помилка обробки контакту.")
                                 }
@@ -123,30 +145,127 @@ class KishkaManager(private val context: Context) {
                             }
                         }
                         .addOnFailureListener { e ->
-                            onResult(false, null, "Помилка пошуку: ${e.localizedMessage}")
+                            onResult(false, null, "Помилка мережі: ${e.localizedMessage}")
                         }
                 }
             }
             .addOnFailureListener { e ->
-                onResult(false, null, "Помилка мережі: ${e.localizedMessage}")
+                onResult(false, null, "Помилка з'єднання: ${e.localizedMessage}")
             }
     }
 
-    private fun saveContactToMyList(
+    private fun saveMutualContacts(
         myEmail: String,
-        contactDocId: String,
+        targetEmail: String,
         targetUser: User,
         onResult: (Boolean, User?, String?) -> Unit
     ) {
         val myDocId = sanitizeEmail(myEmail)
+        val targetDocId = sanitizeEmail(targetEmail)
+
+        // 1. Зберігаємо співрозмовника у мої контакти
         db.collection("users").document(myDocId)
-            .collection("my_contacts").document(contactDocId).set(targetUser)
+            .collection("my_contacts").document(targetDocId).set(targetUser)
             .addOnSuccessListener {
+                // 2. Взаємно зберігаємо мене у контакти співрозмовника
+                getUserProfile(myEmail) { myUser ->
+                    val selfUser = myUser ?: User(
+                        uid = myDocId,
+                        email = myEmail,
+                        name = myEmail.substringBefore("@"),
+                        avatarUrl = DEFAULT_AVATAR_URL
+                    )
+                    db.collection("users").document(targetDocId)
+                        .collection("my_contacts").document(myDocId).set(selfUser)
+                }
                 onResult(true, targetUser, "Контакт успішно додано!")
             }
             .addOnFailureListener { e ->
                 onResult(false, null, "Не вдалося зберегти контакт: ${e.localizedMessage}")
             }
+    }
+
+    fun listenToUserContacts(myEmail: String, onContactsUpdated: (List<User>) -> Unit) {
+        val myDocId = sanitizeEmail(myEmail)
+        db.collection("users").document(myDocId).collection("my_contacts")
+            .addSnapshotListener { snapshot, _ ->
+                if (snapshot != null) {
+                    onContactsUpdated(snapshot.toObjects(User::class.java))
+                }
+            }
+    }
+
+    // --- Збереження повідомлень (Socket.io + Firebase Firestore) ---
+
+    fun connectAndListenForMessages(
+        senderEmail: String,
+        receiverEmail: String,
+        onMessagesUpdated: (List<Message>) -> Unit
+    ) {
+        val chatId = getChatId(senderEmail, receiverEmail)
+        currentActiveChatId = chatId
+
+        // Читання та збереження з Firestore
+        db.collection("chats").document(chatId).collection("messages")
+            .orderBy("timestamp", Query.Direction.ASCENDING)
+            .addSnapshotListener { snapshot, _ ->
+                if (snapshot != null && !snapshot.isEmpty) {
+                    val fsMessages = snapshot.toObjects(Message::class.java)
+                    mainHandler.post {
+                        onMessagesUpdated(fsMessages)
+                    }
+                }
+            }
+
+        // Live-з'єднання через Socket.io
+        if (socket == null || socket?.connected() != true) {
+            initSocket()
+        }
+
+        val joinData = JSONObject().apply { put("chatId", chatId) }
+        socket?.emit("join_chat", joinData)
+    }
+
+    fun sendMessage(senderEmail: String, receiverEmail: String, text: String) {
+        if (text.isBlank()) return
+        val chatId = getChatId(senderEmail, receiverEmail)
+        val msgId = UUID.randomUUID().toString()
+        val timestamp = System.currentTimeMillis()
+
+        val msg = Message(
+            id = msgId,
+            chatId = chatId,
+            senderEmail = senderEmail,
+            receiverEmail = receiverEmail,
+            text = text,
+            timestamp = timestamp
+        )
+
+        // 1. Відправка у сокет
+        val jsonMsg = JSONObject().apply {
+            put("id", msgId)
+            put("chatId", chatId)
+            put("senderEmail", senderEmail)
+            put("receiverEmail", receiverEmail)
+            put("text", text)
+            put("timestamp", timestamp)
+        }
+        socket?.emit("send_message", jsonMsg)
+
+        // 2. Постійне збереження в Firestore
+        db.collection("chats").document(chatId)
+            .collection("messages").document(msgId).set(msg)
+    }
+
+    fun sendFileMessage(senderEmail: String, receiverEmail: String, fileUri: Uri, fileType: String) {
+        val fileId = UUID.randomUUID().toString()
+        val ref = storage.reference.child("chat_files/$fileId")
+
+        ref.putFile(fileUri).addOnSuccessListener {
+            ref.downloadUrl.addOnSuccessListener { downloadUri ->
+                sendMessage(senderEmail, receiverEmail, "Файл: $fileType ($downloadUri)")
+            }
+        }
     }
 
     fun updateUserProfile(
@@ -185,128 +304,12 @@ class KishkaManager(private val context: Context) {
         }.addOnFailureListener { onResult(null) }
     }
 
-    fun listenToUserContacts(myEmail: String, onContactsUpdated: (List<User>) -> Unit) {
-        val myDocId = sanitizeEmail(myEmail)
-        db.collection("users").document(myDocId).collection("my_contacts")
-            .addSnapshotListener { snapshot, _ ->
-                if (snapshot != null) {
-                    onContactsUpdated(snapshot.toObjects(User::class.java))
-                }
-            }
-    }
-
-    // --- Логіка чату через Socket.io ---
-
-    fun connectAndListenForMessages(
-        senderEmail: String,
-        receiverEmail: String,
-        onMessagesUpdated: (List<Message>) -> Unit
-    ) {
-        val chatId = getChatId(senderEmail, receiverEmail)
-        currentActiveChatId = chatId
-
-        if (socket == null || socket?.connected() != true) {
-            initSocket()
-        }
-
-        val messagesList = mutableListOf<Message>()
-
-        socket?.off("load_history")
-        socket?.off("receive_message")
-
-        socket?.on("load_history") { args ->
-            if (args.isNotEmpty()) {
-                val array = args[0] as? JSONArray ?: return@on
-                messagesList.clear()
-                for (i in 0 until array.length()) {
-                    val obj = array.getJSONObject(i)
-                    val msg = Message(
-                        id = obj.optString("id", ""),
-                        chatId = obj.optString("chatId", chatId),
-                        senderEmail = obj.optString("senderEmail", ""),
-                        receiverEmail = obj.optString("receiverEmail", ""),
-                        text = obj.optString("text", ""),
-                        timestamp = obj.optLong("timestamp", System.currentTimeMillis())
-                    )
-                    messagesList.add(msg)
-                }
-                mainHandler.post {
-                    onMessagesUpdated(messagesList.toList())
-                }
-            }
-        }
-
-        socket?.on("receive_message") { args ->
-            if (args.isNotEmpty()) {
-                val obj = args[0] as? JSONObject ?: return@on
-                val msgChatId = obj.optString("chatId", "")
-                if (msgChatId == currentActiveChatId) {
-                    val msg = Message(
-                        id = obj.optString("id", ""),
-                        chatId = msgChatId,
-                        senderEmail = obj.optString("senderEmail", ""),
-                        receiverEmail = obj.optString("receiverEmail", ""),
-                        text = obj.optString("text", ""),
-                        timestamp = obj.optLong("timestamp", System.currentTimeMillis())
-                    )
-                    messagesList.add(msg)
-                    mainHandler.post {
-                        onMessagesUpdated(messagesList.toList())
-                    }
-                }
-            }
-        }
-
-        val joinData = JSONObject().apply {
-            put("chatId", chatId)
-        }
-        socket?.emit("join_chat", joinData)
-    }
-
     fun leaveChatRoom() {
         currentActiveChatId?.let { chatId ->
             socket?.emit("leave_chat", chatId)
         }
         currentActiveChatId = null
-        socket?.off("load_history")
-        socket?.off("receive_message")
     }
-
-    fun sendMessage(senderEmail: String, receiverEmail: String, text: String) {
-        if (text.isBlank()) return
-        val chatId = getChatId(senderEmail, receiverEmail)
-
-        val jsonMsg = JSONObject().apply {
-            put("chatId", chatId)
-            put("senderEmail", senderEmail)
-            put("receiverEmail", receiverEmail)
-            put("text", text)
-            put("timestamp", System.currentTimeMillis())
-        }
-
-        socket?.emit("send_message", jsonMsg)
-    }
-
-    fun sendFileMessage(senderEmail: String, receiverEmail: String, fileUri: Uri, fileType: String) {
-        val fileId = UUID.randomUUID().toString()
-        val ref = storage.reference.child("chat_files/$fileId")
-
-        ref.putFile(fileUri).addOnSuccessListener {
-            ref.downloadUrl.addOnSuccessListener { downloadUri ->
-                val chatId = getChatId(senderEmail, receiverEmail)
-                val jsonMsg = JSONObject().apply {
-                    put("chatId", chatId)
-                    put("senderEmail", senderEmail)
-                    put("receiverEmail", receiverEmail)
-                    put("text", "Файл: $fileType ($downloadUri)")
-                    put("timestamp", System.currentTimeMillis())
-                }
-                socket?.emit("send_message", jsonMsg)
-            }
-        }
-    }
-
-    // --- Дзвінки через Firebase ---
 
     fun recordCallLog(myEmail: String, targetEmail: String, isMissed: Boolean = false) {
         val myDocId = sanitizeEmail(myEmail)
