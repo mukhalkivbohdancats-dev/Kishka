@@ -41,11 +41,11 @@ jobs:
       - name: Save APK into repository
         run: |
           if [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
-            mkdir -p apk
-            cp app/build/outputs/apk/debug/app-debug.apk apk/KishkaMessenger_V1.4.apk
+            mkdir -p app
+            cp app/build/outputs/apk/debug/app-debug.apk app/KishkaMessenger_V1.4.apk
             git config --global user.name "github-actions[bot]"
             git config --global user.email "github-actions[bot]@users.noreply.github.com"
-            git add apk/KishkaMessenger_V1.4.apk
+            git add app/KishkaMessenger_V1.4.apk
             git diff --staged --quiet || (git commit -m "Auto-build: update KishkaMessenger_V1.4.apk [skip ci]" && git push)
           else
             echo "❌ Помилка: APK не знайдено після кроку збірки!"
