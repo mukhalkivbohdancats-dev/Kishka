@@ -6,26 +6,26 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.UserProfileChangeRequest
 import com.google.firebase.storage.FirebaseStorage
 import io.socket.client.IO
 import io.socket.client.Socket
 import org.json.JSONArray
 import org.json.JSONObject
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.UUID
 
 class KishkaManager(private val context: Context) {
 
     private val storage = FirebaseStorage.getInstance()
+    private val auth = FirebaseAuth.getInstance()
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var socket: Socket? = null
     private var currentActiveChatId: String? = null
 
     companion object {
-        var SERVER_URL = "https://kishka.onrender.com"
+        const val SERVER_URL = "https://kishka.onrender.com"
         const val DEFAULT_AVATAR_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/ic_launcher.png"
     }
 
@@ -268,18 +268,39 @@ class KishkaManager(private val context: Context) {
         onComplete: (Boolean, String?) -> Unit
     ) {
         val cleanEmail = email.trim().lowercase()
+        val currentUser = auth.currentUser
+
         if (avatarUri != null) {
             val photoRef = storage.reference.child("avatars/$cleanEmail.jpg")
             photoRef.putFile(avatarUri).addOnSuccessListener {
                 photoRef.downloadUrl.addOnSuccessListener { downloadUrl ->
                     val avatarUrlStr = downloadUrl.toString()
-                    registerOrUpdateUserInDb(cleanEmail, newName, avatarUrlStr)
-                    onComplete(true, avatarUrlStr)
+                    val profileUpdates = UserProfileChangeRequest.Builder()
+                        .setDisplayName(newName)
+                        .setPhotoUri(Uri.parse(avatarUrlStr))
+                        .build()
+
+                    currentUser?.updateProfile(profileUpdates)?.addOnCompleteListener {
+                        registerOrUpdateUserInDb(cleanEmail, newName, avatarUrlStr)
+                        onComplete(true, avatarUrlStr)
+                    } ?: run {
+                        registerOrUpdateUserInDb(cleanEmail, newName, avatarUrlStr)
+                        onComplete(true, avatarUrlStr)
+                    }
                 }.addOnFailureListener { onComplete(false, null) }
             }.addOnFailureListener { onComplete(false, null) }
         } else {
-            registerOrUpdateUserInDb(cleanEmail, newName, null)
-            onComplete(true, null)
+            val profileUpdates = UserProfileChangeRequest.Builder()
+                .setDisplayName(newName)
+                .build()
+
+            currentUser?.updateProfile(profileUpdates)?.addOnCompleteListener {
+                registerOrUpdateUserInDb(cleanEmail, newName, null)
+                onComplete(true, null)
+            } ?: run {
+                registerOrUpdateUserInDb(cleanEmail, newName, null)
+                onComplete(true, null)
+            }
         }
     }
 
