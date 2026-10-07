@@ -22,20 +22,25 @@ object AuthManager {
                             if (sendTask.isSuccessful) {
                                 onResult(
                                     true,
-                                    "На пошту $cleanEmail надіслано лист для підтвердження. Будь ласка, підтвердіть пошту!"
+                                    "На пошту $cleanEmail надіслано лист для підтвердження. Підтвердіть її!"
                                 )
                             } else {
                                 onResult(
                                     false,
-                                    sendTask.exception?.message ?: "Не вдалося надіслати лист підтвердження"
+                                    sendTask.exception?.localizedMessage ?: "Не вдалося надіслати лист підтвердження"
                                 )
                             }
                         } ?: run {
                             auth.signOut()
-                            onResult(false, "Користувач відсутній")
+                            onResult(false, "Помилка створення акаунта.")
                         }
                 } else {
-                    onResult(false, task.exception?.message ?: "Помилка реєстрації")
+                    val err = task.exception?.localizedMessage ?: ""
+                    if (err.contains("already in use", ignoreCase = true)) {
+                        onResult(false, "Акаунт із такою поштою вже існує!")
+                    } else {
+                        onResult(false, "Некоректний формат пошти або слабкий пароль.")
+                    }
                 }
             }
     }
@@ -57,41 +62,16 @@ object AuthManager {
                         onResult(false, "Пошта не підтверджена! Перевірте скриньку $cleanEmail")
                     }
                 } else {
-                    val errorCode = task.exception?.message ?: ""
+                    val errorCode = task.exception?.localizedMessage ?: ""
                     if (errorCode.contains("no user record", ignoreCase = true) || 
-                        errorCode.contains("user-not-found", ignoreCase = true)) {
-                        registerUser(cleanEmail, pass, onResult)
+                        errorCode.contains("user-not-found", ignoreCase = true) ||
+                        errorCode.contains("INVALID_LOGIN_CREDENTIALS", ignoreCase = true)) {
+                        onResult(false, "Такого акаунта не існує! Перевірте введений email.")
+                    } else if (errorCode.contains("wrong-password", ignoreCase = true) || errorCode.contains("invalid-password", ignoreCase = true)) {
+                        onResult(false, "Неправильний пароль!")
                     } else {
-                        onResult(false, "Невірний пароль або пошта. Перевірте дані.")
+                        onResult(false, "Невірний пароль або акаунт відсутній.")
                     }
-                }
-            }
-    }
-
-    fun resendVerificationEmail(
-        email: String,
-        pass: String,
-        onResult: (Boolean, String?) -> Unit
-    ) {
-        val cleanEmail = email.trim().lowercase()
-        auth.signInWithEmailAndPassword(cleanEmail, pass)
-            .addOnCompleteListener { task ->
-                if (task.isSuccessful) {
-                    val user = auth.currentUser
-                    user?.sendEmailVerification()
-                        ?.addOnCompleteListener { sendTask ->
-                            auth.signOut()
-                            if (sendTask.isSuccessful) {
-                                onResult(true, "Повторний лист верифікації надіслано на $cleanEmail")
-                            } else {
-                                onResult(false, sendTask.exception?.message ?: "Помилка відправки листа")
-                            }
-                        } ?: run {
-                            auth.signOut()
-                            onResult(false, "Користувача не знайдено")
-                        }
-                } else {
-                    onResult(false, task.exception?.message ?: "Не вдалося увійти для повторної відправки")
                 }
             }
     }
