@@ -512,6 +512,9 @@ fun ChatsTab(
                             if (success) {
                                 showAddContactDialog = false
                                 newContactEmail = ""
+                                manager.listenToUserContacts(currentEmail) { fetched ->
+                                    contacts = fetched
+                                }
                             }
                         }
                     },
@@ -807,7 +810,7 @@ fun AuthScreen(
                                     infoMessage = msg ?: "Лист підтвердження надіслано!"
                                     isRegisterMode = false
                                 } else {
-                                    Toast.makeText(context, msg ?: "Помилка", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, msg ?: "Помилка", Toast.LENGTH_LONG).show()
                                 }
                             }
                         } else {
@@ -816,7 +819,7 @@ fun AuthScreen(
                                 if (success) {
                                     onLoginSuccess(email, displayName)
                                 } else {
-                                    Toast.makeText(context, msg ?: "Помилка входу", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, msg ?: "Помилка входу", Toast.LENGTH_LONG).show()
                                 }
                             }
                         }
