@@ -22,7 +22,7 @@ object AuthManager {
                             if (sendTask.isSuccessful) {
                                 onResult(
                                     true,
-                                    "На пошту $cleanEmail надіслано лист для підтвердження. Будь ласка, підтвердіть пошту!"
+                                    "На пошту $cleanEmail надіслано лист підтвердження. Перевірте скриньку!"
                                 )
                             } else {
                                 onResult(
@@ -32,14 +32,14 @@ object AuthManager {
                             }
                         } ?: run {
                             auth.signOut()
-                            onResult(false, "Помилка реєстрації користувача.")
+                            onResult(false, "Помилка реєстрації.")
                         }
                 } else {
                     val err = task.exception?.localizedMessage ?: ""
                     if (err.contains("already in use", ignoreCase = true)) {
                         onResult(false, "Акаунт із такою поштою вже існує!")
                     } else {
-                        onResult(false, "Помилка реєстрації. Перевірте пошту та пароль (мін. 6 символів).")
+                        onResult(false, "Некоректний формат пошти або пароль коротший за 6 символів.")
                     }
                 }
             }
@@ -71,7 +71,7 @@ object AuthManager {
                                errorCode.contains("invalid-password", ignoreCase = true)) {
                         onResult(false, "Невірний пароль!")
                     } else {
-                        onResult(false, "Невірний пароль або пошта. Перевірте вхідні дані.")
+                        onResult(false, "Невірний пароль або акаунт відсутній.")
                     }
                 }
             }
