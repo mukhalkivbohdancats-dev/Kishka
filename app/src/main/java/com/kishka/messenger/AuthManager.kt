@@ -3,6 +3,7 @@ package com.kishka.messenger
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
 import com.google.firebase.auth.FirebaseAuthInvalidUserException
+import com.google.firebase.auth.UserProfileChangeRequest
 
 object AuthManager {
 
@@ -11,31 +12,40 @@ object AuthManager {
     fun registerUser(
         email: String,
         pass: String,
+        displayName: String,
         onResult: (Boolean, String?) -> Unit
     ) {
         val cleanEmail = email.trim().lowercase()
+        val cleanName = displayName.trim().ifEmpty { cleanEmail.substringBefore("@") }
+
         auth.createUserWithEmailAndPassword(cleanEmail, pass)
             .addOnCompleteListener { task ->
                 if (task.isSuccessful) {
                     val user = auth.currentUser
-                    user?.sendEmailVerification()
-                        ?.addOnCompleteListener { sendTask ->
-                            auth.signOut()
-                            if (sendTask.isSuccessful) {
-                                onResult(
-                                    true,
-                                    "На пошту $cleanEmail надіслано лист для підтвердження. Будь ласка, підтвердіть пошту!"
-                                )
-                            } else {
-                                onResult(
-                                    false,
-                                    sendTask.exception?.localizedMessage ?: "Не вдалося надіслати лист підтвердження"
-                                )
+                    val profileUpdates = UserProfileChangeRequest.Builder()
+                        .setDisplayName(cleanName)
+                        .build()
+
+                    user?.updateProfile(profileUpdates)?.addOnCompleteListener {
+                        user.sendEmailVerification()
+                            .addOnCompleteListener { sendTask ->
+                                auth.signOut()
+                                if (sendTask.isSuccessful) {
+                                    onResult(
+                                        true,
+                                        "На пошту $cleanEmail надіслано лист для підтвердження. Перевірте пошту!"
+                                    )
+                                } else {
+                                    onResult(
+                                        false,
+                                        sendTask.exception?.localizedMessage ?: "Не вдалося надіслати лист підтвердження"
+                                    )
+                                }
                             }
-                        } ?: run {
-                            auth.signOut()
-                            onResult(false, "Користувач відсутній")
-                        }
+                    } ?: run {
+                        auth.signOut()
+                        onResult(false, "Помилка створення користувача")
+                    }
                 } else {
                     val ex = task.exception
                     val msg = ex?.localizedMessage ?: ""
@@ -119,5 +129,15 @@ object AuthManager {
     fun getCurrentUserEmail(): String? {
         val user = auth.currentUser
         return if (user != null && user.isEmailVerified) user.email?.lowercase() else null
+    }
+
+    fun getCurrentUserDisplayName(): String {
+        val user = auth.currentUser
+        return user?.displayName ?: user?.email?.substringBefore("@") ?: ""
+    }
+
+    fun getCurrentUserPhotoUrl(): String? {
+        val user = auth.currentUser
+        return user?.photoUrl?.toString()
     }
 }
