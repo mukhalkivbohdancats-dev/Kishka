@@ -60,7 +60,6 @@ object Strings {
             "your_name" to "Ваше ім'я в месенджері",
             "choose_photo" to "Обрати фото з галереї",
             "email_label" to "Пошта",
-            "server_url" to "URL сервера Node.js (Socket.io)",
             "save_changes" to "Зберегти зміни",
             "logout" to "Вийти з акаунта",
             "login_title" to "Вхід у Kishka",
@@ -95,7 +94,6 @@ object Strings {
             "your_name" to "Ваше имя в мессенджере",
             "choose_photo" to "Выбрать фото из галереи",
             "email_label" to "Почта",
-            "server_url" to "URL сервера Node.js (Socket.io)",
             "save_changes" to "Сохранить изменения",
             "logout" to "Выйти из аккаунта",
             "login_title" to "Вход в Kishka",
@@ -130,7 +128,6 @@ object Strings {
             "your_name" to "Your Display Name",
             "choose_photo" to "Choose photo from gallery",
             "email_label" to "Email",
-            "server_url" to "Node.js Server URL (Socket.io)",
             "save_changes" to "Save Changes",
             "logout" to "Log Out",
             "login_title" to "Sign in to Kishka",
@@ -227,22 +224,27 @@ fun KishkaApp() {
         if (currentUserEmail.isNotEmpty()) {
             isDataLoading = true
             manager.listenForIncomingCalls(currentUserEmail)
-            
+
+            val savedNameInAuth = AuthManager.getCurrentUserDisplayName()
+            val savedPhotoInAuth = AuthManager.getCurrentUserPhotoUrl()
+
+            if (savedNameInAuth.isNotEmpty()) {
+                currentDisplayName = savedNameInAuth
+            }
+            if (!savedPhotoInAuth.isNullOrEmpty()) {
+                avatarUrl = savedPhotoInAuth
+            }
+
             manager.getUserProfile(currentUserEmail) { user ->
-                if (user != null) {
-                    if (user.name.isNotEmpty()) {
-                        currentDisplayName = user.name
-                    } else if (currentDisplayName.isEmpty()) {
-                        currentDisplayName = currentUserEmail.substringBefore("@")
-                    }
-                    if (!user.avatarUrl.isNullOrEmpty()) {
-                        avatarUrl = user.avatarUrl
-                    }
-                } else {
-                    val nameToSave = if (currentDisplayName.isNotEmpty()) currentDisplayName else currentUserEmail.substringBefore("@")
-                    manager.registerOrUpdateUserInDb(currentUserEmail, nameToSave)
-                    currentDisplayName = nameToSave
+                val nameToSave = if (user != null && user.name.isNotEmpty()) user.name else if (currentDisplayName.isNotEmpty()) currentDisplayName else currentUserEmail.substringBefore("@")
+                val photoToSave = if (user != null && !user.avatarUrl.isNullOrEmpty()) user.avatarUrl else avatarUrl
+
+                currentDisplayName = nameToSave
+                if (!photoToSave.isNullOrEmpty()) {
+                    avatarUrl = photoToSave
                 }
+
+                manager.registerOrUpdateUserInDb(currentUserEmail, nameToSave, photoToSave)
                 isDataLoading = false
             }
         } else {
@@ -552,7 +554,6 @@ fun AccountTab(
     onLogout: () -> Unit
 ) {
     var nameInput by remember(displayName) { mutableStateOf(displayName) }
-    var serverUrlInput by remember { mutableStateOf(KishkaManager.SERVER_URL) }
     var selectedPhotoUri by remember { mutableStateOf<Uri?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -598,18 +599,6 @@ fun AccountTab(
                 value = nameInput,
                 onValueChange = { nameInput = it },
                 label = { Text(Strings.get("your_name", currentLang)) },
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            OutlinedTextField(
-                value = serverUrlInput,
-                onValueChange = {
-                    serverUrlInput = it
-                    KishkaManager.SERVER_URL = it
-                },
-                label = { Text(Strings.get("server_url", currentLang)) },
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -804,7 +793,7 @@ fun AuthScreen(
                         isLoading = true
                         infoMessage = ""
                         if (isRegisterMode) {
-                            AuthManager.registerUser(email, password) { success, msg ->
+                            AuthManager.registerUser(email, password, displayName) { success, msg ->
                                 isLoading = false
                                 if (success) {
                                     infoMessage = msg ?: "Лист підтвердження надіслано!"
