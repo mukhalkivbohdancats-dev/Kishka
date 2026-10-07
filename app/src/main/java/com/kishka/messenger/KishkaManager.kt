@@ -130,7 +130,7 @@ class KishkaManager(private val context: Context) {
                         onResult(false, null, message)
                     }
                 } else {
-                    onResult(false, null, "Сервер Render не відповідає. Зачекайте пару секунд (холодний запуск).")
+                    onResult(false, null, "Сервер Render не відповідає. Зачекайте пару секунд.")
                 }
             }
         })
