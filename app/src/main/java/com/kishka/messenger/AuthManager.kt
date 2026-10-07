@@ -22,7 +22,7 @@ object AuthManager {
                             if (sendTask.isSuccessful) {
                                 onResult(
                                     true,
-                                    "На пошту $cleanEmail надіслано лист для підтвердження. Підтвердіть її!"
+                                    "На пошту $cleanEmail надіслано лист для підтвердження. Будь ласка, підтвердіть пошту!"
                                 )
                             } else {
                                 onResult(
@@ -32,14 +32,14 @@ object AuthManager {
                             }
                         } ?: run {
                             auth.signOut()
-                            onResult(false, "Помилка створення акаунта.")
+                            onResult(false, "Помилка реєстрації користувача.")
                         }
                 } else {
                     val err = task.exception?.localizedMessage ?: ""
                     if (err.contains("already in use", ignoreCase = true)) {
                         onResult(false, "Акаунт із такою поштою вже існує!")
                     } else {
-                        onResult(false, "Некоректний формат пошти або слабкий пароль.")
+                        onResult(false, "Помилка реєстрації. Перевірте пошту та пароль (мін. 6 символів).")
                     }
                 }
             }
@@ -66,11 +66,12 @@ object AuthManager {
                     if (errorCode.contains("no user record", ignoreCase = true) || 
                         errorCode.contains("user-not-found", ignoreCase = true) ||
                         errorCode.contains("INVALID_LOGIN_CREDENTIALS", ignoreCase = true)) {
-                        onResult(false, "Такого акаунта не існує! Перевірте введений email.")
-                    } else if (errorCode.contains("wrong-password", ignoreCase = true) || errorCode.contains("invalid-password", ignoreCase = true)) {
-                        onResult(false, "Неправильний пароль!")
+                        onResult(false, "Такого акаунта не існує! Спочатку зареєструйтеся.")
+                    } else if (errorCode.contains("wrong-password", ignoreCase = true) || 
+                               errorCode.contains("invalid-password", ignoreCase = true)) {
+                        onResult(false, "Невірний пароль!")
                     } else {
-                        onResult(false, "Невірний пароль або акаунт відсутній.")
+                        onResult(false, "Невірний пароль або пошта. Перевірте вхідні дані.")
                     }
                 }
             }
