@@ -21,7 +21,7 @@ const db = new sqlite3.Database('./chat.db', (err) => {
     }
 });
 
-// Ініціалізація структур таблиць
+// Ініціалізація таблиць SQLite
 db.serialize(() => {
     // Таблиця профілів користувачів
     db.run(`CREATE TABLE IF NOT EXISTS users (
@@ -37,7 +37,7 @@ db.serialize(() => {
         PRIMARY KEY (owner_email, contact_email)
     )`);
 
-    // Таблиця історії повідомлень
+    // Таблиця повідомлень
     db.run(`CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
         chat_id TEXT NOT NULL,
@@ -49,8 +49,9 @@ db.serialize(() => {
 });
 
 io.on('connection', (socket) => {
+    console.log('Клієнт підключився:', socket.id);
 
-    // Створення або оновлення профілю користувача
+    // Збереження або оновлення профілю
     socket.on('register_or_update_user', (data) => {
         const { email, name, avatarUrl } = data;
         if (!email) return;
@@ -60,11 +61,14 @@ io.on('connection', (socket) => {
         db.run(
             `INSERT INTO users (email, name, avatar_url) VALUES (?, ?, ?)
              ON CONFLICT(email) DO UPDATE SET name = excluded.name, avatar_url = COALESCE(excluded.avatar_url, users.avatar_url)`,
-            [cleanEmail, cleanName, avatarUrl || null]
+            [cleanEmail, cleanName, avatarUrl || null],
+            (err) => {
+                if (err) console.error('Помилка збереження профілю:', err.message);
+            }
         );
     });
 
-    // Отримання профілю за поштою
+    // Отримання профілю
     socket.on('get_user_profile', (email, callback) => {
         if (!email) return callback?.(null);
         const cleanEmail = email.trim().toLowerCase();
@@ -77,23 +81,21 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Додавання контакту з перевіркою існування акаунта у SQLite
+    // Додавання контакту (з перевіркою чи існує користувач у Render DB)
     socket.on('add_contact', (data, callback) => {
         const { myEmail, targetEmail } = data;
         const cleanMy = (myEmail || '').trim().toLowerCase();
         const cleanTarget = (targetEmail || '').trim().toLowerCase();
 
         if (!cleanTarget || cleanMy === cleanTarget) {
-            return callback?.({ success: false, message: "Некоректна адреса або спроба додати себе!" });
+            return callback?.({ success: false, message: "Некоректна адреса або спроба додати самі себе!" });
         }
 
-        // Перевіряємо, чи зареєстрований користувач у базі
         db.get("SELECT email, name, avatar_url as avatarUrl FROM users WHERE email = ?", [cleanTarget], (err, targetUser) => {
             if (err || !targetUser) {
                 return callback?.({ success: false, message: `Користувача з поштою ${cleanTarget} не знайдено!` });
             }
 
-            // Взаємне створення зв'язку між двома акаунтами
             const stmt = db.prepare("INSERT OR IGNORE INTO contacts (owner_email, contact_email) VALUES (?, ?)");
             stmt.run(cleanMy, cleanTarget);
             stmt.run(cleanTarget, cleanMy);
@@ -103,7 +105,7 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Отримання списку збережених контактів
+    // Список контактів
     socket.on('get_contacts', (myEmail, callback) => {
         if (!myEmail) return callback?.([]);
         const cleanEmail = myEmail.trim().toLowerCase();
@@ -119,7 +121,7 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Вхід у кімнату чату та вивантаження історії
+    // Вхід у чат
     socket.on('join_chat', (data) => {
         const chatId = typeof data === 'string' ? data : data.chatId;
         socket.join(chatId);
@@ -133,11 +135,12 @@ io.on('connection', (socket) => {
         );
     });
 
+    // Вихід з чату
     socket.on('leave_chat', (chatId) => {
         socket.leave(chatId);
     });
 
-    // Збереження та миттєва трансляція повідомлення
+    // Надсилання повідомлення
     socket.on('send_message', (data) => {
         const { id, chatId, senderEmail, receiverEmail, text, timestamp } = data;
         const msgId = id || Date.now().toString();
@@ -154,8 +157,12 @@ io.on('connection', (socket) => {
         );
     });
 
-    socket.on('disconnect', () => {});
+    socket.on('disconnect', () => {
+        console.log('Клієнт відключився');
+    });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Сервер працює на порту ${PORT}`));
+server.listen(PORT, () => {
+    console.log(`Сервер працює на порту ${PORT}`);
+});
