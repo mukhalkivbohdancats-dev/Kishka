@@ -51,9 +51,9 @@ db.serialize(() => {
 io.on('connection', (socket) => {
     console.log('Клієнт підключився:', socket.id);
 
-    // Збереження або оновлення профілю
+    // Збереження або оновлення профілю (для нових і старих акаунтів)
     socket.on('register_or_update_user', (data) => {
-        const { email, name, avatarUrl } = data;
+        const { email, name, avatarUrl } = data || {};
         if (!email) return;
         const cleanEmail = email.trim().toLowerCase();
         const cleanName = name || cleanEmail.split('@')[0];
@@ -68,22 +68,30 @@ io.on('connection', (socket) => {
         );
     });
 
-    // Отримання профілю
+    // Отримання профілю (автоматично створює запис у базі, якщо це старий акаунт)
     socket.on('get_user_profile', (email, callback) => {
         if (!email) return callback?.(null);
         const cleanEmail = email.trim().toLowerCase();
+        
         db.get("SELECT email, name, avatar_url as avatarUrl FROM users WHERE email = ?", [cleanEmail], (err, row) => {
-            if (err || !row) {
-                callback?.(null);
-            } else {
+            if (err) {
+                return callback?.(null);
+            }
+            if (row) {
                 callback?.(row);
+            } else {
+                // Автоматичне відновлення для старих акаунтів
+                const defaultName = cleanEmail.split('@')[0];
+                db.run("INSERT OR IGNORE INTO users (email, name, avatar_url) VALUES (?, ?, NULL)", [cleanEmail, defaultName], (insertErr) => {
+                    callback?.({ email: cleanEmail, name: defaultName, avatarUrl: null });
+                });
             }
         });
     });
 
-    // Додавання контакту (із гарантованим додаванням нового акаунта)
+    // Додавання контакту (підтримує будь-які акаунти, включаючи старі)
     socket.on('add_contact', (data, callback) => {
-        const { myEmail, targetEmail } = data;
+        const { myEmail, targetEmail } = data || {};
         const cleanMy = (myEmail || '').trim().toLowerCase();
         const cleanTarget = (targetEmail || '').trim().toLowerCase();
 
@@ -94,18 +102,25 @@ io.on('connection', (socket) => {
         db.get("SELECT email, name, avatar_url as avatarUrl FROM users WHERE email = ?", [cleanTarget], (err, targetUser) => {
             let finalUser = targetUser;
 
-            if (!finalUser) {
-                const defaultName = cleanTarget.split('@')[0];
-                db.run("INSERT OR IGNORE INTO users (email, name, avatar_url) VALUES (?, ?, NULL)", [cleanTarget, defaultName]);
-                finalUser = { email: cleanTarget, name: defaultName, avatarUrl: null };
-            }
+            const processAddContact = (userObj) => {
+                const stmt = db.prepare("INSERT OR IGNORE INTO contacts (owner_email, contact_email) VALUES (?, ?)");
+                stmt.run(cleanMy, cleanTarget);
+                stmt.run(cleanTarget, cleanMy);
+                stmt.finalize(() => {
+                    callback?.({ success: true, user: userObj, message: "Контакт успішно додано!" });
+                });
+            };
 
-            const stmt = db.prepare("INSERT OR IGNORE INTO contacts (owner_email, contact_email) VALUES (?, ?)");
-            stmt.run(cleanMy, cleanTarget);
-            stmt.run(cleanTarget, cleanMy);
-            stmt.finalize(() => {
-                callback?.({ success: true, user: finalUser, message: "Контакт успішно додано!" });
-            });
+            if (!finalUser) {
+                // Автоматично створюємо профіль у Render DB для старого акаунта
+                const defaultName = cleanTarget.split('@')[0];
+                db.run("INSERT OR IGNORE INTO users (email, name, avatar_url) VALUES (?, ?, NULL)", [cleanTarget, defaultName], () => {
+                    finalUser = { email: cleanTarget, name: defaultName, avatarUrl: null };
+                    processAddContact(finalUser);
+                });
+            } else {
+                processAddContact(finalUser);
+            }
         });
     });
 
@@ -146,7 +161,7 @@ io.on('connection', (socket) => {
 
     // Надсилання повідомлення
     socket.on('send_message', (data) => {
-        const { id, chatId, senderEmail, receiverEmail, text, timestamp } = data;
+        const { id, chatId, senderEmail, receiverEmail, text, timestamp } = data || {};
         const msgId = id || Date.now().toString();
         const msgTimestamp = timestamp || Date.now();
 
