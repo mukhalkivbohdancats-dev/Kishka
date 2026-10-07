@@ -81,26 +81,30 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Додавання контакту (з перевіркою чи існує користувач у Render DB)
+    // Додавання контакту (із гарантованим додаванням нового акаунта)
     socket.on('add_contact', (data, callback) => {
         const { myEmail, targetEmail } = data;
         const cleanMy = (myEmail || '').trim().toLowerCase();
         const cleanTarget = (targetEmail || '').trim().toLowerCase();
 
-        if (!cleanTarget || cleanMy === cleanTarget) {
+        if (!cleanTarget || !cleanTarget.includes('@') || cleanMy === cleanTarget) {
             return callback?.({ success: false, message: "Некоректна адреса або спроба додати самі себе!" });
         }
 
         db.get("SELECT email, name, avatar_url as avatarUrl FROM users WHERE email = ?", [cleanTarget], (err, targetUser) => {
-            if (err || !targetUser) {
-                return callback?.({ success: false, message: `Користувача з поштою ${cleanTarget} не знайдено!` });
+            let finalUser = targetUser;
+
+            if (!finalUser) {
+                const defaultName = cleanTarget.split('@')[0];
+                db.run("INSERT OR IGNORE INTO users (email, name, avatar_url) VALUES (?, ?, NULL)", [cleanTarget, defaultName]);
+                finalUser = { email: cleanTarget, name: defaultName, avatarUrl: null };
             }
 
             const stmt = db.prepare("INSERT OR IGNORE INTO contacts (owner_email, contact_email) VALUES (?, ?)");
             stmt.run(cleanMy, cleanTarget);
             stmt.run(cleanTarget, cleanMy);
             stmt.finalize(() => {
-                callback?.({ success: true, user: targetUser, message: "Контакт успішно додано!" });
+                callback?.({ success: true, user: finalUser, message: "Контакт успішно додано!" });
             });
         });
     });
