@@ -12,7 +12,7 @@ const io = new Server(server, {
     }
 });
 
-// Підключення до локальної бази даних SQLite на сервері Render
+// Підключення до бази SQLite на Render
 const db = new sqlite3.Database('./chat.db', (err) => {
     if (err) {
         console.error('Помилка бази даних:', err.message);
@@ -23,21 +23,18 @@ const db = new sqlite3.Database('./chat.db', (err) => {
 
 // Ініціалізація таблиць SQLite
 db.serialize(() => {
-    // Таблиця профілів користувачів
     db.run(`CREATE TABLE IF NOT EXISTS users (
         email TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         avatar_url TEXT
     )`);
 
-    // Таблиця взаємних контактів
     db.run(`CREATE TABLE IF NOT EXISTS contacts (
         owner_email TEXT NOT NULL,
         contact_email TEXT NOT NULL,
         PRIMARY KEY (owner_email, contact_email)
     )`);
 
-    // Таблиця повідомлень
     db.run(`CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
         chat_id TEXT NOT NULL,
@@ -51,7 +48,7 @@ db.serialize(() => {
 io.on('connection', (socket) => {
     console.log('Клієнт підключився:', socket.id);
 
-    // Збереження або оновлення профілю (для нових і старих акаунтів)
+    // Реєстрація або оновлення користувача
     socket.on('register_or_update_user', (data) => {
         const { email, name, avatarUrl } = data || {};
         if (!email) return;
@@ -68,28 +65,25 @@ io.on('connection', (socket) => {
         );
     });
 
-    // Отримання профілю (автоматично створює запис у базі, якщо це старий акаунт)
+    // Отримання профілю
     socket.on('get_user_profile', (email, callback) => {
         if (!email) return callback?.(null);
         const cleanEmail = email.trim().toLowerCase();
         
         db.get("SELECT email, name, avatar_url as avatarUrl FROM users WHERE email = ?", [cleanEmail], (err, row) => {
-            if (err) {
-                return callback?.(null);
-            }
+            if (err) return callback?.(null);
             if (row) {
                 callback?.(row);
             } else {
-                // Автоматичне відновлення для старих акаунтів
                 const defaultName = cleanEmail.split('@')[0];
-                db.run("INSERT OR IGNORE INTO users (email, name, avatar_url) VALUES (?, ?, NULL)", [cleanEmail, defaultName], (insertErr) => {
+                db.run("INSERT OR IGNORE INTO users (email, name, avatar_url) VALUES (?, ?, NULL)", [cleanEmail, defaultName], () => {
                     callback?.({ email: cleanEmail, name: defaultName, avatarUrl: null });
                 });
             }
         });
     });
 
-    // Додавання контакту (підтримує будь-які акаунти, включаючи старі)
+    // Додавання контакту
     socket.on('add_contact', (data, callback) => {
         const { myEmail, targetEmail } = data || {};
         const cleanMy = (myEmail || '').trim().toLowerCase();
@@ -112,7 +106,6 @@ io.on('connection', (socket) => {
             };
 
             if (!finalUser) {
-                // Автоматично створюємо профіль у Render DB для старого акаунта
                 const defaultName = cleanTarget.split('@')[0];
                 db.run("INSERT OR IGNORE INTO users (email, name, avatar_url) VALUES (?, ?, NULL)", [cleanTarget, defaultName], () => {
                     finalUser = { email: cleanTarget, name: defaultName, avatarUrl: null };
@@ -124,7 +117,7 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Список контактів
+    // Отримання списку контактів
     socket.on('get_contacts', (myEmail, callback) => {
         if (!myEmail) return callback?.([]);
         const cleanEmail = myEmail.trim().toLowerCase();
@@ -140,7 +133,7 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Вхід у чат
+    // Вхід у кімнату чату
     socket.on('join_chat', (data) => {
         const chatId = typeof data === 'string' ? data : data.chatId;
         socket.join(chatId);
@@ -154,7 +147,7 @@ io.on('connection', (socket) => {
         );
     });
 
-    // Вихід з чату
+    // Вихід з кімнати
     socket.on('leave_chat', (chatId) => {
         socket.leave(chatId);
     });
@@ -174,6 +167,46 @@ io.on('connection', (socket) => {
                 io.to(chatId).emit('receive_message', newMessage);
             }
         );
+    });
+
+    // Видалення повідомлення (Вимога 2 та 3)
+    socket.on('delete_message', (data) => {
+        const { messageId, chatId } = data || {};
+        if (!messageId || !chatId) return;
+
+        db.run("DELETE FROM messages WHERE id = ?", [messageId], (err) => {
+            if (!err) {
+                io.to(chatId).emit('message_deleted', messageId);
+            }
+        });
+    });
+
+    // Сигналізація викликів (Вимога 4 - Дзвінки через Render)
+    socket.on('start_call', (data) => {
+        const { callerEmail, receiverEmail } = data || {};
+        if (!receiverEmail) return;
+        const cleanReceiver = receiverEmail.trim().toLowerCase();
+        io.emit(`incoming_call_${cleanReceiver}`, { callerEmail, receiverEmail });
+    });
+
+    socket.on('answer_call', (data) => {
+        const { callerEmail, receiverEmail } = data || {};
+        if (!callerEmail) return;
+        const cleanCaller = callerEmail.trim().toLowerCase();
+        io.emit(`call_answered_${cleanCaller}`, { callerEmail, receiverEmail });
+    });
+
+    socket.on('reject_call', (data) => {
+        const { callerEmail, receiverEmail } = data || {};
+        if (!callerEmail) return;
+        const cleanCaller = callerEmail.trim().toLowerCase();
+        io.emit(`call_rejected_${cleanCaller}`, { callerEmail, receiverEmail });
+    });
+
+    socket.on('end_call', (data) => {
+        const { callerEmail, receiverEmail } = data || {};
+        if (callerEmail) io.emit(`call_ended_${callerEmail.trim().toLowerCase()}`, {});
+        if (receiverEmail) io.emit(`call_ended_${receiverEmail.trim().toLowerCase()}`, {});
     });
 
     socket.on('disconnect', () => {
