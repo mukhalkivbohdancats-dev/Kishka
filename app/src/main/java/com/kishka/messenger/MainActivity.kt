@@ -1,6 +1,12 @@
 package com.kishka.messenger
 
+import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -9,30 +15,43 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import com.google.firebase.auth.FirebaseAuth
 
@@ -45,6 +64,7 @@ const val DEFAULT_AVATAR_URL = "https://raw.githubusercontent.com/mukhalkivbohda
 object Strings {
     private val dictionary = mapOf(
         "uk" to mapOf(
+            "no_internet" to "No internet connection",
             "select_lang" to "Мова інтерфейсу",
             "chats" to "Чати",
             "calls" to "Дзвінки",
@@ -76,9 +96,21 @@ object Strings {
             "type_message" to "Повідомлення...",
             "user_not_found" to "Користувача з такою поштою не знайдено!",
             "contact_added" to "Контакт успішно додано!",
-            "loading_data" to "Завантажуємо ваші дані..."
+            "loading_data" to "Завантажуємо ваші дані...",
+            "permissions_title" to "Необхідні дозволи",
+            "permissions_desc" to "Для повноцінної роботи месенджера надайте дозволи на мікрофон та сповіщення.",
+            "grant_mic" to "Дозволити мікрофон",
+            "grant_notif" to "Дозволити сповіщення",
+            "continue_app" to "Продовжити в месенджер",
+            "copy" to "Копіювати",
+            "delete" to "Видалити",
+            "message_copied" to "Скопійовано в буфер обміну",
+            "incoming_call" to "Вхідний дзвінок",
+            "answer" to "Відповісти",
+            "decline" to "Відхилити"
         ),
         "ru" to mapOf(
+            "no_internet" to "No internet connection",
             "select_lang" to "Язык интерфейса",
             "chats" to "Чаты",
             "calls" to "Звонки",
@@ -110,9 +142,21 @@ object Strings {
             "type_message" to "Сообщение...",
             "user_not_found" to "Пользователь с такой почтой не найден!",
             "contact_added" to "Контакт успешно добавлен!",
-            "loading_data" to "Загружаем ваши данные..."
+            "loading_data" to "Загружаем ваши данные...",
+            "permissions_title" to "Необходимые разрешения",
+            "permissions_desc" to "Для полноценной работы мессенджера предоставьте разрешения на микрофон и уведомления.",
+            "grant_mic" to "Разрешить микрофон",
+            "grant_notif" to "Разрешить уведомления",
+            "continue_app" to "Продолжить в мессенджер",
+            "copy" to "Копировать",
+            "delete" to "Удалить",
+            "message_copied" to "Скопировано в буфер обмена",
+            "incoming_call" to "Входящий звонок",
+            "answer" to "Ответить",
+            "decline" to "Отклонить"
         ),
         "en" to mapOf(
+            "no_internet" to "No internet connection",
             "select_lang" to "Interface Language",
             "chats" to "Chats",
             "calls" to "Calls",
@@ -144,7 +188,18 @@ object Strings {
             "type_message" to "Message...",
             "user_not_found" to "User with this email not found!",
             "contact_added" to "Contact successfully added!",
-            "loading_data" to "Loading your data..."
+            "loading_data" to "Loading your data...",
+            "permissions_title" to "Required Permissions",
+            "permissions_desc" to "To use all features of the messenger, please grant Microphone and Notification permissions.",
+            "grant_mic" to "Allow Microphone",
+            "grant_notif" to "Allow Notifications",
+            "continue_app" to "Continue to Messenger",
+            "copy" to "Copy",
+            "delete" to "Delete",
+            "message_copied" to "Copied to clipboard",
+            "incoming_call" to "Incoming Call",
+            "answer" to "Answer",
+            "decline" to "Decline"
         )
     )
 
@@ -171,28 +226,20 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun LoadingDataScreen(lang: String) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(ViberBg),
-        contentAlignment = Alignment.Center
+fun OfflineBanner(lang: String) {
+    Surface(
+        color = Color(0xFFD32F2F),
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+        Box(
+            modifier = Modifier.padding(vertical = 6.dp),
+            contentAlignment = Alignment.Center
         ) {
-            CircularProgressIndicator(
-                color = ViberPurple,
-                modifier = Modifier.size(54.dp),
-                strokeWidth = 4.dp
-            )
-            Spacer(modifier = Modifier.height(20.dp))
             Text(
-                text = Strings.get("loading_data", lang),
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Medium,
-                color = Color.DarkGray
+                text = Strings.get("no_internet", lang),
+                color = Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
             )
         }
     }
@@ -204,7 +251,8 @@ fun KishkaApp() {
     val manager = remember { KishkaManager(context) }
     val auth = FirebaseAuth.getInstance()
 
-    var currentLanguage by remember { mutableStateOf("uk") }
+    var isConnected by remember { mutableStateOf(true) }
+    var currentLanguage by remember { mutableStateOf(AuthManager.getSavedLanguage(context)) }
 
     var currentUserEmail by remember {
         mutableStateOf(if (auth.currentUser?.isEmailVerified == true) auth.currentUser?.email?.lowercase() ?: "" else "")
@@ -213,36 +261,66 @@ fun KishkaApp() {
     var avatarUrl by remember { mutableStateOf(DEFAULT_AVATAR_URL) }
 
     var isDataLoading by remember { mutableStateOf(false) }
+    var permissionsGranted by remember { mutableStateOf(checkPermissionsGranted(context)) }
 
     var selectedUserForChat by remember { mutableStateOf<User?>(null) }
     var selectedBottomTab by remember { mutableStateOf(0) }
 
     var activeCallTargetPhone by remember { mutableStateOf<String?>(null) }
+    var incomingCallFrom by remember { mutableStateOf<String?>(null) }
     var isCallMinimized by remember { mutableStateOf(false) }
+
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    LaunchedEffect(Unit) {
+        manager.observeNetworkState { connected ->
+            isConnected = connected
+        }
+    }
 
     LaunchedEffect(currentUserEmail) {
         if (currentUserEmail.isNotEmpty()) {
             isDataLoading = true
-            manager.listenForIncomingCalls(currentUserEmail)
+
+            manager.listenForCallEvents(
+                myEmail = currentUserEmail,
+                onIncomingCall = { caller ->
+                    incomingCallFrom = caller
+                },
+                onCallAnswered = {
+                    val intent = Intent(context, CallService::class.java).apply {
+                        action = CallService.ACTION_START_CALL
+                        putExtra(CallService.EXTRA_TARGET_NAME, activeCallTargetPhone ?: "Співрозмовник")
+                    }
+                    context.startService(intent)
+                },
+                onCallRejected = {
+                    val intent = Intent(context, CallService::class.java).apply { action = CallService.ACTION_END_CALL }
+                    context.startService(intent)
+                    activeCallTargetPhone = null
+                    incomingCallFrom = null
+                },
+                onCallEnded = {
+                    val intent = Intent(context, CallService::class.java).apply { action = CallService.ACTION_END_CALL }
+                    context.startService(intent)
+                    activeCallTargetPhone = null
+                    incomingCallFrom = null
+                }
+            )
 
             val savedNameInAuth = AuthManager.getCurrentUserDisplayName()
             val savedPhotoInAuth = AuthManager.getCurrentUserPhotoUrl()
 
-            if (savedNameInAuth.isNotEmpty()) {
-                currentDisplayName = savedNameInAuth
-            }
-            if (!savedPhotoInAuth.isNullOrEmpty()) {
-                avatarUrl = savedPhotoInAuth
-            }
+            if (savedNameInAuth.isNotEmpty()) currentDisplayName = savedNameInAuth
+            if (!savedPhotoInAuth.isNullOrEmpty()) avatarUrl = savedPhotoInAuth
 
             manager.getUserProfile(currentUserEmail) { user ->
                 val nameToSave = if (user != null && user.name.isNotEmpty()) user.name else if (currentDisplayName.isNotEmpty()) currentDisplayName else currentUserEmail.substringBefore("@")
                 val photoToSave = if (user != null && !user.avatarUrl.isNullOrEmpty()) user.avatarUrl else avatarUrl
 
                 currentDisplayName = nameToSave
-                if (!photoToSave.isNullOrEmpty()) {
-                    avatarUrl = photoToSave
-                }
+                if (!photoToSave.isNullOrEmpty()) avatarUrl = photoToSave
 
                 manager.registerOrUpdateUserInDb(currentUserEmail, nameToSave, photoToSave)
                 isDataLoading = false
@@ -255,41 +333,66 @@ fun KishkaApp() {
     val startCallAction: (String) -> Unit = { targetEmail ->
         activeCallTargetPhone = targetEmail
         isCallMinimized = false
-
-        val serviceIntent = Intent(context, CallService::class.java).apply {
-            action = CallService.ACTION_START_CALL
-            putExtra(CallService.EXTRA_TARGET_NAME, targetEmail)
-            putExtra(CallService.EXTRA_TARGET_PHONE, targetEmail)
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(serviceIntent)
-        } else {
-            context.startService(serviceIntent)
-        }
         manager.startCall(currentUserEmail, targetEmail)
     }
 
     val stopCallAction: () -> Unit = {
-        val serviceIntent = Intent(context, CallService::class.java).apply {
-            action = CallService.ACTION_END_CALL
-        }
-        context.startService(serviceIntent)
+        val target = activeCallTargetPhone ?: incomingCallFrom ?: ""
+        manager.endCall(currentUserEmail, target)
+        val intent = Intent(context, CallService::class.java).apply { action = CallService.ACTION_END_CALL }
+        context.startService(intent)
         activeCallTargetPhone = null
+        incomingCallFrom = null
         isCallMinimized = false
     }
 
-    if (activeCallTargetPhone != null && !isCallMinimized) {
-        ActiveCallScreen(
-            targetPhone = activeCallTargetPhone!!,
-            avatarUrl = avatarUrl,
-            lang = currentLanguage,
-            onMinimize = { isCallMinimized = true },
-            onEndCall = stopCallAction
-        )
-    } else if (isDataLoading && currentUserEmail.isNotEmpty()) {
-        LoadingDataScreen(lang = currentLanguage)
-    } else {
-        Column(modifier = Modifier.fillMaxSize().background(ViberBg)) {
+    Column(modifier = Modifier.fillMaxSize().background(ViberBg)) {
+        if (!isConnected) {
+            OfflineBanner(lang = currentLanguage)
+        }
+
+        if (!permissionsGranted && currentUserEmail.isNotEmpty()) {
+            PermissionsScreen(
+                lang = currentLanguage,
+                onPermissionsGranted = { permissionsGranted = true }
+            )
+        } else if (incomingCallFrom != null) {
+            IncomingCallScreen(
+                callerEmail = incomingCallFrom!!,
+                lang = currentLanguage,
+                onAnswer = {
+                    activeCallTargetPhone = incomingCallFrom
+                    manager.answerCall(incomingCallFrom!!, currentUserEmail)
+                    incomingCallFrom = null
+                },
+                onDecline = {
+                    manager.rejectCall(incomingCallFrom!!, currentUserEmail)
+                    incomingCallFrom = null
+                }
+            )
+        } else if (activeCallTargetPhone != null && !isCallMinimized) {
+            ActiveCallScreen(
+                targetPhone = activeCallTargetPhone!!,
+                avatarUrl = avatarUrl,
+                lang = currentLanguage,
+                onMinimize = { isCallMinimized = true },
+                onEndCall = stopCallAction
+            )
+        } else if (isDataLoading && currentUserEmail.isNotEmpty()) {
+            LoadingDataScreen(lang = currentLanguage)
+        } else if (currentUserEmail.isEmpty()) {
+            AuthScreen(
+                currentLang = currentLanguage,
+                onLangChanged = { lang ->
+                    currentLanguage = lang
+                    AuthManager.saveLanguage(context, lang)
+                },
+                onLoginSuccess = { email, name ->
+                    if (name.isNotEmpty()) currentDisplayName = name
+                    currentUserEmail = email.lowercase()
+                }
+            )
+        } else {
             if (activeCallTargetPhone != null && isCallMinimized) {
                 ActiveCallBanner(
                     targetPhone = activeCallTargetPhone!!,
@@ -298,53 +401,83 @@ fun KishkaApp() {
                 )
             }
 
-            Box(modifier = Modifier.weight(1f)) {
-                if (currentUserEmail.isEmpty()) {
-                    AuthScreen(
-                        currentLang = currentLanguage,
-                        onLangChanged = { currentLanguage = it },
-                        onLoginSuccess = { email, name ->
-                            if (name.isNotEmpty()) {
-                                currentDisplayName = name
-                            }
-                            currentUserEmail = email.lowercase()
-                        }
-                    )
-                } else if (selectedUserForChat != null) {
-                    ChatScreen(
-                        manager = manager,
-                        currentEmail = currentUserEmail,
-                        targetUser = selectedUserForChat!!,
-                        lang = currentLanguage,
-                        onBack = { selectedUserForChat = null },
-                        onStartCall = { email -> startCallAction(email) }
-                    )
-                } else {
-                    when (selectedBottomTab) {
-                        0 -> ChatsTab(
+            if (isLandscape) {
+                Row(modifier = Modifier.fillMaxSize()) {
+                    Box(modifier = Modifier.width(320.dp).fillMaxHeight()) {
+                        MainTabContent(
+                            selectedBottomTab = selectedBottomTab,
                             manager = manager,
-                            currentEmail = currentUserEmail,
-                            lang = currentLanguage,
-                            onUserSelected = { selectedUserForChat = it }
-                        )
-                        1 -> CallsTab(
-                            manager = manager,
-                            currentEmail = currentUserEmail,
-                            lang = currentLanguage,
-                            onStartCall = { email -> startCallAction(email) }
-                        )
-                        2 -> AccountTab(
-                            manager = manager,
-                            displayName = currentDisplayName,
-                            email = currentUserEmail,
+                            currentUserEmail = currentUserEmail,
+                            currentDisplayName = currentDisplayName,
                             avatarUrl = avatarUrl,
-                            currentLang = currentLanguage,
-                            onLangChanged = { currentLanguage = it },
+                            currentLanguage = currentLanguage,
+                            onLangChanged = { lang ->
+                                currentLanguage = lang
+                                AuthManager.saveLanguage(context, lang)
+                            },
+                            onUserSelected = { selectedUserForChat = it },
+                            onStartCall = startCallAction,
                             onProfileUpdated = { newName, newAvatarUrl ->
                                 currentDisplayName = newName
-                                if (!newAvatarUrl.isNullOrEmpty()) {
-                                    avatarUrl = newAvatarUrl
-                                }
+                                if (!newAvatarUrl.isNullOrEmpty()) avatarUrl = newAvatarUrl
+                            },
+                            onLogout = {
+                                auth.signOut()
+                                currentUserEmail = ""
+                                currentDisplayName = ""
+                                avatarUrl = DEFAULT_AVATAR_URL
+                            }
+                        )
+                    }
+
+                    Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                        if (selectedUserForChat != null) {
+                            ChatScreen(
+                                manager = manager,
+                                currentEmail = currentUserEmail,
+                                targetUser = selectedUserForChat!!,
+                                lang = currentLanguage,
+                                onBack = { selectedUserForChat = null },
+                                onStartCall = { email -> startCallAction(email) }
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier.fillMaxSize().background(Color.White),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("Оберіть чат для початку спілкування", color = Color.Gray)
+                            }
+                        }
+                    }
+                }
+            } else {
+                Box(modifier = Modifier.weight(1f)) {
+                    if (selectedUserForChat != null) {
+                        ChatScreen(
+                            manager = manager,
+                            currentEmail = currentUserEmail,
+                            targetUser = selectedUserForChat!!,
+                            lang = currentLanguage,
+                            onBack = { selectedUserForChat = null },
+                            onStartCall = { email -> startCallAction(email) }
+                        )
+                    } else {
+                        MainTabContent(
+                            selectedBottomTab = selectedBottomTab,
+                            manager = manager,
+                            currentUserEmail = currentUserEmail,
+                            currentDisplayName = currentDisplayName,
+                            avatarUrl = avatarUrl,
+                            currentLanguage = currentLanguage,
+                            onLangChanged = { lang ->
+                                currentLanguage = lang
+                                AuthManager.saveLanguage(context, lang)
+                            },
+                            onUserSelected = { selectedUserForChat = it },
+                            onStartCall = startCallAction,
+                            onProfileUpdated = { newName, newAvatarUrl ->
+                                currentDisplayName = newName
+                                if (!newAvatarUrl.isNullOrEmpty()) avatarUrl = newAvatarUrl
                             },
                             onLogout = {
                                 auth.signOut()
@@ -355,30 +488,163 @@ fun KishkaApp() {
                         )
                     }
                 }
-            }
 
-            if (currentUserEmail.isNotEmpty() && selectedUserForChat == null) {
-                NavigationBar(containerColor = Color.White, tonalElevation = 8.dp) {
-                    NavigationBarItem(
-                        selected = selectedBottomTab == 0,
-                        onClick = { selectedBottomTab = 0 },
-                        icon = { Icon(Icons.Default.Call, contentDescription = null) },
-                        label = { Text(Strings.get("chats", currentLanguage)) }
-                    )
-                    NavigationBarItem(
-                        selected = selectedBottomTab == 1,
-                        onClick = { selectedBottomTab = 1 },
-                        icon = { Icon(Icons.Default.VolumeUp, contentDescription = null) },
-                        label = { Text(Strings.get("calls", currentLanguage)) }
-                    )
-                    NavigationBarItem(
-                        selected = selectedBottomTab == 2,
-                        onClick = { selectedBottomTab = 2 },
-                        icon = { Icon(Icons.Default.Person, contentDescription = null) },
-                        label = { Text(Strings.get("account", currentLanguage)) }
-                    )
+                if (selectedUserForChat == null) {
+                    NavigationBar(containerColor = Color.White, tonalElevation = 8.dp) {
+                        NavigationBarItem(
+                            selected = selectedBottomTab == 0,
+                            onClick = { selectedBottomTab = 0 },
+                            icon = { Icon(Icons.Default.Call, contentDescription = null) },
+                            label = { Text(Strings.get("chats", currentLanguage)) }
+                        )
+                        NavigationBarItem(
+                            selected = selectedBottomTab == 1,
+                            onClick = { selectedBottomTab = 1 },
+                            icon = { Icon(Icons.Default.VolumeUp, contentDescription = null) },
+                            label = { Text(Strings.get("calls", currentLanguage)) }
+                        )
+                        NavigationBarItem(
+                            selected = selectedBottomTab == 2,
+                            onClick = { selectedBottomTab = 2 },
+                            icon = { Icon(Icons.Default.Person, contentDescription = null) },
+                            label = { Text(Strings.get("account", currentLanguage)) }
+                        )
+                    }
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun MainTabContent(
+    selectedBottomTab: Int,
+    manager: KishkaManager,
+    currentUserEmail: String,
+    currentDisplayName: String,
+    avatarUrl: String,
+    currentLanguage: String,
+    onLangChanged: (String) -> Unit,
+    onUserSelected: (User) -> Unit,
+    onStartCall: (String) -> Unit,
+    onProfileUpdated: (String, String?) -> Unit,
+    onLogout: () -> Unit
+) {
+    when (selectedBottomTab) {
+        0 -> ChatsTab(
+            manager = manager,
+            currentEmail = currentUserEmail,
+            lang = currentLanguage,
+            onUserSelected = onUserSelected
+        )
+        1 -> CallsTab(
+            manager = manager,
+            currentEmail = currentUserEmail,
+            lang = currentLanguage,
+            onStartCall = onStartCall
+        )
+        2 -> AccountTab(
+            manager = manager,
+            displayName = currentDisplayName,
+            email = currentUserEmail,
+            avatarUrl = avatarUrl,
+            currentLang = currentLanguage,
+            onLangChanged = onLangChanged,
+            onProfileUpdated = onProfileUpdated,
+            onLogout = onLogout
+        )
+    }
+}
+
+fun checkPermissionsGranted(context: Context): Boolean {
+    val mic = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    val notif = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    } else true
+    return mic && notif
+}
+
+@Composable
+fun PermissionsScreen(lang: String, onPermissionsGranted: () -> Unit) {
+    val context = LocalContext.current
+    var micGranted by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) }
+    var notifGranted by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            } else true
+        )
+    }
+
+    val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        micGranted = granted
+    }
+
+    val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        notifGranted = granted
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(Icons.Default.Notifications, contentDescription = null, modifier = Modifier.size(64.dp), tint = ViberPurple)
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(Strings.get("permissions_title", lang), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(Strings.get("permissions_desc", lang), fontSize = 14.sp, color = Color.Gray)
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Button(
+            onClick = { micLauncher.launch(Manifest.permission.RECORD_AUDIO) },
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = if (micGranted) Color(0xFF2E7D32) else ViberPurple)
+        ) {
+            Text(if (micGranted) "Мікрофон дозволено ✓" else Strings.get("grant_mic", lang))
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Button(
+                onClick = { notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = if (notifGranted) Color(0xFF2E7D32) else ViberPurple)
+            ) {
+                Text(if (notifGranted) "Сповіщення дозволено ✓" else Strings.get("grant_notif", lang))
+            }
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+
+        OutlinedButton(
+            onClick = {
+                if (micGranted && notifGranted) {
+                    onPermissionsGranted()
+                } else {
+                    Toast.makeText(context, "Будь ласка, надайте обидва дозволи!", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            enabled = micGranted && notifGranted
+        ) {
+            Text(Strings.get("continue_app", lang))
+        }
+    }
+}
+
+@Composable
+fun LoadingDataScreen(lang: String) {
+    Box(
+        modifier = Modifier.fillMaxSize().background(ViberBg),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator(color = ViberPurple, modifier = Modifier.size(54.dp))
+            Spacer(modifier = Modifier.height(20.dp))
+            Text(Strings.get("loading_data", lang), fontSize = 16.sp, color = Color.DarkGray)
         }
     }
 }
@@ -438,7 +704,7 @@ fun ChatsTab(
                 title = { Text("Kishka Messenger", fontWeight = FontWeight.Bold, color = ViberPurple) },
                 actions = {
                     IconButton(onClick = { showAddContactDialog = true }) {
-                        Icon(Icons.Default.Call, contentDescription = null, tint = ViberPurple)
+                        Icon(Icons.Default.PersonAdd, contentDescription = null, tint = ViberPurple)
                     }
                 }
             )
@@ -514,9 +780,7 @@ fun ChatsTab(
                             if (success) {
                                 showAddContactDialog = false
                                 newContactEmail = ""
-                                manager.listenToUserContacts(currentEmail) { fetched ->
-                                    contacts = fetched
-                                }
+                                manager.listenToUserContacts(currentEmail) { fetched -> contacts = fetched }
                             }
                         }
                     },
@@ -842,7 +1106,7 @@ fun AuthScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
     manager: KishkaManager,
@@ -854,6 +1118,9 @@ fun ChatScreen(
 ) {
     var messages by remember { mutableStateOf(listOf<Message>()) }
     var textInput by remember { mutableStateOf("") }
+    var selectedMessageForMenu by remember { mutableStateOf<Message?>(null) }
+    val listState = rememberLazyListState()
+    val context = LocalContext.current
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let { manager.sendFileMessage(currentEmail, targetUser.email, it, "file") }
@@ -868,6 +1135,12 @@ fun ChatScreen(
         }
     }
 
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.size - 1)
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -879,7 +1152,20 @@ fun ChatScreen(
                         Icon(Icons.Default.Close, contentDescription = null)
                     }
                 },
-                title = { Text(targetUser.name.ifEmpty { targetUser.email }) },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        AsyncImage(
+                            model = if (targetUser.avatarUrl.isNullOrEmpty()) DEFAULT_AVATAR_URL else targetUser.avatarUrl,
+                            contentDescription = "Avatar",
+                            modifier = Modifier.size(36.dp).clip(CircleShape)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(targetUser.name.ifEmpty { targetUser.email }, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Text(targetUser.email, fontSize = 11.sp, color = Color.Gray)
+                        }
+                    }
+                },
                 actions = {
                     IconButton(onClick = { onStartCall(targetUser.email) }) {
                         Icon(Icons.Default.Call, contentDescription = null, tint = ViberPurple)
@@ -890,8 +1176,8 @@ fun ChatScreen(
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             LazyColumn(
-                modifier = Modifier.weight(1f).padding(8.dp),
-                reverseLayout = false
+                state = listState,
+                modifier = Modifier.weight(1f).padding(8.dp)
             ) {
                 items(messages) { msg ->
                     val isMe = msg.senderEmail == currentEmail
@@ -902,12 +1188,42 @@ fun ChatScreen(
                         Surface(
                             color = if (isMe) ViberPurple else Color.White,
                             shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.padding(4.dp)
+                            modifier = Modifier
+                                .padding(4.dp)
+                                .combinedClickable(
+                                    onClick = {},
+                                    onLongClick = {
+                                        selectedMessageForMenu = msg
+                                    }
+                                )
                         ) {
                             Text(
                                 text = msg.text,
                                 color = if (isMe) Color.White else Color.Black,
                                 modifier = Modifier.padding(10.dp)
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = selectedMessageForMenu?.id == msg.id,
+                            onDismissRequest = { selectedMessageForMenu = null }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(Strings.get("copy", lang)) },
+                                onClick = {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    val clip = ClipData.newPlainText("Copied Text", msg.text)
+                                    clipboard.setPrimaryClip(clip)
+                                    Toast.makeText(context, Strings.get("message_copied", lang), Toast.LENGTH_SHORT).show()
+                                    selectedMessageForMenu = null
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(Strings.get("delete", lang), color = Color.Red) },
+                                onClick = {
+                                    manager.deleteMessage(currentEmail, targetUser.email, msg.id)
+                                    selectedMessageForMenu = null
+                                }
                             )
                         }
                     }
@@ -936,7 +1252,55 @@ fun ChatScreen(
                         }
                     }
                 ) {
-                    Icon(Icons.Default.Call, contentDescription = null, tint = ViberPurple)
+                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, tint = ViberPurple)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun IncomingCallScreen(
+    callerEmail: String,
+    lang: String,
+    onAnswer: () -> Unit,
+    onDecline: () -> Unit
+) {
+    Surface(modifier = Modifier.fillMaxSize(), color = ViberPurple) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Spacer(modifier = Modifier.height(40.dp))
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                AsyncImage(
+                    model = DEFAULT_AVATAR_URL,
+                    contentDescription = null,
+                    modifier = Modifier.size(100.dp).clip(CircleShape)
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(callerEmail, fontSize = 22.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(Strings.get("incoming_call", lang), fontSize = 16.sp, color = Color.White.copy(alpha = 0.8f))
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                IconButton(
+                    onClick = onDecline,
+                    modifier = Modifier.size(64.dp).background(Color.Red, CircleShape)
+                ) {
+                    Icon(Icons.Default.CallEnd, contentDescription = null, tint = Color.White, modifier = Modifier.size(32.dp))
+                }
+
+                IconButton(
+                    onClick = onAnswer,
+                    modifier = Modifier.size(64.dp).background(Color(0xFF2E7D32), CircleShape)
+                ) {
+                    Icon(Icons.Default.Call, contentDescription = null, tint = Color.White, modifier = Modifier.size(32.dp))
                 }
             }
         }
@@ -952,6 +1316,14 @@ fun ActiveCallScreen(
     onMinimize: () -> Unit,
     onEndCall: () -> Unit
 ) {
+    var isMuted by remember { mutableStateOf(false) }
+
+    val lineAnimProgress by animateFloatAsState(
+        targetValue = if (isMuted) 1f else 0f,
+        animationSpec = tween(durationMillis = 300),
+        label = "MuteSlashAnimation"
+    )
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -983,15 +1355,43 @@ fun ActiveCallScreen(
                 Text(Strings.get("calling_in_progress", lang), fontSize = 16.sp, color = Color.Gray)
             }
 
-            Button(
-                onClick = onEndCall,
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                modifier = Modifier.fillMaxWidth().padding(24.dp).height(56.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 32.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.CallEnd, contentDescription = null, tint = Color.White)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(Strings.get("end_call", lang), fontSize = 18.sp, color = Color.White)
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .background(Color.Gray.copy(alpha = 0.2f), CircleShape)
+                        .clickable { isMuted = !isMuted },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Mic, contentDescription = null, tint = Color.DarkGray, modifier = Modifier.size(28.dp))
+
+                    if (lineAnimProgress > 0f) {
+                        Canvas(modifier = Modifier.size(36.dp)) {
+                            val start = Offset(x = size.width * 0.2f, y = size.height * 0.2f)
+                            val end = Offset(
+                                x = start.x + (size.width * 0.6f) * lineAnimProgress,
+                                y = start.y + (size.height * 0.6f) * lineAnimProgress
+                            )
+                            drawLine(
+                                color = Color.Gray,
+                                start = start,
+                                end = end,
+                                strokeWidth = 8f,
+                                cap = StrokeCap.Round
+                            )
+                        }
+                    }
+                }
+
+                IconButton(
+                    onClick = onEndCall,
+                    modifier = Modifier.size(64.dp).background(Color.Red, CircleShape)
+                ) {
+                    Icon(Icons.Default.CallEnd, contentDescription = null, tint = Color.White, modifier = Modifier.size(32.dp))
                 }
             }
         }
