@@ -1,5 +1,7 @@
 package com.kishka.messenger
 
+import android.content.Context
+import android.content.SharedPreferences
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
 import com.google.firebase.auth.FirebaseAuthInvalidUserException
@@ -8,6 +10,20 @@ import com.google.firebase.auth.UserProfileChangeRequest
 object AuthManager {
 
     private val auth: FirebaseAuth = FirebaseAuth.getInstance()
+    private const val PREFS_NAME = "kishka_prefs"
+    private const val KEY_LANG = "saved_language"
+
+    private fun getPrefs(context: Context): SharedPreferences {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    }
+
+    fun saveLanguage(context: Context, lang: String) {
+        getPrefs(context).edit().putString(KEY_LANG, lang).apply()
+    }
+
+    fun getSavedLanguage(context: Context): String {
+        return getPrefs(context).getString(KEY_LANG, "uk") ?: "uk"
+    }
 
     fun registerUser(
         email: String,
