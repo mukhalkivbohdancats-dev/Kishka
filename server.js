@@ -117,7 +117,7 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Отримання списку контактів
+    // Список контактів
     socket.on('get_contacts', (myEmail, callback) => {
         if (!myEmail) return callback?.([]);
         const cleanEmail = myEmail.trim().toLowerCase();
@@ -169,7 +169,7 @@ io.on('connection', (socket) => {
         );
     });
 
-    // Видалення повідомлення (Вимога 2 та 3)
+    // Видалення повідомлення (Пункт 2 і 3)
     socket.on('delete_message', (data) => {
         const { messageId, chatId } = data || {};
         if (!messageId || !chatId) return;
@@ -181,7 +181,7 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Сигналізація викликів (Вимога 4 - Дзвінки через Render)
+    // Сигналізація викликів (Пункт 4 - Дзвінки через Render)
     socket.on('start_call', (data) => {
         const { callerEmail, receiverEmail } = data || {};
         if (!receiverEmail) return;
