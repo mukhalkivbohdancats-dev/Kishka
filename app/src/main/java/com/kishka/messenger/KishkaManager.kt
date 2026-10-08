@@ -1,9 +1,11 @@
 package com.kishka.messenger
 
 import android.content.Context
-import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import com.google.firebase.auth.FirebaseAuth
@@ -53,8 +55,29 @@ class KishkaManager(private val context: Context) {
         }
     }
 
-    fun sanitizeEmail(email: String): String {
-        return email.trim().lowercase().replace(".", "_dot_")
+    fun observeNetworkState(onStateChanged: (Boolean) -> Unit) {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val builder = NetworkRequest.Builder()
+        
+        val initialConnected = isNetworkAvailable()
+        onStateChanged(initialConnected)
+
+        cm.registerNetworkCallback(builder.build(), object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                mainHandler.post { onStateChanged(true) }
+            }
+
+            override fun onLost(network: Network) {
+                mainHandler.post { onStateChanged(false) }
+            }
+        })
+    }
+
+    fun isNetworkAvailable(): Boolean {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val activeNetwork = cm.activeNetwork ?: return false
+        val capabilities = cm.getNetworkCapabilities(activeNetwork) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
     fun registerOrUpdateUserInDb(email: String, name: String, avatarUrl: String? = null) {
@@ -187,6 +210,7 @@ class KishkaManager(private val context: Context) {
 
         socket?.off("load_history")
         socket?.off("receive_message")
+        socket?.off("message_deleted")
 
         socket?.on("load_history") { args ->
             if (args.isNotEmpty() && args[0] is JSONArray) {
@@ -229,6 +253,14 @@ class KishkaManager(private val context: Context) {
             }
         }
 
+        socket?.on("message_deleted") { args ->
+            if (args.isNotEmpty() && args[0] is String) {
+                val deletedId = args[0] as String
+                messagesList.removeAll { it.id == deletedId }
+                mainHandler.post { onMessagesUpdated(messagesList.toList()) }
+            }
+        }
+
         val joinData = JSONObject().apply { put("chatId", chatId) }
         socket?.emit("join_chat", joinData)
     }
@@ -248,6 +280,16 @@ class KishkaManager(private val context: Context) {
         }
 
         socket?.emit("send_message", jsonMsg)
+    }
+
+    fun deleteMessage(senderEmail: String, receiverEmail: String, messageId: String) {
+        val chatId = getChatId(senderEmail, receiverEmail)
+        ensureConnected()
+        val json = JSONObject().apply {
+            put("messageId", messageId)
+            put("chatId", chatId)
+        }
+        socket?.emit("delete_message", json)
     }
 
     fun sendFileMessage(senderEmail: String, receiverEmail: String, fileUri: Uri, fileType: String) {
@@ -311,9 +353,7 @@ class KishkaManager(private val context: Context) {
         currentActiveChatId = null
         socket?.off("load_history")
         socket?.off("receive_message")
-    }
-
-    fun recordCallLog(myEmail: String, targetEmail: String, isMissed: Boolean = false) {
+        socket?.off("message_deleted")
     }
 
     fun listenForCallHistory(myEmail: String, onLogsUpdated: (List<CallLogItem>) -> Unit) {
@@ -329,22 +369,67 @@ class KishkaManager(private val context: Context) {
         socket?.emit("start_call", json)
     }
 
-    fun listenForIncomingCalls(myEmail: String) {
+    fun answerCall(callerEmail: String, receiverEmail: String) {
         ensureConnected()
-        socket?.on("incoming_call") { args ->
+        val json = JSONObject().apply {
+            put("callerEmail", callerEmail)
+            put("receiverEmail", receiverEmail)
+        }
+        socket?.emit("answer_call", json)
+    }
+
+    fun rejectCall(callerEmail: String, receiverEmail: String) {
+        ensureConnected()
+        val json = JSONObject().apply {
+            put("callerEmail", callerEmail)
+            put("receiverEmail", receiverEmail)
+        }
+        socket?.emit("reject_call", json)
+    }
+
+    fun endCall(callerEmail: String, receiverEmail: String) {
+        ensureConnected()
+        val json = JSONObject().apply {
+            put("callerEmail", callerEmail)
+            put("receiverEmail", receiverEmail)
+        }
+        socket?.emit("end_call", json)
+    }
+
+    fun listenForCallEvents(
+        myEmail: String,
+        onIncomingCall: (String) -> Unit,
+        onCallAnswered: () -> Unit,
+        onCallRejected: () -> Unit,
+        onCallEnded: () -> Unit
+    ) {
+        val cleanEmail = myEmail.trim().lowercase()
+        if (cleanEmail.isEmpty()) return
+        ensureConnected()
+
+        socket?.off("incoming_call_$cleanEmail")
+        socket?.off("call_answered_$cleanEmail")
+        socket?.off("call_rejected_$cleanEmail")
+        socket?.off("call_ended_$cleanEmail")
+
+        socket?.on("incoming_call_$cleanEmail") { args ->
             if (args.isNotEmpty() && args[0] is JSONObject) {
                 val obj = args[0] as JSONObject
-                val callerEmail = obj.optString("callerEmail", "")
-                val intent = Intent(context, CallService::class.java).apply {
-                    action = "ACTION_INCOMING"
-                    putExtra("CALLER_NAME", callerEmail)
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
-                } else {
-                    context.startService(intent)
-                }
+                val caller = obj.optString("callerEmail", "")
+                mainHandler.post { onIncomingCall(caller) }
             }
+        }
+
+        socket?.on("call_answered_$cleanEmail") {
+            mainHandler.post { onCallAnswered() }
+        }
+
+        socket?.on("call_rejected_$cleanEmail") {
+            mainHandler.post { onCallRejected() }
+        }
+
+        socket?.on("call_ended_$cleanEmail") {
+            mainHandler.post { onCallEnded() }
         }
     }
 
