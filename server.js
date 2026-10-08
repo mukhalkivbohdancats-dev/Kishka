@@ -12,7 +12,6 @@ const io = new Server(server, {
     }
 });
 
-// Підключення до бази SQLite на Render
 const db = new sqlite3.Database('./chat.db', (err) => {
     if (err) {
         console.error('Помилка бази даних:', err.message);
@@ -21,7 +20,6 @@ const db = new sqlite3.Database('./chat.db', (err) => {
     }
 });
 
-// Ініціалізація таблиць SQLite
 db.serialize(() => {
     db.run(`CREATE TABLE IF NOT EXISTS users (
         email TEXT PRIMARY KEY,
@@ -48,7 +46,6 @@ db.serialize(() => {
 io.on('connection', (socket) => {
     console.log('Клієнт підключився:', socket.id);
 
-    // Реєстрація або оновлення користувача
     socket.on('register_or_update_user', (data) => {
         const { email, name, avatarUrl } = data || {};
         if (!email) return;
@@ -65,7 +62,6 @@ io.on('connection', (socket) => {
         );
     });
 
-    // Отримання профілю
     socket.on('get_user_profile', (email, callback) => {
         if (!email) return callback?.(null);
         const cleanEmail = email.trim().toLowerCase();
@@ -83,7 +79,6 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Додавання контакту
     socket.on('add_contact', (data, callback) => {
         const { myEmail, targetEmail } = data || {};
         const cleanMy = (myEmail || '').trim().toLowerCase();
@@ -117,7 +112,6 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Список контактів
     socket.on('get_contacts', (myEmail, callback) => {
         if (!myEmail) return callback?.([]);
         const cleanEmail = myEmail.trim().toLowerCase();
@@ -133,7 +127,6 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Вхід у кімнату чату
     socket.on('join_chat', (data) => {
         const chatId = typeof data === 'string' ? data : data.chatId;
         socket.join(chatId);
@@ -147,12 +140,10 @@ io.on('connection', (socket) => {
         );
     });
 
-    // Вихід з кімнати
     socket.on('leave_chat', (chatId) => {
         socket.leave(chatId);
     });
 
-    // Надсилання повідомлення
     socket.on('send_message', (data) => {
         const { id, chatId, senderEmail, receiverEmail, text, timestamp } = data || {};
         const msgId = id || Date.now().toString();
@@ -169,7 +160,6 @@ io.on('connection', (socket) => {
         );
     });
 
-    // Видалення повідомлення (Пункт 2 і 3)
     socket.on('delete_message', (data) => {
         const { messageId, chatId } = data || {};
         if (!messageId || !chatId) return;
@@ -181,7 +171,6 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Сигналізація викликів (Пункт 4 - Дзвінки через Render)
     socket.on('start_call', (data) => {
         const { callerEmail, receiverEmail } = data || {};
         if (!receiverEmail) return;
