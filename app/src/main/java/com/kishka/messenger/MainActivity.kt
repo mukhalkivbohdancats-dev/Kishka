@@ -20,8 +20,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -29,14 +29,13 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -704,7 +703,7 @@ fun ChatsTab(
                 title = { Text("Kishka Messenger", fontWeight = FontWeight.Bold, color = ViberPurple) },
                 actions = {
                     IconButton(onClick = { showAddContactDialog = true }) {
-                        Icon(Icons.Default.PersonAdd, contentDescription = null, tint = ViberPurple)
+                        Icon(Icons.Default.Person, contentDescription = null, tint = ViberPurple)
                     }
                 }
             )
@@ -1252,7 +1251,7 @@ fun ChatScreen(
                         }
                     }
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, tint = ViberPurple)
+                    Icon(Icons.Default.Send, contentDescription = null, tint = ViberPurple)
                 }
             }
         }
