@@ -6,6 +6,8 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.Ringtone
+import android.media.RingtoneManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -15,6 +17,7 @@ class CallService : Service() {
 
     private lateinit var audioManager: AudioManager
     private var wakeLock: PowerManager.WakeLock? = null
+    private var ringtone: Ringtone? = null
     private var isMuted = false
     private var isSpeakerOn = false
 
@@ -23,6 +26,7 @@ class CallService : Service() {
         const val NOTIFICATION_ID = 1001
 
         const val ACTION_START_CALL = "ACTION_START_CALL"
+        const val ACTION_INCOMING = "ACTION_INCOMING"
         const val ACTION_END_CALL = "ACTION_END_CALL"
         const val ACTION_TOGGLE_MUTE = "ACTION_TOGGLE_MUTE"
         const val ACTION_TOGGLE_SPEAKER = "ACTION_TOGGLE_SPEAKER"
@@ -40,11 +44,17 @@ class CallService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START_CALL -> {
+                stopRingtone()
                 val name = intent.getStringExtra(EXTRA_TARGET_NAME) ?: "Співрозмовник"
                 val phone = intent.getStringExtra(EXTRA_TARGET_PHONE) ?: ""
                 startForegroundCall(name, phone)
                 enableHighQualityAudio()
                 acquireProximityWakeLock()
+            }
+            ACTION_INCOMING -> {
+                val caller = intent.getStringExtra(EXTRA_TARGET_NAME) ?: "Невідомий"
+                startRingtone()
+                startForegroundCall("Вхідний дзвінок", caller)
             }
             ACTION_END_CALL -> {
                 stopCall()
@@ -61,10 +71,26 @@ class CallService : Service() {
         return START_NOT_STICKY
     }
 
-    /**
-     * Налаштування аудіотракту за стандартом VoIP (Viber/WhatsApp):
-     * вмикає системний AEC (Echo Cancellation) та Noise Suppression.
-     */
+    private fun startRingtone() {
+        try {
+            stopRingtone()
+            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            ringtone = RingtoneManager.getRingtone(applicationContext, uri)
+            ringtone?.play()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun stopRingtone() {
+        try {
+            ringtone?.stop()
+            ringtone = null
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     private fun enableHighQualityAudio() {
         audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
 
@@ -109,8 +135,8 @@ class CallService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Голосовий дзвінок: $name")
-            .setContentText("Триває розмова ($phone)...")
+            .setContentTitle(name)
+            .setContentText("Дзвінок Kishka Messenger ($phone)...")
             .setSmallIcon(android.R.drawable.ic_menu_call)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -135,9 +161,6 @@ class CallService : Service() {
         }
     }
 
-    /**
-     * Автоматично гасить екран при піднесенні до вуха.
-     */
     private fun acquireProximityWakeLock() {
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         if (powerManager.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
@@ -150,6 +173,7 @@ class CallService : Service() {
     }
 
     private fun stopCall() {
+        stopRingtone()
         audioManager.mode = AudioManager.MODE_NORMAL
         audioManager.isSpeakerphoneOn = false
         audioManager.isMicrophoneMute = false
