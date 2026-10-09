@@ -364,8 +364,8 @@ class KishkaManager(private val context: Context) {
     fun startCall(callerEmail: String, receiverEmail: String) {
         ensureConnected()
         val json = JSONObject().apply {
-            put("callerEmail", callerEmail)
-            put("receiverEmail", receiverEmail)
+            put("callerEmail", callerEmail.trim().lowercase())
+            put("receiverEmail", receiverEmail.trim().lowercase())
         }
         socket?.emit("start_call", json)
     }
@@ -373,8 +373,8 @@ class KishkaManager(private val context: Context) {
     fun answerCall(callerEmail: String, receiverEmail: String) {
         ensureConnected()
         val json = JSONObject().apply {
-            put("callerEmail", callerEmail)
-            put("receiverEmail", receiverEmail)
+            put("callerEmail", callerEmail.trim().lowercase())
+            put("receiverEmail", receiverEmail.trim().lowercase())
         }
         socket?.emit("answer_call", json)
     }
@@ -382,8 +382,8 @@ class KishkaManager(private val context: Context) {
     fun rejectCall(callerEmail: String, receiverEmail: String) {
         ensureConnected()
         val json = JSONObject().apply {
-            put("callerEmail", callerEmail)
-            put("receiverEmail", receiverEmail)
+            put("callerEmail", callerEmail.trim().lowercase())
+            put("receiverEmail", receiverEmail.trim().lowercase())
         }
         socket?.emit("reject_call", json)
     }
@@ -391,8 +391,8 @@ class KishkaManager(private val context: Context) {
     fun endCall(callerEmail: String, receiverEmail: String) {
         ensureConnected()
         val json = JSONObject().apply {
-            put("callerEmail", callerEmail)
-            put("receiverEmail", receiverEmail)
+            put("callerEmail", callerEmail.trim().lowercase())
+            put("receiverEmail", receiverEmail.trim().lowercase())
         }
         socket?.emit("end_call", json)
     }
@@ -452,7 +452,8 @@ class KishkaManager(private val context: Context) {
         onIncomingCall: (String) -> Unit,
         onCallAnswered: () -> Unit,
         onCallRejected: () -> Unit,
-        onCallEnded: () -> Unit
+        onCallEnded: () -> Unit,
+        onCallBusy: () -> Unit
     ) {
         val cleanEmail = myEmail.trim().lowercase()
         if (cleanEmail.isEmpty()) return
@@ -462,6 +463,7 @@ class KishkaManager(private val context: Context) {
         socket?.off("call_answered_$cleanEmail")
         socket?.off("call_rejected_$cleanEmail")
         socket?.off("call_ended_$cleanEmail")
+        socket?.off("call_busy_$cleanEmail")
 
         socket?.on("incoming_call_$cleanEmail") { args ->
             if (args.isNotEmpty() && args[0] is JSONObject) {
@@ -481,6 +483,10 @@ class KishkaManager(private val context: Context) {
 
         socket?.on("call_ended_$cleanEmail") {
             mainHandler.post { onCallEnded() }
+        }
+
+        socket?.on("call_busy_$cleanEmail") {
+            mainHandler.post { onCallBusy() }
         }
     }
 
