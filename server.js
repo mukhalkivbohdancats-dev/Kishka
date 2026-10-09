@@ -16,7 +16,7 @@ const io = new Server(server, {
 // Набір для збереження email користувачів, які зараз знаходяться в дзвінку
 const busyUsers = new Set();
 
-// Підключення до бази даних SQLite на сервері Render
+// Підключення до бази даних SQLite
 const db = new sqlite3.Database('./chat.db', (err) => {
     if (err) {
         console.error('Помилка бази даних:', err.message);
@@ -55,8 +55,8 @@ io.on('connection', (socket) => {
     // Реєстрація або оновлення користувача
     socket.on('register_or_update_user', (data) => {
         const { email, name, avatarUrl } = data || {};
-        if (!email) return;
-        const cleanEmail = email.trim().lowercase();
+        if (!email || typeof email !== 'string') return;
+        const cleanEmail = email.trim().toLowerCase();
         const cleanName = name || cleanEmail.split('@')[0];
 
         db.run(
@@ -69,19 +69,21 @@ io.on('connection', (socket) => {
         );
     });
 
-    // Отримання профілю
+    // Отримання профілю (Захищено від зависання callback)
     socket.on('get_user_profile', (email, callback) => {
-        if (!email) return callback?.(null);
-        const cleanEmail = email.trim().lowercase();
+        const safeCallback = typeof callback === 'function' ? callback : () => {};
+        if (!email || typeof email !== 'string') return safeCallback(null);
+        
+        const cleanEmail = email.trim().toLowerCase();
         
         db.get("SELECT email, name, avatar_url as avatarUrl FROM users WHERE email = ?", [cleanEmail], (err, row) => {
-            if (err) return callback?.(null);
+            if (err) return safeCallback(null);
             if (row) {
-                callback?.(row);
+                safeCallback(row);
             } else {
                 const defaultName = cleanEmail.split('@')[0];
                 db.run("INSERT OR IGNORE INTO users (email, name, avatar_url) VALUES (?, ?, NULL)", [cleanEmail, defaultName], () => {
-                    callback?.({ email: cleanEmail, name: defaultName, avatarUrl: null });
+                    safeCallback({ email: cleanEmail, name: defaultName, avatarUrl: null });
                 });
             }
         });
@@ -89,12 +91,13 @@ io.on('connection', (socket) => {
 
     // Додавання контакту
     socket.on('add_contact', (data, callback) => {
+        const safeCallback = typeof callback === 'function' ? callback : () => {};
         const { myEmail, targetEmail } = data || {};
-        const cleanMy = (myEmail || '').trim().lowercase();
-        const cleanTarget = (targetEmail || '').trim().toLowerCase();
+        const cleanMy = (typeof myEmail === 'string' ? myEmail : '').trim().toLowerCase();
+        const cleanTarget = (typeof targetEmail === 'string' ? targetEmail : '').trim().toLowerCase();
 
         if (!cleanTarget || !cleanTarget.includes('@') || cleanMy === cleanTarget) {
-            return callback?.({ success: false, message: "Некоректна адреса або спроба додати самі себе!" });
+            return safeCallback({ success: false, message: "Некоректна адреса або спроба додати самі себе!" });
         }
 
         db.get("SELECT email, name, avatar_url as avatarUrl FROM users WHERE email = ?", [cleanTarget], (err, targetUser) => {
@@ -105,7 +108,7 @@ io.on('connection', (socket) => {
                 stmt.run(cleanMy, cleanTarget);
                 stmt.run(cleanTarget, cleanMy);
                 stmt.finalize(() => {
-                    callback?.({ success: true, user: userObj, message: "Контакт успішно додано!" });
+                    safeCallback({ success: true, user: userObj, message: "Контакт успішно додано!" });
                 });
             };
 
@@ -123,8 +126,9 @@ io.on('connection', (socket) => {
 
     // Список контактів
     socket.on('get_contacts', (myEmail, callback) => {
-        if (!myEmail) return callback?.([]);
-        const cleanEmail = myEmail.trim().lowercase();
+        const safeCallback = typeof callback === 'function' ? callback : () => {};
+        if (!myEmail || typeof myEmail !== 'string') return safeCallback([]);
+        const cleanEmail = myEmail.trim().toLowerCase();
         const query = `
             SELECT u.email, u.name, u.avatar_url as avatarUrl 
             FROM contacts c
@@ -132,14 +136,15 @@ io.on('connection', (socket) => {
             WHERE c.owner_email = ?
         `;
         db.all(query, [cleanEmail], (err, rows) => {
-            if (err) callback?.([]);
-            else callback?.(rows || []);
+            if (err) safeCallback([]);
+            else safeCallback(rows || []);
         });
     });
 
     // Вхід у кімнату чату
     socket.on('join_chat', (data) => {
-        const chatId = typeof data === 'string' ? data : data.chatId;
+        const chatId = typeof data === 'string' ? data : (data ? data.chatId : null);
+        if (!chatId) return;
         socket.join(chatId);
 
         db.all(
@@ -153,12 +158,13 @@ io.on('connection', (socket) => {
 
     // Вихід з кімнати чату
     socket.on('leave_chat', (chatId) => {
-        socket.leave(chatId);
+        if (chatId) socket.leave(chatId);
     });
 
-    // Надсилання повідомлення
+    // Надсилання текстового повідомлення (Зберігається в БД)
     socket.on('send_message', (data) => {
         const { id, chatId, senderEmail, receiverEmail, text, timestamp } = data || {};
+        if (!chatId || !text) return;
         const msgId = id || Date.now().toString();
         const msgTimestamp = timestamp || Date.now();
 
@@ -173,7 +179,7 @@ io.on('connection', (socket) => {
         );
     });
 
-    // Видалення повідомлення
+    // Видалення текстового повідомлення
     socket.on('delete_message', (data) => {
         const { messageId, chatId } = data || {};
         if (!messageId || !chatId) return;
@@ -185,7 +191,7 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Логіка викликів та перевірка «Зайнято»
+    // Сигналізація викликів та перевірка «Зайнято»
     socket.on('start_call', (data) => {
         const { callerEmail, receiverEmail } = data || {};
         if (!callerEmail || !receiverEmail) return;
@@ -193,7 +199,6 @@ io.on('connection', (socket) => {
         const cleanCaller = callerEmail.trim().toLowerCase();
         const cleanReceiver = receiverEmail.trim().toLowerCase();
 
-        // Перевірка чи не зайнятий отримувач
         if (busyUsers.has(cleanReceiver)) {
             io.emit(`call_busy_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
             return;
@@ -239,7 +244,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Передача голосу в реальному часі
+    // Передача аудіопотоку в режимі реального часу (НЕ зберігається в БД, обробляється та знищується в RAM)
     socket.on('voice_chunk', (data) => {
         const { targetEmail, chunk } = data || {};
         if (!targetEmail || !chunk) return;
