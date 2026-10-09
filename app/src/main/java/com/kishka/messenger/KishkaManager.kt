@@ -102,19 +102,32 @@ class KishkaManager(private val context: Context) {
         }
         ensureConnected()
 
+        var handled = false
+        val timeoutRunnable = Runnable {
+            if (!handled) {
+                handled = true
+                onResult(User(uid = cleanEmail, email = cleanEmail, name = cleanEmail.substringBefore("@"), avatarUrl = DEFAULT_AVATAR_URL))
+            }
+        }
+        mainHandler.postDelayed(timeoutRunnable, 4000)
+
         socket?.emit("get_user_profile", cleanEmail, io.socket.client.Ack { args ->
             mainHandler.post {
-                if (args.isNotEmpty() && args[0] is JSONObject) {
-                    val obj = args[0] as JSONObject
-                    val user = User(
-                        uid = obj.optString("email", cleanEmail),
-                        email = obj.optString("email", cleanEmail),
-                        name = obj.optString("name", cleanEmail.substringBefore("@")),
-                        avatarUrl = obj.optString("avatarUrl", DEFAULT_AVATAR_URL)
-                    )
-                    onResult(user)
-                } else {
-                    onResult(null)
+                if (!handled) {
+                    handled = true
+                    mainHandler.removeCallbacks(timeoutRunnable)
+                    if (args.isNotEmpty() && args[0] is JSONObject) {
+                        val obj = args[0] as JSONObject
+                        val user = User(
+                            uid = obj.optString("email", cleanEmail),
+                            email = obj.optString("email", cleanEmail),
+                            name = obj.optString("name", cleanEmail.substringBefore("@")),
+                            avatarUrl = obj.optString("avatarUrl", DEFAULT_AVATAR_URL)
+                        )
+                        onResult(user)
+                    } else {
+                        onResult(null)
+                    }
                 }
             }
         })
