@@ -159,11 +159,13 @@ class CallService : Service() {
 
     @SuppressLint("MissingPermission")
     private fun startAudioStreaming() {
-        if (isCallActive) return
+        if (isCallActive) stopAudioStreaming()
         isCallActive = true
 
         val minRecBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_IN, AUDIO_FORMAT)
         val minTrackBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_OUT, AUDIO_FORMAT)
+
+        val frameSize = 3200 // 100 мс звуку при 16 кГц 16-біт MONO
 
         try {
             var recSource = MediaRecorder.AudioSource.VOICE_COMMUNICATION
@@ -172,7 +174,7 @@ class CallService : Service() {
                 SAMPLE_RATE,
                 CHANNEL_CONFIG_IN,
                 AUDIO_FORMAT,
-                minRecBuf * 2
+                minRecBuf * 4
             )
 
             if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
@@ -182,7 +184,7 @@ class CallService : Service() {
                     SAMPLE_RATE,
                     CHANNEL_CONFIG_IN,
                     AUDIO_FORMAT,
-                    minRecBuf * 2
+                    minRecBuf * 4
                 )
             }
 
@@ -200,7 +202,7 @@ class CallService : Service() {
                         .setChannelMask(CHANNEL_CONFIG_OUT)
                         .build()
                 )
-                .setBufferSizeInBytes(minTrackBuf * 2)
+                .setBufferSizeInBytes(minTrackBuf * 4)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
 
@@ -216,12 +218,21 @@ class CallService : Service() {
             }
 
             recordingThread = thread(start = true) {
-                val buffer = ByteArray(minRecBuf)
+                val buffer = ByteArray(frameSize)
+                var bytesAccumulated = 0
+
                 while (isCallActive) {
-                    val read = audioRecord?.read(buffer, 0, buffer.size) ?: 0
-                    if (read > 0 && !isMuted && targetEmail.isNotEmpty()) {
-                        val chunkToSend = buffer.copyOf(read)
-                        manager.sendVoiceChunk(targetEmail, chunkToSend)
+                    val read = audioRecord?.read(buffer, bytesAccumulated, frameSize - bytesAccumulated) ?: 0
+                    if (read > 0) {
+                        bytesAccumulated += read
+                        if (bytesAccumulated >= frameSize) {
+                            if (!isMuted && targetEmail.isNotEmpty()) {
+                                manager.sendVoiceChunk(targetEmail, buffer.copyOf(frameSize))
+                            }
+                            bytesAccumulated = 0
+                        }
+                    } else {
+                        try { Thread.sleep(10) } catch (e: Exception) { break }
                     }
                 }
             }
@@ -234,6 +245,14 @@ class CallService : Service() {
         isCallActive = false
         if (myEmail.isNotEmpty()) {
             manager.stopListeningForVoiceChunks(myEmail)
+        }
+
+        try {
+            recordingThread?.interrupt()
+            recordingThread?.join(300)
+            recordingThread = null
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
 
         try {
@@ -251,9 +270,6 @@ class CallService : Service() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
-
-        recordingThread?.interrupt()
-        recordingThread = null
     }
 
     private fun startForegroundCall(title: String, phone: String) {
