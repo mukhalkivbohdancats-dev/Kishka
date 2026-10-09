@@ -1,6 +1,7 @@
 package com.kishka.messenger
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -10,6 +11,7 @@ import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -210,6 +212,22 @@ object Strings {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+            val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+            keyguardManager.requestDismissKeyguard(this, null)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                        WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
+                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            )
+        }
+
         setContent {
             MaterialTheme(
                 colorScheme = lightColorScheme(
@@ -286,13 +304,27 @@ fun KishkaApp() {
                 myEmail = currentUserEmail,
                 onIncomingCall = { caller ->
                     incomingCallFrom = caller
+                    val intent = Intent(context, CallService::class.java).apply {
+                        action = CallService.ACTION_INCOMING
+                        putExtra(CallService.EXTRA_TARGET_NAME, caller)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(intent)
+                    } else {
+                        context.startService(intent)
+                    }
                 },
                 onCallAnswered = {
                     val intent = Intent(context, CallService::class.java).apply {
                         action = CallService.ACTION_START_CALL
                         putExtra(CallService.EXTRA_TARGET_NAME, activeCallTargetPhone ?: "Співрозмовник")
+                        putExtra(CallService.EXTRA_TARGET_PHONE, activeCallTargetPhone ?: "")
                     }
-                    context.startService(intent)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(intent)
+                    } else {
+                        context.startService(intent)
+                    }
                 },
                 onCallRejected = {
                     val intent = Intent(context, CallService::class.java).apply { action = CallService.ACTION_END_CALL }
@@ -332,6 +364,16 @@ fun KishkaApp() {
     val startCallAction: (String) -> Unit = { targetEmail ->
         activeCallTargetPhone = targetEmail
         isCallMinimized = false
+        val intent = Intent(context, CallService::class.java).apply {
+            action = CallService.ACTION_START_CALL
+            putExtra(CallService.EXTRA_TARGET_NAME, targetEmail)
+            putExtra(CallService.EXTRA_TARGET_PHONE, targetEmail)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent)
+        } else {
+            context.startService(intent)
+        }
         manager.startCall(currentUserEmail, targetEmail)
     }
 
@@ -360,13 +402,28 @@ fun KishkaApp() {
                 callerEmail = incomingCallFrom!!,
                 lang = currentLanguage,
                 onAnswer = {
-                    activeCallTargetPhone = incomingCallFrom
-                    manager.answerCall(incomingCallFrom!!, currentUserEmail)
+                    val caller = incomingCallFrom!!
+                    activeCallTargetPhone = caller
                     incomingCallFrom = null
+                    manager.answerCall(caller, currentUserEmail)
+
+                    val intent = Intent(context, CallService::class.java).apply {
+                        action = CallService.ACTION_START_CALL
+                        putExtra(CallService.EXTRA_TARGET_NAME, caller)
+                        putExtra(CallService.EXTRA_TARGET_PHONE, caller)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(intent)
+                    } else {
+                        context.startService(intent)
+                    }
                 },
                 onDecline = {
-                    manager.rejectCall(incomingCallFrom!!, currentUserEmail)
+                    val caller = incomingCallFrom!!
                     incomingCallFrom = null
+                    manager.rejectCall(caller, currentUserEmail)
+                    val intent = Intent(context, CallService::class.java).apply { action = CallService.ACTION_END_CALL }
+                    context.startService(intent)
                 }
             )
         } else if (activeCallTargetPhone != null && !isCallMinimized) {
@@ -402,6 +459,32 @@ fun KishkaApp() {
 
             if (isLandscape) {
                 Row(modifier = Modifier.fillMaxSize()) {
+                    NavigationRail(
+                        containerColor = Color.White,
+                        header = {
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                    ) {
+                        NavigationRailItem(
+                            selected = selectedBottomTab == 0,
+                            onClick = { selectedBottomTab = 0 },
+                            icon = { Icon(Icons.Default.Call, contentDescription = null) },
+                            label = { Text(Strings.get("chats", currentLanguage)) }
+                        )
+                        NavigationRailItem(
+                            selected = selectedBottomTab == 1,
+                            onClick = { selectedBottomTab = 1 },
+                            icon = { Icon(Icons.Default.VolumeUp, contentDescription = null) },
+                            label = { Text(Strings.get("calls", currentLanguage)) }
+                        )
+                        NavigationRailItem(
+                            selected = selectedBottomTab == 2,
+                            onClick = { selectedBottomTab = 2 },
+                            icon = { Icon(Icons.Default.Person, contentDescription = null) },
+                            label = { Text(Strings.get("account", currentLanguage)) }
+                        )
+                    }
+
                     Box(modifier = Modifier.width(320.dp).fillMaxHeight()) {
                         MainTabContent(
                             selectedBottomTab = selectedBottomTab,
