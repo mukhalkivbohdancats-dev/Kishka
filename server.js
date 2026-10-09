@@ -9,7 +9,8 @@ const io = new Server(server, {
     cors: {
         origin: "*",
         methods: ["GET", "POST"]
-    }
+    },
+    maxHttpBufferSize: 1e7
 });
 
 // Підключення до бази даних SQLite на сервері Render
@@ -207,6 +208,14 @@ io.on('connection', (socket) => {
         const { callerEmail, receiverEmail } = data || {};
         if (callerEmail) io.emit(`call_ended_${callerEmail.trim().toLowerCase()}`, {});
         if (receiverEmail) io.emit(`call_ended_${receiverEmail.trim().toLowerCase()}`, {});
+    });
+
+    // Передача чанків голосу (аудіопрямий потік)
+    socket.on('voice_chunk', (data) => {
+        const { targetEmail, chunk } = data || {};
+        if (!targetEmail || !chunk) return;
+        const cleanTarget = targetEmail.trim().toLowerCase();
+        io.emit(`voice_chunk_${cleanTarget}`, chunk);
     });
 
     socket.on('disconnect', () => {
