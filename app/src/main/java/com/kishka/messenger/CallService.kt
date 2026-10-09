@@ -75,8 +75,8 @@ class CallService : Service() {
             ACTION_START_CALL -> {
                 stopRingtone()
                 val name = intent.getStringExtra(EXTRA_TARGET_NAME) ?: "Співрозмовник"
-                targetEmail = intent.getStringExtra(EXTRA_TARGET_PHONE) ?: ""
-                myEmail = intent.getStringExtra(EXTRA_MY_EMAIL) ?: ""
+                targetEmail = intent.getStringExtra(EXTRA_TARGET_PHONE)?.trim()?.lowercase() ?: ""
+                myEmail = intent.getStringExtra(EXTRA_MY_EMAIL)?.trim()?.lowercase() ?: ""
                 
                 isMuted = false
                 audioManager.isMicrophoneMute = false
@@ -162,6 +162,33 @@ class CallService : Service() {
         }
     }
 
+    private fun createAudioRecord(minBuf: Int): AudioRecord? {
+        val sources = intArrayOf(
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.CAMCORDER
+        )
+        for (source in sources) {
+            try {
+                val recorder = AudioRecord(
+                    source,
+                    SAMPLE_RATE,
+                    CHANNEL_CONFIG_IN,
+                    AUDIO_FORMAT,
+                    minBuf * 4
+                )
+                if (recorder.state == AudioRecord.STATE_INITIALIZED) {
+                    return recorder
+                } else {
+                    recorder.release()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        return null
+    }
+
     @SuppressLint("MissingPermission")
     private fun startAudioStreaming() {
         if (isCallActive) stopAudioStreaming()
@@ -171,28 +198,10 @@ class CallService : Service() {
         val minRecBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_IN, AUDIO_FORMAT)
         val minTrackBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_OUT, AUDIO_FORMAT)
 
-        val frameSize = 3200 // 100 мс звуку при 16 кГц 16-біт MONO
+        val frameSize = 3200 // 100 мс звуку (16 кГц 16-біт MONO)
 
         try {
-            var recSource = MediaRecorder.AudioSource.VOICE_COMMUNICATION
-            audioRecord = AudioRecord(
-                recSource,
-                SAMPLE_RATE,
-                CHANNEL_CONFIG_IN,
-                AUDIO_FORMAT,
-                minRecBuf * 4
-            )
-
-            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-                recSource = MediaRecorder.AudioSource.MIC
-                audioRecord = AudioRecord(
-                    recSource,
-                    SAMPLE_RATE,
-                    CHANNEL_CONFIG_IN,
-                    AUDIO_FORMAT,
-                    minRecBuf * 4
-                )
-            }
+            audioRecord = createAudioRecord(minRecBuf)
 
             audioTrack = AudioTrack.Builder()
                 .setAudioAttributes(
@@ -218,7 +227,7 @@ class CallService : Service() {
             if (myEmail.isNotEmpty()) {
                 manager.listenForVoiceChunks(myEmail) { chunk ->
                     if (isCallActive) {
-                        if (audioQueue.size > 10) {
+                        if (audioQueue.size > 8) {
                             audioQueue.poll()
                         }
                         audioQueue.offer(chunk)
@@ -244,7 +253,13 @@ class CallService : Service() {
                 var bytesAccumulated = 0
 
                 while (isCallActive) {
-                    val read = audioRecord?.read(buffer, bytesAccumulated, frameSize - bytesAccumulated) ?: 0
+                    val rec = audioRecord
+                    if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) {
+                        try { Thread.sleep(100) } catch (e: Exception) { break }
+                        continue
+                    }
+
+                    val read = rec.read(buffer, bytesAccumulated, frameSize - bytesAccumulated)
                     if (read > 0) {
                         bytesAccumulated += read
                         if (bytesAccumulated >= frameSize) {
@@ -254,7 +269,13 @@ class CallService : Service() {
                             bytesAccumulated = 0
                         }
                     } else {
-                        try { Thread.sleep(10) } catch (e: Exception) { break }
+                        try {
+                            rec.stop()
+                            rec.startRecording()
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                        try { Thread.sleep(20) } catch (e: Exception) { break }
                     }
                 }
             }
