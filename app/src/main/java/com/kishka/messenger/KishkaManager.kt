@@ -8,6 +8,7 @@ import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.util.Base64
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.UserProfileChangeRequest
 import com.google.firebase.storage.FirebaseStorage
@@ -399,11 +400,16 @@ class KishkaManager(private val context: Context) {
     fun sendVoiceChunk(targetEmail: String, chunk: ByteArray) {
         if (targetEmail.isEmpty()) return
         ensureConnected()
-        val json = JSONObject().apply {
-            put("targetEmail", targetEmail.trim().lowercase())
-            put("chunk", chunk)
+        try {
+            val base64Str = Base64.encodeToString(chunk, Base64.NO_WRAP)
+            val json = JSONObject().apply {
+                put("targetEmail", targetEmail.trim().lowercase())
+                put("chunk", base64Str)
+            }
+            socket?.emit("voice_chunk", json)
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
-        socket?.emit("voice_chunk", json)
     }
 
     fun listenForVoiceChunks(myEmail: String, onChunkReceived: (ByteArray) -> Unit) {
@@ -413,9 +419,24 @@ class KishkaManager(private val context: Context) {
 
         socket?.off("voice_chunk_$cleanEmail")
         socket?.on("voice_chunk_$cleanEmail") { args ->
-            if (args.isNotEmpty() && args[0] is ByteArray) {
-                val chunk = args[0] as ByteArray
-                onChunkReceived(chunk)
+            if (args.isNotEmpty()) {
+                try {
+                    val item = args[0]
+                    val chunkBytes = when (item) {
+                        is ByteArray -> item
+                        is String -> Base64.decode(item, Base64.NO_WRAP)
+                        is JSONObject -> {
+                            val chunkStr = item.optString("chunk", "")
+                            if (chunkStr.isNotEmpty()) Base64.decode(chunkStr, Base64.NO_WRAP) else null
+                        }
+                        else -> null
+                    }
+                    if (chunkBytes != null && chunkBytes.isNotEmpty()) {
+                        onChunkReceived(chunkBytes)
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
         }
     }
