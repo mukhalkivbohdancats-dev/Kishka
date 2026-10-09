@@ -210,12 +210,12 @@ io.on('connection', (socket) => {
         if (receiverEmail) io.emit(`call_ended_${receiverEmail.trim().toLowerCase()}`, {});
     });
 
-    // Передача чанків голосу (аудіопрямий потік)
+    // Передача чанків голосу без відлуння відправнику
     socket.on('voice_chunk', (data) => {
         const { targetEmail, chunk } = data || {};
         if (!targetEmail || !chunk) return;
         const cleanTarget = targetEmail.trim().toLowerCase();
-        io.emit(`voice_chunk_${cleanTarget}`, chunk);
+        socket.broadcast.emit(`voice_chunk_${cleanTarget}`, chunk);
     });
 
     socket.on('disconnect', () => {
