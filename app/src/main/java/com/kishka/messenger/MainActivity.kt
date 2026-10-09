@@ -339,6 +339,13 @@ fun KishkaApp() {
                     context.startService(intent)
                     activeCallTargetPhone = null
                     incomingCallFrom = null
+                },
+                onCallBusy = {
+                    Toast.makeText(context, "Лінія зайнята (абонент розмовляє)", Toast.LENGTH_LONG).show()
+                    val intent = Intent(context, CallService::class.java).apply { action = CallService.ACTION_END_CALL }
+                    context.startService(intent)
+                    activeCallTargetPhone = null
+                    incomingCallFrom = null
                 }
             )
 
