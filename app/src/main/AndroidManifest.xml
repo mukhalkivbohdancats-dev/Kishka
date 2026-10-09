@@ -1,13 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Дозволи для мережі та Firebase -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Дозволи для дзвінків, мікрофона та блокування екрана -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
+    <!-- Дозволи для фонового сервісу та сповіщень (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
@@ -21,10 +26,13 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Kishka">
 
+        <!-- Головна Activity з підтримкою показу поверх заблокованого екрана -->
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:exported="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
             android:theme="@style/Theme.Kishka">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -32,6 +40,7 @@
             </intent-filter>
         </activity>
 
+        <!-- Сервіс для активних викликів -->
         <service
             android:name=".CallService"
             android:exported="false"
