@@ -17,6 +17,8 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 class CallService : Service() {
@@ -37,6 +39,9 @@ class CallService : Service() {
     private var audioTrack: AudioTrack? = null
 
     private var recordingThread: Thread? = null
+    private var playbackThread: Thread? = null
+
+    private val audioQueue = LinkedBlockingQueue<ByteArray>()
 
     companion object {
         const val CHANNEL_ID = "KishkaCallChannel"
@@ -161,6 +166,7 @@ class CallService : Service() {
     private fun startAudioStreaming() {
         if (isCallActive) stopAudioStreaming()
         isCallActive = true
+        audioQueue.clear()
 
         val minRecBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_IN, AUDIO_FORMAT)
         val minTrackBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_OUT, AUDIO_FORMAT)
@@ -212,7 +218,23 @@ class CallService : Service() {
             if (myEmail.isNotEmpty()) {
                 manager.listenForVoiceChunks(myEmail) { chunk ->
                     if (isCallActive) {
-                        audioTrack?.write(chunk, 0, chunk.size)
+                        if (audioQueue.size > 10) {
+                            audioQueue.poll()
+                        }
+                        audioQueue.offer(chunk)
+                    }
+                }
+            }
+
+            playbackThread = thread(start = true) {
+                while (isCallActive) {
+                    try {
+                        val chunk = audioQueue.poll(50, TimeUnit.MILLISECONDS)
+                        if (chunk != null && isCallActive) {
+                            audioTrack?.write(chunk, 0, chunk.size)
+                        }
+                    } catch (e: Exception) {
+                        break
                     }
                 }
             }
@@ -247,9 +269,19 @@ class CallService : Service() {
             manager.stopListeningForVoiceChunks(myEmail)
         }
 
+        audioQueue.clear()
+
+        try {
+            playbackThread?.interrupt()
+            playbackThread?.join(200)
+            playbackThread = null
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         try {
             recordingThread?.interrupt()
-            recordingThread?.join(300)
+            recordingThread?.join(200)
             recordingThread = null
         } catch (e: Exception) {
             e.printStackTrace()
