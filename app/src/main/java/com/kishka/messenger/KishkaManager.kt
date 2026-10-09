@@ -396,6 +396,36 @@ class KishkaManager(private val context: Context) {
         socket?.emit("end_call", json)
     }
 
+    fun sendVoiceChunk(targetEmail: String, chunk: ByteArray) {
+        if (targetEmail.isEmpty()) return
+        ensureConnected()
+        val json = JSONObject().apply {
+            put("targetEmail", targetEmail.trim().lowercase())
+            put("chunk", chunk)
+        }
+        socket?.emit("voice_chunk", json)
+    }
+
+    fun listenForVoiceChunks(myEmail: String, onChunkReceived: (ByteArray) -> Unit) {
+        val cleanEmail = myEmail.trim().lowercase()
+        if (cleanEmail.isEmpty()) return
+        ensureConnected()
+
+        socket?.off("voice_chunk_$cleanEmail")
+        socket?.on("voice_chunk_$cleanEmail") { args ->
+            if (args.isNotEmpty() && args[0] is ByteArray) {
+                val chunk = args[0] as ByteArray
+                onChunkReceived(chunk)
+            }
+        }
+    }
+
+    fun stopListeningForVoiceChunks(myEmail: String) {
+        val cleanEmail = myEmail.trim().lowercase()
+        if (cleanEmail.isEmpty()) return
+        socket?.off("voice_chunk_$cleanEmail")
+    }
+
     fun listenForCallEvents(
         myEmail: String,
         onIncomingCall: (String) -> Unit,
