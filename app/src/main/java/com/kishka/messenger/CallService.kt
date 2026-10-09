@@ -72,6 +72,10 @@ class CallService : Service() {
                 val name = intent.getStringExtra(EXTRA_TARGET_NAME) ?: "Співрозмовник"
                 targetEmail = intent.getStringExtra(EXTRA_TARGET_PHONE) ?: ""
                 myEmail = intent.getStringExtra(EXTRA_MY_EMAIL) ?: ""
+                
+                isMuted = false
+                audioManager.isMicrophoneMute = false
+                
                 startForegroundCall("Триває розмова: $name", targetEmail)
                 enableHighQualityAudio()
                 acquireProximityWakeLock()
@@ -128,6 +132,7 @@ class CallService : Service() {
     private fun enableHighQualityAudio() {
         try {
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            audioManager.isMicrophoneMute = false
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
@@ -161,13 +166,25 @@ class CallService : Service() {
         val minTrackBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_OUT, AUDIO_FORMAT)
 
         try {
+            var recSource = MediaRecorder.AudioSource.VOICE_COMMUNICATION
             audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                recSource,
                 SAMPLE_RATE,
                 CHANNEL_CONFIG_IN,
                 AUDIO_FORMAT,
                 minRecBuf * 2
             )
+
+            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                recSource = MediaRecorder.AudioSource.MIC
+                audioRecord = AudioRecord(
+                    recSource,
+                    SAMPLE_RATE,
+                    CHANNEL_CONFIG_IN,
+                    AUDIO_FORMAT,
+                    minRecBuf * 2
+                )
+            }
 
             audioTrack = AudioTrack.Builder()
                 .setAudioAttributes(
