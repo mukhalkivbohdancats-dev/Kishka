@@ -307,6 +307,7 @@ fun KishkaApp() {
                     val intent = Intent(context, CallService::class.java).apply {
                         action = CallService.ACTION_INCOMING
                         putExtra(CallService.EXTRA_TARGET_NAME, caller)
+                        putExtra(CallService.EXTRA_MY_EMAIL, currentUserEmail)
                     }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         context.startForegroundService(intent)
@@ -319,6 +320,7 @@ fun KishkaApp() {
                         action = CallService.ACTION_START_CALL
                         putExtra(CallService.EXTRA_TARGET_NAME, activeCallTargetPhone ?: "Співрозмовник")
                         putExtra(CallService.EXTRA_TARGET_PHONE, activeCallTargetPhone ?: "")
+                        putExtra(CallService.EXTRA_MY_EMAIL, currentUserEmail)
                     }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         context.startForegroundService(intent)
@@ -368,6 +370,7 @@ fun KishkaApp() {
             action = CallService.ACTION_START_CALL
             putExtra(CallService.EXTRA_TARGET_NAME, targetEmail)
             putExtra(CallService.EXTRA_TARGET_PHONE, targetEmail)
+            putExtra(CallService.EXTRA_MY_EMAIL, currentUserEmail)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent)
@@ -411,6 +414,7 @@ fun KishkaApp() {
                         action = CallService.ACTION_START_CALL
                         putExtra(CallService.EXTRA_TARGET_NAME, caller)
                         putExtra(CallService.EXTRA_TARGET_PHONE, caller)
+                        putExtra(CallService.EXTRA_MY_EMAIL, currentUserEmail)
                     }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         context.startForegroundService(intent)
@@ -431,6 +435,12 @@ fun KishkaApp() {
                 targetPhone = activeCallTargetPhone!!,
                 avatarUrl = avatarUrl,
                 lang = currentLanguage,
+                onToggleMute = {
+                    val intent = Intent(context, CallService::class.java).apply {
+                        action = CallService.ACTION_TOGGLE_MUTE
+                    }
+                    context.startService(intent)
+                },
                 onMinimize = { isCallMinimized = true },
                 onEndCall = stopCallAction
             )
@@ -1395,6 +1405,7 @@ fun ActiveCallScreen(
     targetPhone: String,
     avatarUrl: String,
     lang: String,
+    onToggleMute: () -> Unit,
     onMinimize: () -> Unit,
     onEndCall: () -> Unit
 ) {
@@ -1446,7 +1457,10 @@ fun ActiveCallScreen(
                     modifier = Modifier
                         .size(64.dp)
                         .background(Color.Gray.copy(alpha = 0.2f), CircleShape)
-                        .clickable { isMuted = !isMuted },
+                        .clickable {
+                            isMuted = !isMuted
+                            onToggleMute()
+                        },
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(Icons.Default.Mic, contentDescription = null, tint = Color.DarkGray, modifier = Modifier.size(28.dp))
