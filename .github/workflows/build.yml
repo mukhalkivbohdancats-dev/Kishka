@@ -35,6 +35,20 @@ jobs:
           fi
           chmod +x gradlew
 
+      - name: Generate Persistent Signing Keystore
+        run: |
+          if [ ! -f "app/keystore.jks" ]; then
+            keytool -genkeypair -v \
+              -keystore app/keystore.jks \
+              -alias kishka \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass kishkapassword \
+              -keypass kishkapassword \
+              -dname "CN=KishkaMessenger, OU=Dev, O=Kishka, L=Ternopil, C=UA"
+          fi
+
       - name: Build APK with Gradle
         run: ./gradlew assembleDebug --stacktrace --warning-mode summary
 
@@ -45,8 +59,8 @@ jobs:
             cp app/build/outputs/apk/debug/app-debug.apk apk/KishkaMessenger_V2.1.apk
             git config --global user.name "github-actions[bot]"
             git config --global user.email "github-actions[bot]@users.noreply.github.com"
-            git add apk/KishkaMessenger_V2.1.apk
-            git diff --staged --quiet || (git commit -m "Auto-build: update KishkaMessenger_V2.1.apk [skip ci]" && git push)
+            git add app/keystore.jks apk/KishkaMessenger_V2.1.apk
+            git diff --staged --quiet || (git commit -m "Auto-build: update KishkaMessenger_V2.1.apk and keystore [skip ci]" && git push)
           else
             echo "❌ Помилка: APK не знайдено після кроку збірки!"
             exit 1
