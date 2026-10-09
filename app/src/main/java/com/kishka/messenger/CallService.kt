@@ -47,25 +47,33 @@ class CallService : Service() {
                 stopRingtone()
                 val name = intent.getStringExtra(EXTRA_TARGET_NAME) ?: "Співрозмовник"
                 val phone = intent.getStringExtra(EXTRA_TARGET_PHONE) ?: ""
-                startForegroundCall(name, phone)
+                startForegroundCall("Триває розмова: $name", phone)
                 enableHighQualityAudio()
                 acquireProximityWakeLock()
             }
             ACTION_INCOMING -> {
                 val caller = intent.getStringExtra(EXTRA_TARGET_NAME) ?: "Невідомий"
                 startRingtone()
-                startForegroundCall("Вхідний дзвінок", caller)
+                startIncomingCallNotification(caller)
             }
             ACTION_END_CALL -> {
                 stopCall()
             }
             ACTION_TOGGLE_MUTE -> {
                 isMuted = !isMuted
-                audioManager.isMicrophoneMute = isMuted
+                try {
+                    audioManager.isMicrophoneMute = isMuted
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
             ACTION_TOGGLE_SPEAKER -> {
                 isSpeakerOn = !isSpeakerOn
-                audioManager.isSpeakerphoneOn = isSpeakerOn
+                try {
+                    audioManager.isSpeakerphoneOn = isSpeakerOn
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
         }
         return START_NOT_STICKY
@@ -92,30 +100,67 @@ class CallService : Service() {
     }
 
     private fun enableHighQualityAudio() {
-        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+        try {
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .build()
+                audioManager.requestAudioFocus(focusRequest)
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.requestAudioFocus(
+                    null,
+                    AudioManager.STREAM_VOICE_CALL,
+                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
                 )
-                .build()
-            audioManager.requestAudioFocus(focusRequest)
-        } else {
-            @Suppress("DEPRECATION")
-            audioManager.requestAudioFocus(
-                null,
-                AudioManager.STREAM_VOICE_CALL,
-                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
-            )
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
-    private fun startForegroundCall(name: String, phone: String) {
-        val notification = createCallNotification(name, phone)
+    private fun startForegroundCall(title: String, phone: String) {
+        val notification = createCallNotification(title, phone)
+        startForeground(NOTIFICATION_ID, notification)
+    }
+
+    private fun startIncomingCallNotification(callerName: String) {
+        val fullScreenIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val fullScreenPendingIntent = PendingIntent.getActivity(
+            this, 0, fullScreenIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val endCallIntent = Intent(this, CallService::class.java).apply {
+            action = ACTION_END_CALL
+        }
+        val endCallPendingIntent = PendingIntent.getService(
+            this, 1, endCallIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Вхідний виклик Kishka")
+            .setContentText("Дзвонить: $callerName")
+            .setSmallIcon(android.R.drawable.ic_menu_call)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .setContentIntent(fullScreenPendingIntent)
+            .setFullScreenIntent(fullScreenPendingIntent, true)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Відхилити", endCallPendingIntent)
+            .build()
+
         startForeground(NOTIFICATION_ID, notification)
     }
 
@@ -162,24 +207,36 @@ class CallService : Service() {
     }
 
     private fun acquireProximityWakeLock() {
-        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        if (powerManager.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
-            wakeLock = powerManager.newWakeLock(
-                PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK,
-                "KishkaMessenger::ProximityWakeLock"
-            )
-            wakeLock?.acquire(2 * 60 * 60 * 1000L)
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (powerManager.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
+                wakeLock = powerManager.newWakeLock(
+                    PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK,
+                    "KishkaMessenger::ProximityWakeLock"
+                )
+                wakeLock?.acquire(2 * 60 * 60 * 1000L)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
     private fun stopCall() {
         stopRingtone()
-        audioManager.mode = AudioManager.MODE_NORMAL
-        audioManager.isSpeakerphoneOn = false
-        audioManager.isMicrophoneMute = false
+        try {
+            audioManager.mode = AudioManager.MODE_NORMAL
+            audioManager.isSpeakerphoneOn = false
+            audioManager.isMicrophoneMute = false
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
 
-        if (wakeLock?.isHeld == true) {
-            wakeLock?.release()
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
 
         stopForeground(STOP_FOREGROUND_REMOVE)
