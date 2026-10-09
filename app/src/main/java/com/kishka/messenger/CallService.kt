@@ -1,25 +1,42 @@
 package com.kishka.messenger
 
+import android.annotation.SuppressLint
 import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
+import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioRecord
+import android.media.AudioTrack
+import android.media.MediaRecorder
 import android.media.Ringtone
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import kotlin.concurrent.thread
 
 class CallService : Service() {
 
     private lateinit var audioManager: AudioManager
+    private lateinit var manager: KishkaManager
     private var wakeLock: PowerManager.WakeLock? = null
     private var ringtone: Ringtone? = null
+    
     private var isMuted = false
     private var isSpeakerOn = false
+    private var isCallActive = false
+
+    private var targetEmail: String = ""
+    private var myEmail: String = ""
+
+    private var audioRecord: AudioRecord? = null
+    private var audioTrack: AudioTrack? = null
+
+    private var recordingThread: Thread? = null
 
     companion object {
         const val CHANNEL_ID = "KishkaCallChannel"
@@ -33,11 +50,18 @@ class CallService : Service() {
 
         const val EXTRA_TARGET_NAME = "EXTRA_TARGET_NAME"
         const val EXTRA_TARGET_PHONE = "EXTRA_TARGET_PHONE"
+        const val EXTRA_MY_EMAIL = "EXTRA_MY_EMAIL"
+
+        private const val SAMPLE_RATE = 16000
+        private const val CHANNEL_CONFIG_IN = AudioFormat.CHANNEL_IN_MONO
+        private const val CHANNEL_CONFIG_OUT = AudioFormat.CHANNEL_OUT_MONO
+        private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
     }
 
     override fun onCreate() {
         super.onCreate()
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        manager = KishkaManager(applicationContext)
         createNotificationChannel()
     }
 
@@ -46,10 +70,12 @@ class CallService : Service() {
             ACTION_START_CALL -> {
                 stopRingtone()
                 val name = intent.getStringExtra(EXTRA_TARGET_NAME) ?: "Співрозмовник"
-                val phone = intent.getStringExtra(EXTRA_TARGET_PHONE) ?: ""
-                startForegroundCall("Триває розмова: $name", phone)
+                targetEmail = intent.getStringExtra(EXTRA_TARGET_PHONE) ?: ""
+                myEmail = intent.getStringExtra(EXTRA_MY_EMAIL) ?: ""
+                startForegroundCall("Триває розмова: $name", targetEmail)
                 enableHighQualityAudio()
                 acquireProximityWakeLock()
+                startAudioStreaming()
             }
             ACTION_INCOMING -> {
                 val caller = intent.getStringExtra(EXTRA_TARGET_NAME) ?: "Невідомий"
@@ -124,6 +150,93 @@ class CallService : Service() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startAudioStreaming() {
+        if (isCallActive) return
+        isCallActive = true
+
+        val minRecBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_IN, AUDIO_FORMAT)
+        val minTrackBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_OUT, AUDIO_FORMAT)
+
+        try {
+            audioRecord = AudioRecord(
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                SAMPLE_RATE,
+                CHANNEL_CONFIG_IN,
+                AUDIO_FORMAT,
+                minRecBuf * 2
+            )
+
+            audioTrack = AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AUDIO_FORMAT)
+                        .setSampleRate(SAMPLE_RATE)
+                        .setChannelMask(CHANNEL_CONFIG_OUT)
+                        .build()
+                )
+                .setBufferSizeInBytes(minTrackBuf * 2)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .build()
+
+            audioTrack?.play()
+            audioRecord?.startRecording()
+
+            if (myEmail.isNotEmpty()) {
+                manager.listenForVoiceChunks(myEmail) { chunk ->
+                    if (isCallActive) {
+                        audioTrack?.write(chunk, 0, chunk.size)
+                    }
+                }
+            }
+
+            recordingThread = thread(start = true) {
+                val buffer = ByteArray(minRecBuf)
+                while (isCallActive) {
+                    val read = audioRecord?.read(buffer, 0, buffer.size) ?: 0
+                    if (read > 0 && !isMuted && targetEmail.isNotEmpty()) {
+                        val chunkToSend = buffer.copyOf(read)
+                        manager.sendVoiceChunk(targetEmail, chunkToSend)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun stopAudioStreaming() {
+        isCallActive = false
+        if (myEmail.isNotEmpty()) {
+            manager.stopListeningForVoiceChunks(myEmail)
+        }
+
+        try {
+            audioRecord?.stop()
+            audioRecord?.release()
+            audioRecord = null
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        try {
+            audioTrack?.stop()
+            audioTrack?.release()
+            audioTrack = null
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        recordingThread?.interrupt()
+        recordingThread = null
     }
 
     private fun startForegroundCall(title: String, phone: String) {
@@ -222,6 +335,7 @@ class CallService : Service() {
     }
 
     private fun stopCall() {
+        stopAudioStreaming()
         stopRingtone()
         try {
             audioManager.mode = AudioManager.MODE_NORMAL
