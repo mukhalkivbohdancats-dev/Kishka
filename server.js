@@ -56,6 +56,7 @@ io.on('connection', (socket) => {
         const cleanEmail = email.trim().toLowerCase();
         socket.userEmail = cleanEmail;
         userSockets.set(cleanEmail, socket.id);
+        socket.join(cleanEmail);
 
         const cleanName = name || cleanEmail.split('@')[0];
 
@@ -76,6 +77,7 @@ io.on('connection', (socket) => {
         const cleanEmail = email.trim().toLowerCase();
         socket.userEmail = cleanEmail;
         userSockets.set(cleanEmail, socket.id);
+        socket.join(cleanEmail);
         
         db.get("SELECT email, name, avatar_url as avatarUrl FROM users WHERE email = ?", [cleanEmail], (err, row) => {
             if (err) return safeCallback(null);
@@ -99,6 +101,7 @@ io.on('connection', (socket) => {
         if (cleanMy) {
             socket.userEmail = cleanMy;
             userSockets.set(cleanMy, socket.id);
+            socket.join(cleanMy);
         }
 
         if (!cleanTarget || !cleanTarget.includes('@') || cleanMy === cleanTarget) {
@@ -113,6 +116,9 @@ io.on('connection', (socket) => {
                 stmt.run(cleanMy, cleanTarget);
                 stmt.run(cleanTarget, cleanMy);
                 stmt.finalize(() => {
+                    // Миттєве сповіщення цільового користувача про те, що його додали до контактів
+                    io.to(cleanTarget).emit('contact_updated');
+
                     safeCallback({ success: true, user: userObj, message: "Контакт успішно додано!" });
                 });
             };
@@ -135,6 +141,7 @@ io.on('connection', (socket) => {
         const cleanEmail = myEmail.trim().toLowerCase();
         socket.userEmail = cleanEmail;
         userSockets.set(cleanEmail, socket.id);
+        socket.join(cleanEmail);
 
         const query = `
             SELECT u.email, u.name, u.avatar_url as avatarUrl 
@@ -178,7 +185,12 @@ io.on('connection', (socket) => {
             (err) => {
                 if (err) return;
                 const newMessage = { id: msgId, chatId, senderEmail, receiverEmail, text, timestamp: msgTimestamp };
+                
+                // Надсилаємо і в кімнату чату, і напряму отримувачу для надійної доставки
                 io.to(chatId).emit('receive_message', newMessage);
+                if (receiverEmail) {
+                    io.to(receiverEmail.trim().toLowerCase()).emit('receive_message', newMessage);
+                }
             }
         );
     });
@@ -203,6 +215,7 @@ io.on('connection', (socket) => {
 
         socket.userEmail = cleanCaller;
         userSockets.set(cleanCaller, socket.id);
+        socket.join(cleanCaller);
 
         if (busyUsers.has(cleanReceiver) || busyUsers.has(cleanCaller)) {
             const callerSocketId = userSockets.get(cleanCaller);
@@ -220,6 +233,9 @@ io.on('connection', (socket) => {
         if (receiverSocketId) {
             io.to(receiverSocketId).emit(`incoming_call_${cleanReceiver}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
         } else {
+            // Додатково продублювати через персональну кімнату
+            io.to(cleanReceiver).emit(`incoming_call_${cleanReceiver}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
+            
             const callerSocketId = userSockets.get(cleanCaller);
             if (callerSocketId) {
                 io.to(callerSocketId).emit(`call_busy_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
@@ -242,6 +258,7 @@ io.on('connection', (socket) => {
         if (callerSocketId) {
             io.to(callerSocketId).emit(`call_answered_${cleanCaller}`, { callerEmail, receiverEmail });
         }
+        io.to(cleanCaller).emit(`call_answered_${cleanCaller}`, { callerEmail, receiverEmail });
     });
 
     socket.on('reject_call', (data) => {
@@ -256,6 +273,7 @@ io.on('connection', (socket) => {
         if (callerSocketId) {
             io.to(callerSocketId).emit(`call_rejected_${cleanCaller}`, { callerEmail, receiverEmail });
         }
+        io.to(cleanCaller).emit(`call_rejected_${cleanCaller}`, { callerEmail, receiverEmail });
     });
 
     socket.on('end_call', (data) => {
@@ -267,11 +285,13 @@ io.on('connection', (socket) => {
             busyUsers.delete(cleanCaller);
             const sId = userSockets.get(cleanCaller);
             if (sId) io.to(sId).emit(`call_ended_${cleanCaller}`, {});
+            io.to(cleanCaller).emit(`call_ended_${cleanCaller}`, {});
         }
         if (cleanReceiver) {
             busyUsers.delete(cleanReceiver);
             const sId = userSockets.get(cleanReceiver);
             if (sId) io.to(sId).emit(`call_ended_${cleanReceiver}`, {});
+            io.to(cleanReceiver).emit(`call_ended_${cleanReceiver}`, {});
         }
     });
 
@@ -283,6 +303,7 @@ io.on('connection', (socket) => {
         if (targetSocketId) {
             io.to(targetSocketId).emit(`voice_chunk_${cleanTarget}`, chunk);
         }
+        io.to(cleanTarget).emit(`voice_chunk_${cleanTarget}`, chunk);
     });
 
     socket.on('disconnect', () => {
