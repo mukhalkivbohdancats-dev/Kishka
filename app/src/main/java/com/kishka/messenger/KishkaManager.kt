@@ -24,35 +24,49 @@ class KishkaManager(private val context: Context) {
     private val auth = FirebaseAuth.getInstance()
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private var socket: Socket? = null
     private var currentActiveChatId: String? = null
 
     companion object {
         const val SERVER_URL = "https://kishka.onrender.com"
         const val DEFAULT_AVATAR_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/ic_launcher.png"
-    }
+        
+        private var socketInstance: Socket? = null
 
-    init {
-        initSocket()
-    }
-
-    private fun initSocket() {
-        try {
-            val options = IO.Options().apply {
-                forceNew = true
-                reconnection = true
-                timeout = 20000
+        @Synchronized
+        fun getSocket(): Socket {
+            if (socketInstance == null) {
+                try {
+                    val options = IO.Options().apply {
+                        forceNew = false // Виправлено: використовуємо стабільне з'єднання замість створення нових сокетів
+                        reconnection = true
+                        reconnectionAttempts = Int.MAX_VALUE
+                        reconnectionDelay = 1000
+                        timeout = 20000
+                    }
+                    socketInstance = IO.socket(SERVER_URL, options)
+                    socketInstance?.connect()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
-            socket = IO.socket(SERVER_URL, options)
-            socket?.connect()
-        } catch (e: Exception) {
-            e.printStackTrace()
+            return socketInstance!!
         }
     }
 
+    private val socket: Socket
+        get() = getSocket()
+
+    init {
+        ensureConnected()
+    }
+
     private fun ensureConnected() {
-        if (socket == null || socket?.connected() != true) {
-            initSocket()
+        try {
+            if (!socket.connected()) {
+                socket.connect()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
@@ -65,7 +79,10 @@ class KishkaManager(private val context: Context) {
 
         cm.registerNetworkCallback(builder.build(), object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                mainHandler.post { onStateChanged(true) }
+                mainHandler.post { 
+                    onStateChanged(true)
+                    ensureConnected()
+                }
             }
 
             override fun onLost(network: Network) {
@@ -91,7 +108,7 @@ class KishkaManager(private val context: Context) {
             put("name", name)
             put("avatarUrl", avatarUrl ?: DEFAULT_AVATAR_URL)
         }
-        socket?.emit("register_or_update_user", json)
+        socket.emit("register_or_update_user", json)
     }
 
     fun getUserProfile(email: String, onResult: (User?) -> Unit) {
@@ -111,7 +128,7 @@ class KishkaManager(private val context: Context) {
         }
         mainHandler.postDelayed(timeoutRunnable, 4000)
 
-        socket?.emit("get_user_profile", cleanEmail, io.socket.client.Ack { args ->
+        socket.emit("get_user_profile", cleanEmail, io.socket.client.Ack { args ->
             mainHandler.post {
                 if (!handled) {
                     handled = true
@@ -154,7 +171,7 @@ class KishkaManager(private val context: Context) {
             put("targetEmail", cleanTargetEmail)
         }
 
-        socket?.emit("add_contact", req, io.socket.client.Ack { args ->
+        socket.emit("add_contact", req, io.socket.client.Ack { args ->
             mainHandler.post {
                 if (args.isNotEmpty() && args[0] is JSONObject) {
                     val res = args[0] as JSONObject
@@ -187,7 +204,7 @@ class KishkaManager(private val context: Context) {
         if (cleanEmail.isEmpty()) return
         ensureConnected()
 
-        socket?.emit("get_contacts", cleanEmail, io.socket.client.Ack { args ->
+        socket.emit("get_contacts", cleanEmail, io.socket.client.Ack { args ->
             mainHandler.post {
                 if (args.isNotEmpty() && args[0] is JSONArray) {
                     val array = args[0] as JSONArray
@@ -222,11 +239,11 @@ class KishkaManager(private val context: Context) {
 
         val messagesList = mutableListOf<Message>()
 
-        socket?.off("load_history")
-        socket?.off("receive_message")
-        socket?.off("message_deleted")
+        socket.off("load_history")
+        socket.off("receive_message")
+        socket.off("message_deleted")
 
-        socket?.on("load_history") { args ->
+        socket.on("load_history") { args ->
             if (args.isNotEmpty() && args[0] is JSONArray) {
                 val array = args[0] as JSONArray
                 messagesList.clear()
@@ -247,7 +264,7 @@ class KishkaManager(private val context: Context) {
             }
         }
 
-        socket?.on("receive_message") { args ->
+        socket.on("receive_message") { args ->
             if (args.isNotEmpty() && args[0] is JSONObject) {
                 val obj = args[0] as JSONObject
                 val msgChatId = obj.optString("chatId", "")
@@ -267,7 +284,7 @@ class KishkaManager(private val context: Context) {
             }
         }
 
-        socket?.on("message_deleted") { args ->
+        socket.on("message_deleted") { args ->
             if (args.isNotEmpty() && args[0] is String) {
                 val deletedId = args[0] as String
                 messagesList.removeAll { it.id == deletedId }
@@ -276,7 +293,7 @@ class KishkaManager(private val context: Context) {
         }
 
         val joinData = JSONObject().apply { put("chatId", chatId) }
-        socket?.emit("join_chat", joinData)
+        socket.emit("join_chat", joinData)
     }
 
     fun sendMessage(senderEmail: String, receiverEmail: String, text: String) {
@@ -293,7 +310,7 @@ class KishkaManager(private val context: Context) {
             put("timestamp", System.currentTimeMillis())
         }
 
-        socket?.emit("send_message", jsonMsg)
+        socket.emit("send_message", jsonMsg)
     }
 
     fun deleteMessage(senderEmail: String, receiverEmail: String, messageId: String) {
@@ -303,7 +320,7 @@ class KishkaManager(private val context: Context) {
             put("messageId", messageId)
             put("chatId", chatId)
         }
-        socket?.emit("delete_message", json)
+        socket.emit("delete_message", json)
     }
 
     fun sendFileMessage(senderEmail: String, receiverEmail: String, fileUri: Uri, fileType: String) {
@@ -362,12 +379,12 @@ class KishkaManager(private val context: Context) {
 
     fun leaveChatRoom() {
         currentActiveChatId?.let { chatId ->
-            socket?.emit("leave_chat", chatId)
+            socket.emit("leave_chat", chatId)
         }
         currentActiveChatId = null
-        socket?.off("load_history")
-        socket?.off("receive_message")
-        socket?.off("message_deleted")
+        socket.off("load_history")
+        socket.off("receive_message")
+        socket.off("message_deleted")
     }
 
     fun listenForCallHistory(myEmail: String, onLogsUpdated: (List<CallLogItem>) -> Unit) {
@@ -380,7 +397,7 @@ class KishkaManager(private val context: Context) {
             put("callerEmail", callerEmail.trim().lowercase())
             put("receiverEmail", receiverEmail.trim().lowercase())
         }
-        socket?.emit("start_call", json)
+        socket.emit("start_call", json)
     }
 
     fun answerCall(callerEmail: String, receiverEmail: String) {
@@ -389,7 +406,7 @@ class KishkaManager(private val context: Context) {
             put("callerEmail", callerEmail.trim().lowercase())
             put("receiverEmail", receiverEmail.trim().lowercase())
         }
-        socket?.emit("answer_call", json)
+        socket.emit("answer_call", json)
     }
 
     fun rejectCall(callerEmail: String, receiverEmail: String) {
@@ -398,7 +415,7 @@ class KishkaManager(private val context: Context) {
             put("callerEmail", callerEmail.trim().lowercase())
             put("receiverEmail", receiverEmail.trim().lowercase())
         }
-        socket?.emit("reject_call", json)
+        socket.emit("reject_call", json)
     }
 
     fun endCall(callerEmail: String, receiverEmail: String) {
@@ -407,7 +424,7 @@ class KishkaManager(private val context: Context) {
             put("callerEmail", callerEmail.trim().lowercase())
             put("receiverEmail", receiverEmail.trim().lowercase())
         }
-        socket?.emit("end_call", json)
+        socket.emit("end_call", json)
     }
 
     fun sendVoiceChunk(targetEmail: String, chunk: ByteArray) {
@@ -419,7 +436,7 @@ class KishkaManager(private val context: Context) {
                 put("targetEmail", targetEmail.trim().lowercase())
                 put("chunk", base64Str)
             }
-            socket?.emit("voice_chunk", json)
+            socket.emit("voice_chunk", json)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -430,8 +447,8 @@ class KishkaManager(private val context: Context) {
         if (cleanEmail.isEmpty()) return
         ensureConnected()
 
-        socket?.off("voice_chunk_$cleanEmail")
-        socket?.on("voice_chunk_$cleanEmail") { args ->
+        socket.off("voice_chunk_$cleanEmail")
+        socket.on("voice_chunk_$cleanEmail") { args ->
             if (args.isNotEmpty()) {
                 try {
                     val item = args[0]
@@ -457,7 +474,7 @@ class KishkaManager(private val context: Context) {
     fun stopListeningForVoiceChunks(myEmail: String) {
         val cleanEmail = myEmail.trim().lowercase()
         if (cleanEmail.isEmpty()) return
-        socket?.off("voice_chunk_$cleanEmail")
+        socket.off("voice_chunk_$cleanEmail")
     }
 
     fun listenForCallEvents(
@@ -472,13 +489,13 @@ class KishkaManager(private val context: Context) {
         if (cleanEmail.isEmpty()) return
         ensureConnected()
 
-        socket?.off("incoming_call_$cleanEmail")
-        socket?.off("call_answered_$cleanEmail")
-        socket?.off("call_rejected_$cleanEmail")
-        socket?.off("call_ended_$cleanEmail")
-        socket?.off("call_busy_$cleanEmail")
+        socket.off("incoming_call_$cleanEmail")
+        socket.off("call_answered_$cleanEmail")
+        socket.off("call_rejected_$cleanEmail")
+        socket.off("call_ended_$cleanEmail")
+        socket.off("call_busy_$cleanEmail")
 
-        socket?.on("incoming_call_$cleanEmail") { args ->
+        socket.on("incoming_call_$cleanEmail") { args ->
             if (args.isNotEmpty() && args[0] is JSONObject) {
                 val obj = args[0] as JSONObject
                 val caller = obj.optString("callerEmail", "")
@@ -486,19 +503,19 @@ class KishkaManager(private val context: Context) {
             }
         }
 
-        socket?.on("call_answered_$cleanEmail") {
+        socket.on("call_answered_$cleanEmail") {
             mainHandler.post { onCallAnswered() }
         }
 
-        socket?.on("call_rejected_$cleanEmail") {
+        socket.on("call_rejected_$cleanEmail") {
             mainHandler.post { onCallRejected() }
         }
 
-        socket?.on("call_ended_$cleanEmail") {
+        socket.on("call_ended_$cleanEmail") {
             mainHandler.post { onCallEnded() }
         }
 
-        socket?.on("call_busy_$cleanEmail") {
+        socket.on("call_busy_$cleanEmail") {
             mainHandler.post { onCallBusy() }
         }
     }
