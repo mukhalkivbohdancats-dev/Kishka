@@ -263,7 +263,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // МИТТЄВА доставка аудіопотоку напряму отримувачу за socket.id
     socket.on('voice_chunk', (data) => {
         const { targetEmail, chunk } = data || {};
         if (!targetEmail || !chunk) return;
