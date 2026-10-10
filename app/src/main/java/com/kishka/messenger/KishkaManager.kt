@@ -336,13 +336,13 @@ class KishkaManager(private val context: Context) {
         }
     }
 
-    // Глобальний слухач для фонових сповіщень про нові повідомлення
-    fun listenForGlobalMessages(myEmail: String) {
+    // Глобальний слухач для фонових сповіщень (працює завжди у фоні, як у Telegram/Viber)
+    fun startGlobalMessageListener(myEmail: String) {
         val cleanEmail = myEmail.trim().lowercase()
         if (cleanEmail.isEmpty()) return
         ensureConnected()
 
-        socket.off("global_receive_message")
+        socket.off("global_msg_listener")
         socket.on("receive_message") { args ->
             if (args.isNotEmpty() && args[0] is JSONObject) {
                 val obj = args[0] as JSONObject
