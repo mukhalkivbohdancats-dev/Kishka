@@ -13,6 +13,8 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.Ringtone
 import android.media.RingtoneManager
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -43,6 +45,9 @@ class CallService : Service() {
 
     private val audioQueue = LinkedBlockingQueue<ByteArray>()
 
+    private var acousticEchoCanceler: AcousticEchoCanceler? = null
+    private var noiseSuppressor: NoiseSuppressor? = null
+
     companion object {
         const val CHANNEL_ID = "KishkaCallChannel"
         const val NOTIFICATION_ID = 1001
@@ -57,7 +62,7 @@ class CallService : Service() {
         const val EXTRA_TARGET_PHONE = "EXTRA_TARGET_PHONE"
         const val EXTRA_MY_EMAIL = "EXTRA_MY_EMAIL"
 
-        private const val SAMPLE_RATE = 16000 // HD якість звуку[span_1](start_span)[span_1](end_span)
+        private const val SAMPLE_RATE = 16000 // HD якість звуку[span_0](start_span)[span_0](end_span)
         private const val CHANNEL_CONFIG_IN = AudioFormat.CHANNEL_IN_MONO
         private const val CHANNEL_CONFIG_OUT = AudioFormat.CHANNEL_OUT_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
@@ -139,6 +144,7 @@ class CallService : Service() {
         try {
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
             audioManager.isMicrophoneMute = false
+            audioManager.isSpeakerphoneOn = true // Автоматично вмикаємо динамік для комфортного дзвінка
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
@@ -179,6 +185,26 @@ class CallService : Service() {
                     minBuf * 2
                 )
                 if (recorder.state == AudioRecord.STATE_INITIALIZED) {
+                    // Увімкнення апаратного ехоподавлення (AEC) для усунення відлуння
+                    try {
+                        if (AcousticEchoCanceler.isAvailable()) {
+                            acousticEchoCanceler = AcousticEchoCanceler.create(recorder.audioSessionId)
+                            acousticEchoCanceler?.enabled = true
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+
+                    // Увімкнення шумозаглушення
+                    try {
+                        if (NoiseSuppressor.isAvailable()) {
+                            noiseSuppressor = NoiseSuppressor.create(recorder.audioSessionId)
+                            noiseSuppressor?.enabled = true
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+
                     return recorder
                 } else {
                     recorder.release()
@@ -198,7 +224,7 @@ class CallService : Service() {
 
         val minRecBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_IN, AUDIO_FORMAT)
         val minTrackBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_OUT, AUDIO_FORMAT)
-        val frameSize = 960 // Оптимальний розмір фрейму для миттєвої передачі без затримок
+        val frameSize = 960 // Оптимальний розмір фрейму для передачі без затримок
 
         try {
             audioRecord = createAudioRecord(minRecBuf)
@@ -227,8 +253,8 @@ class CallService : Service() {
             if (myEmail.isNotEmpty()) {
                 manager.listenForVoiceChunks(myEmail) { chunk ->
                     if (isCallActive) {
-                        // Очищаємо старі пакети, якщо черга переповнюється, щоб уникнути зависання звуку
-                        if (audioQueue.size > 3) {
+                        // Миттєве очищення черги при переповненні для уникнення затримок
+                        if (audioQueue.size > 2) {
                             audioQueue.poll()
                         }
                         audioQueue.offer(chunk)
@@ -236,7 +262,7 @@ class CallService : Service() {
                 }
             }
 
-            // Потік відтворення вхідного звуку
+            // Потік відтворення вхідного голосу
             playbackThread = thread(start = true) {
                 while (isCallActive) {
                     try {
@@ -250,7 +276,7 @@ class CallService : Service() {
                 }
             }
 
-            // Потік запису та відправки голосу (виправлено баг з дублюванням та розтягуванням звуку)
+            // Потік запису та відправки голосу
             recordingThread = thread(start = true) {
                 val buffer = ByteArray(frameSize)
 
@@ -290,6 +316,20 @@ class CallService : Service() {
         }
 
         audioQueue.clear()
+
+        try {
+            acousticEchoCanceler?.release()
+            acousticEchoCanceler = null
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        try {
+            noiseSuppressor?.release()
+            noiseSuppressor = null
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
 
         try {
             playbackThread?.interrupt()
