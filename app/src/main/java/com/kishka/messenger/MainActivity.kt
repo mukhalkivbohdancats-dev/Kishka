@@ -341,7 +341,7 @@ fun KishkaApp() {
                     incomingCallFrom = null
                 },
                 onCallBusy = {
-                    Toast.makeText(context, "Лінія зайнята (абонент розмовляє)", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "Лінія зайнята або абонент розмовляє", Toast.LENGTH_LONG).show()
                     val intent = Intent(context, CallService::class.java).apply { action = CallService.ACTION_END_CALL }
                     context.startService(intent)
                     activeCallTargetPhone = null
@@ -402,6 +402,14 @@ fun KishkaApp() {
             OfflineBanner(lang = currentLanguage)
         }
 
+        if (activeCallTargetPhone != null && isCallMinimized) {
+            ActiveCallBanner(
+                targetPhone = activeCallTargetPhone!!,
+                onExpandCall = { isCallMinimized = false },
+                onEndCall = stopCallAction
+            )
+        }
+
         if (!permissionsGranted && currentUserEmail.isNotEmpty()) {
             PermissionsScreen(
                 lang = currentLanguage,
@@ -415,6 +423,7 @@ fun KishkaApp() {
                     val caller = incomingCallFrom!!
                     activeCallTargetPhone = caller
                     incomingCallFrom = null
+                    isCallMinimized = false
                     manager.answerCall(caller, currentUserEmail)
 
                     val intent = Intent(context, CallService::class.java).apply {
@@ -466,21 +475,11 @@ fun KishkaApp() {
                 }
             )
         } else {
-            if (activeCallTargetPhone != null && isCallMinimized) {
-                ActiveCallBanner(
-                    targetPhone = activeCallTargetPhone!!,
-                    onExpandCall = { isCallMinimized = false },
-                    onEndCall = stopCallAction
-                )
-            }
-
             if (isLandscape) {
                 Row(modifier = Modifier.fillMaxSize()) {
                     NavigationRail(
                         containerColor = Color.White,
-                        header = {
-                            Spacer(modifier = Modifier.height(8.dp))
-                        }
+                        header = { Spacer(modifier = Modifier.height(8.dp)) }
                     ) {
                         NavigationRailItem(
                             selected = selectedBottomTab == 0,
@@ -1291,9 +1290,7 @@ fun ChatScreen(
                                 .padding(4.dp)
                                 .combinedClickable(
                                     onClick = {},
-                                    onLongClick = {
-                                        selectedMessageForMenu = msg
-                                    }
+                                    onLongClick = { selectedMessageForMenu = msg }
                                 )
                         ) {
                             Text(
