@@ -336,6 +336,27 @@ class KishkaManager(private val context: Context) {
         }
     }
 
+    // Глобальний слухач для фонових сповіщень про нові повідомлення
+    fun listenForGlobalMessages(myEmail: String) {
+        val cleanEmail = myEmail.trim().lowercase()
+        if (cleanEmail.isEmpty()) return
+        ensureConnected()
+
+        socket.off("global_receive_message")
+        socket.on("receive_message") { args ->
+            if (args.isNotEmpty() && args[0] is JSONObject) {
+                val obj = args[0] as JSONObject
+                val msgSender = obj.optString("senderEmail", "")
+                val msgText = obj.optString("text", "")
+                val receiver = obj.optString("receiverEmail", "")
+
+                if (receiver.trim().lowercase() == cleanEmail && msgSender != cleanEmail) {
+                    showBackgroundMessageNotification(msgSender, msgText)
+                }
+            }
+        }
+    }
+
     fun connectAndListenForMessages(
         senderEmail: String,
         receiverEmail: String,
