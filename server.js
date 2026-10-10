@@ -116,7 +116,6 @@ io.on('connection', (socket) => {
                 stmt.run(cleanMy, cleanTarget);
                 stmt.run(cleanTarget, cleanMy);
                 stmt.finalize(() => {
-                    // Взаємне сповіщення обох користувачів про оновлення контактів
                     io.to(cleanMy).emit('contact_updated');
                     io.to(cleanTarget).emit('contact_updated');
 
@@ -294,14 +293,11 @@ io.on('connection', (socket) => {
         }
     });
 
+    // ВИПРАВЛЕНО: усунуто подвійну відправку пакетів (дублювання прибрано повністю)
     socket.on('voice_chunk', (data) => {
         const { targetEmail, chunk } = data || {};
         if (!targetEmail || !chunk) return;
         const cleanTarget = targetEmail.trim().toLowerCase();
-        const targetSocketId = userSockets.get(cleanTarget);
-        if (targetSocketId) {
-            io.to(targetSocketId).emit(`voice_chunk_${cleanTarget}`, chunk);
-        }
         io.to(cleanTarget).emit(`voice_chunk_${cleanTarget}`, chunk);
     });
 
