@@ -13,6 +13,11 @@ const io = new Server(server, {
     maxHttpBufferSize: 1e7
 });
 
+// Додано кореневий маршрут для підтримання активності (keep-alive) на Render
+app.get('/', (req, res) => {
+    res.send('Kishka Messenger Server is active and running!');
+});
+
 const busyUsers = new Set();
 const userSockets = new Map();
 
@@ -293,7 +298,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // ВИПРАВЛЕНО: усунуто подвійну відправку пакетів (дублювання прибрано повністю)
     socket.on('voice_chunk', (data) => {
         const { targetEmail, chunk } = data || {};
         if (!targetEmail || !chunk) return;
