@@ -14,7 +14,7 @@ const io = new Server(server, {
 });
 
 const busyUsers = new Set();
-const userSockets = new Map(); // Мапінг email -> socket.id для миттєвої доставки дзвінків та голосу
+const userSockets = new Map();
 
 const db = new sqlite3.Database('./chat.db', (err) => {
     if (err) {
@@ -204,7 +204,7 @@ io.on('connection', (socket) => {
         socket.userEmail = cleanCaller;
         userSockets.set(cleanCaller, socket.id);
 
-        if (busyUsers.has(cleanReceiver)) {
+        if (busyUsers.has(cleanReceiver) || busyUsers.has(cleanCaller)) {
             const callerSocketId = userSockets.get(cleanCaller);
             if (callerSocketId) {
                 io.to(callerSocketId).emit(`call_busy_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
@@ -219,6 +219,13 @@ io.on('connection', (socket) => {
         const receiverSocketId = userSockets.get(cleanReceiver);
         if (receiverSocketId) {
             io.to(receiverSocketId).emit(`incoming_call_${cleanReceiver}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
+        } else {
+            const callerSocketId = userSockets.get(cleanCaller);
+            if (callerSocketId) {
+                io.to(callerSocketId).emit(`call_busy_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
+            }
+            busyUsers.delete(cleanCaller);
+            busyUsers.delete(cleanReceiver);
         }
     });
 
@@ -226,6 +233,11 @@ io.on('connection', (socket) => {
         const { callerEmail, receiverEmail } = data || {};
         if (!callerEmail) return;
         const cleanCaller = callerEmail.trim().toLowerCase();
+        const cleanReceiver = (receiverEmail || '').trim().toLowerCase();
+
+        if (cleanCaller) busyUsers.add(cleanCaller);
+        if (cleanReceiver) busyUsers.add(cleanReceiver);
+
         const callerSocketId = userSockets.get(cleanCaller);
         if (callerSocketId) {
             io.to(callerSocketId).emit(`call_answered_${cleanCaller}`, { callerEmail, receiverEmail });
