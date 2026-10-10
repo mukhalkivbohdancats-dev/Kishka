@@ -282,7 +282,7 @@ class KishkaManager(private val context: Context) {
 
         ensureConnected()
 
-        val fetchContacts = {
+        fun fetchAndNotify() {
             socket.emit("get_contacts", cleanEmail, io.socket.client.Ack { args ->
                 mainHandler.post {
                     if (args.isNotEmpty() && args[0] is JSONArray) {
@@ -306,12 +306,11 @@ class KishkaManager(private val context: Context) {
             })
         }
 
-        fetchContacts()
+        fetchAndNotify()
 
-        // Автоматичне оновлення контактів, якщо інший телефон додав вас
         socket.off("contact_updated")
         socket.on("contact_updated") {
-            fetchContacts()
+            fetchAndNotify()
         }
     }
 
