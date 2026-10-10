@@ -282,27 +282,37 @@ class KishkaManager(private val context: Context) {
 
         ensureConnected()
 
-        socket.emit("get_contacts", cleanEmail, io.socket.client.Ack { args ->
-            mainHandler.post {
-                if (args.isNotEmpty() && args[0] is JSONArray) {
-                    val array = args[0] as JSONArray
-                    val list = mutableListOf<User>()
-                    for (i in 0 until array.length()) {
-                        val obj = array.getJSONObject(i)
-                        list.add(
-                            User(
-                                uid = obj.optString("email", ""),
-                                email = obj.optString("email", ""),
-                                name = obj.optString("name", ""),
-                                avatarUrl = obj.optString("avatarUrl", DEFAULT_AVATAR_URL)
+        val fetchContacts = {
+            socket.emit("get_contacts", cleanEmail, io.socket.client.Ack { args ->
+                mainHandler.post {
+                    if (args.isNotEmpty() && args[0] is JSONArray) {
+                        val array = args[0] as JSONArray
+                        val list = mutableListOf<User>()
+                        for (i in 0 until array.length()) {
+                            val obj = array.getJSONObject(i)
+                            list.add(
+                                User(
+                                    uid = obj.optString("email", ""),
+                                    email = obj.optString("email", ""),
+                                    name = obj.optString("name", ""),
+                                    avatarUrl = obj.optString("avatarUrl", DEFAULT_AVATAR_URL)
+                                )
                             )
-                        )
+                        }
+                        cacheContactsLocally(cleanEmail, list)
+                        onContactsUpdated(list)
                     }
-                    cacheContactsLocally(cleanEmail, list)
-                    onContactsUpdated(list)
                 }
-            }
-        })
+            })
+        }
+
+        fetchContacts()
+
+        // Автоматичне оновлення контактів, якщо інший телефон додав вас
+        socket.off("contact_updated")
+        socket.on("contact_updated") {
+            fetchContacts()
+        }
     }
 
     fun connectAndListenForMessages(
@@ -353,18 +363,21 @@ class KishkaManager(private val context: Context) {
                 val obj = args[0] as JSONObject
                 val msgChatId = obj.optString("chatId", "")
                 if (msgChatId == currentActiveChatId) {
-                    messagesList.add(
-                        Message(
-                            id = obj.optString("id", ""),
-                            chatId = msgChatId,
-                            senderEmail = obj.optString("senderEmail", ""),
-                            receiverEmail = obj.optString("receiverEmail", ""),
-                            text = obj.optString("text", ""),
-                            timestamp = obj.optLong("timestamp", System.currentTimeMillis())
+                    val msgId = obj.optString("id", "")
+                    if (messagesList.none { it.id == msgId }) {
+                        messagesList.add(
+                            Message(
+                                id = msgId,
+                                chatId = msgChatId,
+                                senderEmail = obj.optString("senderEmail", ""),
+                                receiverEmail = obj.optString("receiverEmail", ""),
+                                text = obj.optString("text", ""),
+                                timestamp = obj.optLong("timestamp", System.currentTimeMillis())
+                            )
                         )
-                    )
-                    cacheMessagesLocally(chatId, messagesList)
-                    mainHandler.post { onMessagesUpdated(messagesList.toList()) }
+                        cacheMessagesLocally(chatId, messagesList)
+                        mainHandler.post { onMessagesUpdated(messagesList.toList()) }
+                    }
                 }
             }
         }
