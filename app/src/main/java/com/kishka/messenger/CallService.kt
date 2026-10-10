@@ -184,7 +184,7 @@ class CallService : Service() {
                     maxOf(minBuf * 2, 2048)
                 )
                 if (recorder.state == AudioRecord.STATE_INITIALIZED) {
-                    // Апаратне придушення еха та шуму для усунення повторення звуку
+                    // Апаратне придушення еха та шуму для повного усунення відлуння та багів
                     try {
                         if (AcousticEchoCanceler.isAvailable()) {
                             acousticEchoCanceler = AcousticEchoCanceler.create(recorder.audioSessionId)
@@ -251,8 +251,8 @@ class CallService : Service() {
             if (myEmail.isNotEmpty()) {
                 manager.listenForVoiceChunks(myEmail) { chunk ->
                     if (isCallActive) {
-                        if (audioQueue.size > 4) {
-                            audioQueue.poll()
+                        if (audioQueue.size > 3) {
+                            audioQueue.poll() // скидання старих пакетів для мінімізації затримки та еха
                         }
                         audioQueue.offer(chunk)
                     }
