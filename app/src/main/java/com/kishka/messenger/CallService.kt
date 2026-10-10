@@ -31,7 +31,7 @@ class CallService : Service() {
     private var ringtone: Ringtone? = null
     
     private var isMuted = false
-    private var isSpeakerOn = false
+    private var isSpeakerOn = true
     private var isCallActive = false
 
     private var targetEmail: String = ""
@@ -62,7 +62,7 @@ class CallService : Service() {
         const val EXTRA_TARGET_PHONE = "EXTRA_TARGET_PHONE"
         const val EXTRA_MY_EMAIL = "EXTRA_MY_EMAIL"
 
-        private const val SAMPLE_RATE = 16000 // HD якість звуку[span_0](start_span)[span_0](end_span)
+        private const val SAMPLE_RATE = 16000 
         private const val CHANNEL_CONFIG_IN = AudioFormat.CHANNEL_IN_MONO
         private const val CHANNEL_CONFIG_OUT = AudioFormat.CHANNEL_OUT_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
@@ -144,7 +144,7 @@ class CallService : Service() {
         try {
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
             audioManager.isMicrophoneMute = false
-            audioManager.isSpeakerphoneOn = true // Автоматично вмикаємо динамік для комфортного дзвінка
+            audioManager.isSpeakerphoneOn = true
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
@@ -172,8 +172,7 @@ class CallService : Service() {
     private fun createAudioRecord(minBuf: Int): AudioRecord? {
         val sources = intArrayOf(
             MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-            MediaRecorder.AudioSource.MIC,
-            MediaRecorder.AudioSource.CAMCORDER
+            MediaRecorder.AudioSource.MIC
         )
         for (source in sources) {
             try {
@@ -182,10 +181,9 @@ class CallService : Service() {
                     SAMPLE_RATE,
                     CHANNEL_CONFIG_IN,
                     AUDIO_FORMAT,
-                    minBuf * 2
+                    maxOf(minBuf * 4, 4096)
                 )
                 if (recorder.state == AudioRecord.STATE_INITIALIZED) {
-                    // Увімкнення апаратного ехоподавлення (AEC) для усунення відлуння
                     try {
                         if (AcousticEchoCanceler.isAvailable()) {
                             acousticEchoCanceler = AcousticEchoCanceler.create(recorder.audioSessionId)
@@ -195,7 +193,6 @@ class CallService : Service() {
                         e.printStackTrace()
                     }
 
-                    // Увімкнення шумозаглушення
                     try {
                         if (NoiseSuppressor.isAvailable()) {
                             noiseSuppressor = NoiseSuppressor.create(recorder.audioSessionId)
@@ -224,7 +221,7 @@ class CallService : Service() {
 
         val minRecBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_IN, AUDIO_FORMAT)
         val minTrackBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_OUT, AUDIO_FORMAT)
-        val frameSize = 960 // Оптимальний розмір фрейму для передачі без затримок
+        val frameSize = 960
 
         try {
             audioRecord = createAudioRecord(minRecBuf)
@@ -243,7 +240,7 @@ class CallService : Service() {
                         .setChannelMask(CHANNEL_CONFIG_OUT)
                         .build()
                 )
-                .setBufferSizeInBytes(minTrackBuf * 2)
+                .setBufferSizeInBytes(maxOf(minTrackBuf * 4, 8192))
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
 
@@ -253,8 +250,7 @@ class CallService : Service() {
             if (myEmail.isNotEmpty()) {
                 manager.listenForVoiceChunks(myEmail) { chunk ->
                     if (isCallActive) {
-                        // Миттєве очищення черги при переповненні для уникнення затримок
-                        if (audioQueue.size > 2) {
+                        if (audioQueue.size > 15) {
                             audioQueue.poll()
                         }
                         audioQueue.offer(chunk)
@@ -262,13 +258,17 @@ class CallService : Service() {
                 }
             }
 
-            // Потік відтворення вхідного голосу
             playbackThread = thread(start = true) {
+                val silenceBuffer = ByteArray(frameSize) { 0 }
                 while (isCallActive) {
                     try {
-                        val chunk = audioQueue.poll(10, TimeUnit.MILLISECONDS)
-                        if (chunk != null && isCallActive) {
-                            audioTrack?.write(chunk, 0, chunk.size)
+                        val chunk = audioQueue.poll(20, TimeUnit.MILLISECONDS)
+                        if (isCallActive) {
+                            if (chunk != null) {
+                                audioTrack?.write(chunk, 0, chunk.size)
+                            } else {
+                                audioTrack?.write(silenceBuffer, 0, silenceBuffer.size)
+                            }
                         }
                     } catch (e: Exception) {
                         break
@@ -276,7 +276,6 @@ class CallService : Service() {
                 }
             }
 
-            // Потік запису та відправки голосу
             recordingThread = thread(start = true) {
                 val buffer = ByteArray(frameSize)
 
@@ -294,12 +293,6 @@ class CallService : Service() {
                             manager.sendVoiceChunk(targetEmail, chunkToSend)
                         }
                     } else {
-                        try {
-                            rec.stop()
-                            rec.startRecording()
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
                         try { Thread.sleep(10) } catch (e: Exception) { break }
                     }
                 }
@@ -371,7 +364,7 @@ class CallService : Service() {
 
     private fun startIncomingCallNotification(callerName: String) {
         val fullScreenIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
         val fullScreenPendingIntent = PendingIntent.getActivity(
             this, 0, fullScreenIntent,
