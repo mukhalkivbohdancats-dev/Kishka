@@ -303,7 +303,7 @@ fun KishkaApp() {
         if (currentUserEmail.isNotEmpty()) {
             isDataLoading = true
 
-            // Запускаємо постійний глобальний слухач повідомлень для фонових пуш-сповіщень
+            // Запускаємо глобальний слухач для отримання повідомлень у фоні
             manager.startGlobalMessageListener(currentUserEmail)
 
             manager.listenForCallEvents(
