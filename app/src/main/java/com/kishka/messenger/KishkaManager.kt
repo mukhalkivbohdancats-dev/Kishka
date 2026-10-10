@@ -1,15 +1,21 @@
 package com.kishka.messenger
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
+import androidx.core.app.NotificationCompat
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.UserProfileChangeRequest
 import com.google.firebase.storage.FirebaseStorage
@@ -31,6 +37,7 @@ class KishkaManager(private val context: Context) {
     companion object {
         const val SERVER_URL = "https://kishka.onrender.com"
         const val DEFAULT_AVATAR_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/ic_launcher.png"
+        const val MSG_CHANNEL_ID = "KishkaMessageChannel"
         
         private var socketInstance: Socket? = null
 
@@ -60,6 +67,21 @@ class KishkaManager(private val context: Context) {
 
     init {
         ensureConnected()
+        createMessageNotificationChannel()
+    }
+
+    private fun createMessageNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                MSG_CHANNEL_ID,
+                "Повідомлення Kishka",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Сповіщення про нові повідомлення"
+            }
+            val manager = context.getSystemService(NotificationManager::class.java)
+            manager?.createNotificationChannel(channel)
+        }
     }
 
     private fun ensureConnected() {
@@ -361,6 +383,14 @@ class KishkaManager(private val context: Context) {
             if (args.isNotEmpty() && args[0] is JSONObject) {
                 val obj = args[0] as JSONObject
                 val msgChatId = obj.optString("chatId", "")
+                val msgSender = obj.optString("senderEmail", "")
+                val msgText = obj.optString("text", "")
+                val receiver = obj.optString("receiverEmail", "")
+
+                if (receiver.trim().lowercase() == senderEmail.trim().lowercase() && msgSender != senderEmail) {
+                    showBackgroundMessageNotification(msgSender, msgText)
+                }
+
                 if (msgChatId == currentActiveChatId) {
                     val msgId = obj.optString("id", "")
                     if (messagesList.none { it.id == msgId }) {
@@ -368,9 +398,9 @@ class KishkaManager(private val context: Context) {
                             Message(
                                 id = msgId,
                                 chatId = msgChatId,
-                                senderEmail = obj.optString("senderEmail", ""),
-                                receiverEmail = obj.optString("receiverEmail", ""),
-                                text = obj.optString("text", ""),
+                                senderEmail = msgSender,
+                                receiverEmail = receiver,
+                                text = msgText,
                                 timestamp = obj.optLong("timestamp", System.currentTimeMillis())
                             )
                         )
@@ -392,6 +422,28 @@ class KishkaManager(private val context: Context) {
 
         val joinData = JSONObject().apply { put("chatId", chatId) }
         socket.emit("join_chat", joinData)
+    }
+
+    private fun showBackgroundMessageNotification(sender: String, text: String) {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(context, MSG_CHANNEL_ID)
+            .setContentTitle("Нове повідомлення від $sender")
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(sender.hashCode(), notification)
     }
 
     fun sendMessage(senderEmail: String, receiverEmail: String, text: String) {
