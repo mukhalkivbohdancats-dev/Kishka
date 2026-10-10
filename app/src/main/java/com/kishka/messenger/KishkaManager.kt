@@ -1,6 +1,7 @@
 package com.kishka.messenger
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -23,6 +24,7 @@ class KishkaManager(private val context: Context) {
     private val storage = FirebaseStorage.getInstance()
     private val auth = FirebaseAuth.getInstance()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val prefs: SharedPreferences = context.getSharedPreferences("kishka_cache_prefs", Context.MODE_PRIVATE)
 
     private var currentActiveChatId: String? = null
 
@@ -98,6 +100,89 @@ class KishkaManager(private val context: Context) {
         return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
+    private fun cacheContactsLocally(myEmail: String, contacts: List<User>) {
+        try {
+            val jsonArray = JSONArray()
+            for (c in contacts) {
+                val obj = JSONObject().apply {
+                    put("email", c.email)
+                    put("name", c.name)
+                    put("avatarUrl", c.avatarUrl ?: DEFAULT_AVATAR_URL)
+                }
+                jsonArray.put(obj)
+            }
+            prefs.edit().putString("cached_contacts_$myEmail", jsonArray.toString()).apply()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun getCachedContacts(myEmail: String): List<User> {
+        val list = mutableListOf<User>()
+        try {
+            val str = prefs.getString("cached_contacts_$myEmail", null) ?: return list
+            val jsonArray = JSONArray(str)
+            for (i in 0 until jsonArray.length()) {
+                val obj = jsonArray.getJSONObject(i)
+                list.add(
+                    User(
+                        uid = obj.optString("email", ""),
+                        email = obj.optString("email", ""),
+                        name = obj.optString("name", ""),
+                        avatarUrl = obj.optString("avatarUrl", DEFAULT_AVATAR_URL)
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return list
+    }
+
+    private fun cacheMessagesLocally(chatId: String, messages: List<Message>) {
+        try {
+            val jsonArray = JSONArray()
+            for (m in messages) {
+                val obj = JSONObject().apply {
+                    put("id", m.id)
+                    put("chatId", m.chatId)
+                    put("senderEmail", m.senderEmail)
+                    put("receiverEmail", m.receiverEmail)
+                    put("text", m.text)
+                    put("timestamp", m.timestamp)
+                }
+                jsonArray.put(obj)
+            }
+            prefs.edit().putString("cached_messages_$chatId", jsonArray.toString()).apply()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun getCachedMessages(chatId: String): List<Message> {
+        val list = mutableListOf<Message>()
+        try {
+            val str = prefs.getString("cached_messages_$chatId", null) ?: return list
+            val jsonArray = JSONArray(str)
+            for (i in 0 until jsonArray.length()) {
+                val obj = jsonArray.getJSONObject(i)
+                list.add(
+                    Message(
+                        id = obj.optString("id", ""),
+                        chatId = obj.optString("chatId", chatId),
+                        senderEmail = obj.optString("senderEmail", ""),
+                        receiverEmail = obj.optString("receiverEmail", ""),
+                        text = obj.optString("text", ""),
+                        timestamp = obj.optLong("timestamp", System.currentTimeMillis())
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return list
+    }
+
     fun registerOrUpdateUserInDb(email: String, name: String, avatarUrl: String? = null) {
         val cleanEmail = email.trim().lowercase()
         if (cleanEmail.isEmpty()) return
@@ -117,34 +202,21 @@ class KishkaManager(private val context: Context) {
             onResult(null)
             return
         }
-        ensureConnected()
 
-        var handled = false
-        val timeoutRunnable = Runnable {
-            if (!handled) {
-                handled = true
-                onResult(User(uid = cleanEmail, email = cleanEmail, name = cleanEmail.substringBefore("@"), avatarUrl = DEFAULT_AVATAR_URL))
-            }
-        }
-        mainHandler.postDelayed(timeoutRunnable, 4000)
+        val cachedName = prefs.getString("profile_name_$cleanEmail", cleanEmail.substringBefore("@")) ?: cleanEmail.substringBefore("@")
+        val cachedAvatar = prefs.getString("profile_avatar_$cleanEmail", DEFAULT_AVATAR_URL) ?: DEFAULT_AVATAR_URL
+        onResult(User(uid = cleanEmail, email = cleanEmail, name = cachedName, avatarUrl = cachedAvatar))
+
+        ensureConnected()
 
         socket.emit("get_user_profile", cleanEmail, io.socket.client.Ack { args ->
             mainHandler.post {
-                if (!handled) {
-                    handled = true
-                    mainHandler.removeCallbacks(timeoutRunnable)
-                    if (args.isNotEmpty() && args[0] is JSONObject) {
-                        val obj = args[0] as JSONObject
-                        val user = User(
-                            uid = obj.optString("email", cleanEmail),
-                            email = obj.optString("email", cleanEmail),
-                            name = obj.optString("name", cleanEmail.substringBefore("@")),
-                            avatarUrl = obj.optString("avatarUrl", DEFAULT_AVATAR_URL)
-                        )
-                        onResult(user)
-                    } else {
-                        onResult(null)
-                    }
+                if (args.isNotEmpty() && args[0] is JSONObject) {
+                    val obj = args[0] as JSONObject
+                    val name = obj.optString("name", cachedName)
+                    val avatar = obj.optString("avatarUrl", cachedAvatar)
+                    prefs.edit().putString("profile_name_$cleanEmail", name).putString("profile_avatar_$cleanEmail", avatar).apply()
+                    onResult(User(uid = cleanEmail, email = cleanEmail, name = name, avatarUrl = avatar))
                 }
             }
         })
@@ -193,7 +265,7 @@ class KishkaManager(private val context: Context) {
                         onResult(false, null, message)
                     }
                 } else {
-                    onResult(false, null, "Сервер Render не відповідає. Зачекайте пару секунд.")
+                    onResult(false, null, "Сервер Render спить. Спробуйте ще раз за секунду.")
                 }
             }
         })
@@ -202,6 +274,12 @@ class KishkaManager(private val context: Context) {
     fun listenToUserContacts(myEmail: String, onContactsUpdated: (List<User>) -> Unit) {
         val cleanEmail = myEmail.trim().lowercase()
         if (cleanEmail.isEmpty()) return
+
+        val cached = getCachedContacts(cleanEmail)
+        if (cached.isNotEmpty()) {
+            onContactsUpdated(cached)
+        }
+
         ensureConnected()
 
         socket.emit("get_contacts", cleanEmail, io.socket.client.Ack { args ->
@@ -220,9 +298,8 @@ class KishkaManager(private val context: Context) {
                             )
                         )
                     }
+                    cacheContactsLocally(cleanEmail, list)
                     onContactsUpdated(list)
-                } else {
-                    onContactsUpdated(emptyList())
                 }
             }
         })
@@ -235,9 +312,15 @@ class KishkaManager(private val context: Context) {
     ) {
         val chatId = getChatId(senderEmail, receiverEmail)
         currentActiveChatId = chatId
+
+        val cachedMsgs = getCachedMessages(chatId)
+        if (cachedMsgs.isNotEmpty()) {
+            onMessagesUpdated(cachedMsgs)
+        }
+
         ensureConnected()
 
-        val messagesList = mutableListOf<Message>()
+        val messagesList = mutableListOf<Message>().apply { addAll(cachedMsgs) }
 
         socket.off("load_history")
         socket.off("receive_message")
@@ -260,6 +343,7 @@ class KishkaManager(private val context: Context) {
                         )
                     )
                 }
+                cacheMessagesLocally(chatId, messagesList)
                 mainHandler.post { onMessagesUpdated(messagesList.toList()) }
             }
         }
@@ -279,6 +363,7 @@ class KishkaManager(private val context: Context) {
                             timestamp = obj.optLong("timestamp", System.currentTimeMillis())
                         )
                     )
+                    cacheMessagesLocally(chatId, messagesList)
                     mainHandler.post { onMessagesUpdated(messagesList.toList()) }
                 }
             }
@@ -288,6 +373,7 @@ class KishkaManager(private val context: Context) {
             if (args.isNotEmpty() && args[0] is String) {
                 val deletedId = args[0] as String
                 messagesList.removeAll { it.id == deletedId }
+                cacheMessagesLocally(chatId, messagesList)
                 mainHandler.post { onMessagesUpdated(messagesList.toList()) }
             }
         }
@@ -355,9 +441,11 @@ class KishkaManager(private val context: Context) {
 
                     currentUser?.updateProfile(profileUpdates)?.addOnCompleteListener {
                         registerOrUpdateUserInDb(cleanEmail, newName, avatarUrlStr)
+                        prefs.edit().putString("profile_name_$cleanEmail", newName).putString("profile_avatar_$cleanEmail", avatarUrlStr).apply()
                         onComplete(true, avatarUrlStr)
                     } ?: run {
                         registerOrUpdateUserInDb(cleanEmail, newName, avatarUrlStr)
+                        prefs.edit().putString("profile_name_$cleanEmail", newName).putString("profile_avatar_$cleanEmail", avatarUrlStr).apply()
                         onComplete(true, avatarUrlStr)
                     }
                 }.addOnFailureListener { onComplete(false, null) }
@@ -369,9 +457,11 @@ class KishkaManager(private val context: Context) {
 
             currentUser?.updateProfile(profileUpdates)?.addOnCompleteListener {
                 registerOrUpdateUserInDb(cleanEmail, newName, null)
+                prefs.edit().putString("profile_name_$cleanEmail", newName).apply()
                 onComplete(true, null)
             } ?: run {
                 registerOrUpdateUserInDb(cleanEmail, newName, null)
+                prefs.edit().putString("profile_name_$cleanEmail", newName).apply()
                 onComplete(true, null)
             }
         }
