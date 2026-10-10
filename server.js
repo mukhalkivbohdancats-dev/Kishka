@@ -29,13 +29,13 @@ db.serialize(() => {
         email TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         avatar_url TEXT
-    )[span_3](start_span)[span_3](end_span)`);
+    )`);
 
     db.run(`CREATE TABLE IF NOT EXISTS contacts (
         owner_email TEXT NOT NULL,
         contact_email TEXT NOT NULL,
         PRIMARY KEY (owner_email, contact_email)
-    )[span_4](start_span)[span_4](end_span)`);
+    )`);
 
     db.run(`CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
@@ -44,7 +44,7 @@ db.serialize(() => {
         receiver_email TEXT NOT NULL,
         text TEXT NOT NULL,
         timestamp INTEGER NOT NULL
-    )[span_5](start_span)[span_5](end_span)`);
+    )`);
 });
 
 io.on('connection', (socket) => {
