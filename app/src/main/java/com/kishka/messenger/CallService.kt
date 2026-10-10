@@ -365,6 +365,7 @@ class CallService : Service() {
     private fun startIncomingCallNotification(callerName: String) {
         val fullScreenIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra("EXTRA_SHOW_ON_LOCK", true) // Прапорець для відкриття на екрані блокування тільки при дзвінку
         }
         val fullScreenPendingIntent = PendingIntent.getActivity(
             this, 0, fullScreenIntent,
