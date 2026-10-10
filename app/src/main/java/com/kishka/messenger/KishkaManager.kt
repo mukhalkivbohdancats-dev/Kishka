@@ -339,7 +339,6 @@ class KishkaManager(private val context: Context) {
         }
     }
 
-    // Постійний глобальний слухач повідомлень (виправлено конфлікти з socket.off)
     fun startGlobalMessageListener(myEmail: String) {
         val cleanEmail = myEmail.trim().lowercase()
         if (cleanEmail.isEmpty()) return
