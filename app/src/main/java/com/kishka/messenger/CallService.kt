@@ -175,7 +175,7 @@ class CallService : Service() {
                     SAMPLE_RATE,
                     CHANNEL_CONFIG_IN,
                     AUDIO_FORMAT,
-                    minBuf * 4
+                    minBuf * 2
                 )
                 if (recorder.state == AudioRecord.STATE_INITIALIZED) {
                     return recorder
@@ -198,7 +198,8 @@ class CallService : Service() {
         val minRecBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_IN, AUDIO_FORMAT)
         val minTrackBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_OUT, AUDIO_FORMAT)
 
-        val frameSize = 3200 // 100 мс звуку (16 кГц 16-біт MONO)
+        // Зменшено розмір кадру до 1280 байт (~40 мс) для миттєвої передачі без затримок
+        val frameSize = 1280
 
         try {
             audioRecord = createAudioRecord(minRecBuf)
@@ -217,7 +218,7 @@ class CallService : Service() {
                         .setChannelMask(CHANNEL_CONFIG_OUT)
                         .build()
                 )
-                .setBufferSizeInBytes(minTrackBuf * 4)
+                .setBufferSizeInBytes(minTrackBuf * 2)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
 
@@ -227,7 +228,8 @@ class CallService : Service() {
             if (myEmail.isNotEmpty()) {
                 manager.listenForVoiceChunks(myEmail) { chunk ->
                     if (isCallActive) {
-                        if (audioQueue.size > 8) {
+                        // Якщо черга накопичує затримку, відкидаємо старі пакети для реального часу
+                        if (audioQueue.size > 3) {
                             audioQueue.poll()
                         }
                         audioQueue.offer(chunk)
@@ -238,7 +240,7 @@ class CallService : Service() {
             playbackThread = thread(start = true) {
                 while (isCallActive) {
                     try {
-                        val chunk = audioQueue.poll(50, TimeUnit.MILLISECONDS)
+                        val chunk = audioQueue.poll(10, TimeUnit.MILLISECONDS)
                         if (chunk != null && isCallActive) {
                             audioTrack?.write(chunk, 0, chunk.size)
                         }
@@ -255,7 +257,7 @@ class CallService : Service() {
                 while (isCallActive) {
                     val rec = audioRecord
                     if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) {
-                        try { Thread.sleep(100) } catch (e: Exception) { break }
+                        try { Thread.sleep(50) } catch (e: Exception) { break }
                         continue
                     }
 
@@ -275,7 +277,7 @@ class CallService : Service() {
                         } catch (e: Exception) {
                             e.printStackTrace()
                         }
-                        try { Thread.sleep(20) } catch (e: Exception) { break }
+                        try { Thread.sleep(10) } catch (e: Exception) { break }
                     }
                 }
             }
@@ -294,7 +296,7 @@ class CallService : Service() {
 
         try {
             playbackThread?.interrupt()
-            playbackThread?.join(200)
+            playbackThread?.join(100)
             playbackThread = null
         } catch (e: Exception) {
             e.printStackTrace()
@@ -302,7 +304,7 @@ class CallService : Service() {
 
         try {
             recordingThread?.interrupt()
-            recordingThread?.join(200)
+            recordingThread?.join(100)
             recordingThread = null
         } catch (e: Exception) {
             e.printStackTrace()
