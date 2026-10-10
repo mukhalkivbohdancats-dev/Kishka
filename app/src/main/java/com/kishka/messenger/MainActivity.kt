@@ -1,7 +1,6 @@
 package com.kishka.messenger
 
 import android.Manifest
-import android.app.KeyguardManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -11,9 +10,9 @@ import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -212,21 +211,6 @@ object Strings {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            setShowWhenLocked(true)
-            setTurnScreenOn(true)
-            val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-            keyguardManager.requestDismissKeyguard(this, null)
-        } else {
-            @Suppress("DEPRECATION")
-            window.addFlags(
-                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                        WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
-                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-            )
-        }
 
         setContent {
             MaterialTheme(
@@ -457,7 +441,6 @@ fun KishkaApp() {
                     }
                     context.startService(intent)
                 },
-                onMinimize = { isCallMinimized = true },
                 onEndCall = stopCallAction
             )
         } else if (isDataLoading && currentUserEmail.isNotEmpty()) {
@@ -1362,6 +1345,9 @@ fun IncomingCallScreen(
     onAnswer: () -> Unit,
     onDecline: () -> Unit
 ) {
+    // Повністю блокуємо кнопку назад, щоб дзвінок не можна було закрити випадково
+    BackHandler(enabled = true) {}
+
     Surface(modifier = Modifier.fillMaxSize(), color = ViberPurple) {
         Column(
             modifier = Modifier.fillMaxSize().padding(32.dp),
@@ -1410,7 +1396,6 @@ fun ActiveCallScreen(
     avatarUrl: String,
     lang: String,
     onToggleMute: () -> Unit,
-    onMinimize: () -> Unit,
     onEndCall: () -> Unit
 ) {
     var isMuted by remember { mutableStateOf(false) }
@@ -1424,12 +1409,8 @@ fun ActiveCallScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(Strings.get("active_call", lang)) },
-                navigationIcon = {
-                    IconButton(onClick = onMinimize) {
-                        Icon(Icons.Default.Close, contentDescription = null)
-                    }
-                }
+                title = { Text(Strings.get("active_call", lang)) }
+                // Прибрано кнопка зверху зліва (navigationIcon), щоб дзвінок не можна було згорнути/закрити звідти
             )
         }
     ) { padding ->
