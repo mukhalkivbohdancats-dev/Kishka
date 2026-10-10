@@ -37,7 +37,7 @@ class KishkaManager(private val context: Context) {
             if (socketInstance == null) {
                 try {
                     val options = IO.Options().apply {
-                        forceNew = false // Виправлено: використовуємо стабільне з'єднання замість створення нових сокетів
+                        forceNew = false
                         reconnection = true
                         reconnectionAttempts = Int.MAX_VALUE
                         reconnectionDelay = 1000
