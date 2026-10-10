@@ -52,8 +52,9 @@ class KishkaManager(private val context: Context) {
                         forceNew = false
                         reconnection = true
                         reconnectionAttempts = Int.MAX_VALUE
-                        reconnectionDelay = 1000
-                        timeout = 20000
+                        reconnectionDelay = 500 // Прискорено повторне підключення (0.5с)
+                        reconnectionDelayMax = 3000
+                        timeout = 10000 // Зменшено таймаут до 10с для швидкого реагування
                     }
                     socketInstance = IO.socket(SERVER_URL, options)
                     socketInstance?.connect()
@@ -290,7 +291,7 @@ class KishkaManager(private val context: Context) {
                         onResult(false, null, message)
                     }
                 } else {
-                    onResult(false, null, "Сервер Render спить. Спробуйте ще раз за секунду.")
+                    onResult(false, null, "Сервер прокидається. Спробуйте ще раз.")
                 }
             }
         })
