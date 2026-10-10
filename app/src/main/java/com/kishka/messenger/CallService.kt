@@ -57,7 +57,7 @@ class CallService : Service() {
         const val EXTRA_TARGET_PHONE = "EXTRA_TARGET_PHONE"
         const val EXTRA_MY_EMAIL = "EXTRA_MY_EMAIL"
 
-        private const val SAMPLE_RATE = 16000
+        private const val SAMPLE_RATE = 16000 // HD Voice якість
         private const val CHANNEL_CONFIG_IN = AudioFormat.CHANNEL_IN_MONO
         private const val CHANNEL_CONFIG_OUT = AudioFormat.CHANNEL_OUT_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
@@ -198,7 +198,7 @@ class CallService : Service() {
 
         val minRecBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_IN, AUDIO_FORMAT)
         val minTrackBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_OUT, AUDIO_FORMAT)
-        val frameSize = 1280
+        val frameSize = 960 // Оптимальний розмір пакета для швидкої передачі
 
         try {
             audioRecord = createAudioRecord(minRecBuf)
@@ -227,7 +227,8 @@ class CallService : Service() {
             if (myEmail.isNotEmpty()) {
                 manager.listenForVoiceChunks(myEmail) { chunk ->
                     if (isCallActive) {
-                        if (audioQueue.size > 3) {
+                        // Очищаємо застарілі чанки, якщо черга переповнюється (проти зависання)
+                        if (audioQueue.size > 4) {
                             audioQueue.poll()
                         }
                         audioQueue.offer(chunk)
@@ -235,10 +236,11 @@ class CallService : Service() {
                 }
             }
 
+            // Потік відтворення звуку без затримок
             playbackThread = thread(start = true) {
                 while (isCallActive) {
                     try {
-                        val chunk = audioQueue.poll(10, TimeUnit.MILLISECONDS)
+                        val chunk = audioQueue.poll(20, TimeUnit.MILLISECONDS)
                         if (chunk != null && isCallActive) {
                             audioTrack?.write(chunk, 0, chunk.size)
                         }
@@ -248,9 +250,9 @@ class CallService : Service() {
                 }
             }
 
+            // Потік запису без накопичення старих байтів (виправлено ефект розтягування звуку)
             recordingThread = thread(start = true) {
                 val buffer = ByteArray(frameSize)
-                var bytesAccumulated = 0
 
                 while (isCallActive) {
                     val rec = audioRecord
@@ -259,14 +261,11 @@ class CallService : Service() {
                         continue
                     }
 
-                    val read = rec.read(buffer, bytesAccumulated, frameSize - bytesAccumulated)
+                    val read = rec.read(buffer, 0, frameSize)
                     if (read > 0) {
-                        bytesAccumulated += read
-                        if (bytesAccumulated >= frameSize) {
-                            if (!isMuted && targetEmail.isNotEmpty()) {
-                                manager.sendVoiceChunk(targetEmail, buffer.copyOf(frameSize))
-                            }
-                            bytesAccumulated = 0
+                        if (!isMuted && targetEmail.isNotEmpty()) {
+                            val sendData = if (read == frameSize) buffer else buffer.copyOf(read)
+                            manager.sendVoiceChunk(targetEmail, sendData)
                         }
                     } else {
                         try {
