@@ -251,7 +251,7 @@ class CallService : Service() {
                 manager.listenForVoiceChunks(myEmail) { chunk ->
                     if (isCallActive) {
                         if (audioQueue.size > 2) {
-                            audioQueue.poll() // Миттєве скидання застарілих пакетів для нульової затримки
+                            audioQueue.poll()
                         }
                         audioQueue.offer(chunk)
                     }
@@ -446,8 +446,8 @@ class CallService : Service() {
     }
 
     private fun acquireProximityWakeLock() {
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         try {
-            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
             if (powerManager.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
                 wakeLock = powerManager.newWakeLock(
                     PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK,
@@ -460,7 +460,7 @@ class CallService : Service() {
         }
     }
 
-    private, fun stopCall() {
+    private fun stopCall() {
         stopAudioStreaming()
         stopRingtone()
         try {
