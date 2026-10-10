@@ -150,7 +150,7 @@ object Strings {
             "grant_mic" to "Разрешить микрофон",
             "grant_notif" to "Разрешить уведомления",
             "continue_app" to "Продолжить в мессенджер",
-            "copy" to "Копировать",
+            "copy" to "Скопировать",
             "delete" to "Удалить",
             "message_copied" to "Скопировано в буфер обмена",
             "incoming_call" to "Входящий звонок",
@@ -214,7 +214,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Показуємо додаток на екрані блокування ТІЛЬКИ коли надходить вхідний дзвінок (перевірка прапорця EXTRA_SHOW_ON_LOCK)
         if (intent?.getBooleanExtra("EXTRA_SHOW_ON_LOCK", false) == true) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
                 setShowWhenLocked(true)
@@ -304,8 +303,8 @@ fun KishkaApp() {
         if (currentUserEmail.isNotEmpty()) {
             isDataLoading = true
 
-            // Запускаємо глобальне прослуховування нових повідомлень у фоні
-            manager.listenForGlobalMessages(currentUserEmail)
+            // Запускаємо постійний глобальний слухач повідомлень для фонових пуш-сповіщень
+            manager.startGlobalMessageListener(currentUserEmail)
 
             manager.listenForCallEvents(
                 myEmail = currentUserEmail,
