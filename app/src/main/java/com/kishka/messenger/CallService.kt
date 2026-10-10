@@ -112,7 +112,7 @@ class CallService : Service() {
                 }
             }
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     private fun startRingtone() {
@@ -339,7 +339,6 @@ class CallService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Кнопка ПРИЙНЯТИ дзвінок зі шторки сповіщень
         val answerIntent = Intent(this, CallService::class.java).apply {
             action = ACTION_START_CALL
             putExtra(EXTRA_TARGET_NAME, callerName)
@@ -351,7 +350,6 @@ class CallService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Кнопка ВІДХИЛИТИ дзвінок
         val endCallIntent = Intent(this, CallService::class.java).apply {
             action = ACTION_END_CALL
         }
