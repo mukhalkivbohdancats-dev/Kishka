@@ -88,6 +88,7 @@ class CallService : Service() {
             }
             ACTION_INCOMING -> {
                 val caller = intent.getStringExtra(EXTRA_TARGET_NAME) ?: "Невідомий"
+                myEmail = intent.getStringExtra(EXTRA_MY_EMAIL)?.trim()?.lowercase() ?: ""
                 startRingtone()
                 startIncomingCallNotification(caller)
             }
@@ -197,8 +198,6 @@ class CallService : Service() {
 
         val minRecBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_IN, AUDIO_FORMAT)
         val minTrackBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_OUT, AUDIO_FORMAT)
-
-        // Зменшено розмір кадру до 1280 байт (~40 мс) для миттєвої передачі без затримок
         val frameSize = 1280
 
         try {
@@ -228,7 +227,6 @@ class CallService : Service() {
             if (myEmail.isNotEmpty()) {
                 manager.listenForVoiceChunks(myEmail) { chunk ->
                     if (isCallActive) {
-                        // Якщо черга накопичує затримку, відкидаємо старі пакети для реального часу
                         if (audioQueue.size > 3) {
                             audioQueue.poll()
                         }
@@ -341,6 +339,19 @@ class CallService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // Кнопка ПРИЙНЯТИ дзвінок зі шторки сповіщень
+        val answerIntent = Intent(this, CallService::class.java).apply {
+            action = ACTION_START_CALL
+            putExtra(EXTRA_TARGET_NAME, callerName)
+            putExtra(EXTRA_TARGET_PHONE, callerName)
+            putExtra(EXTRA_MY_EMAIL, myEmail)
+        }
+        val answerPendingIntent = PendingIntent.getService(
+            this, 2, answerIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Кнопка ВІДХИЛИТИ дзвінок
         val endCallIntent = Intent(this, CallService::class.java).apply {
             action = ACTION_END_CALL
         }
@@ -359,6 +370,7 @@ class CallService : Service() {
             .setAutoCancel(false)
             .setContentIntent(fullScreenPendingIntent)
             .setFullScreenIntent(fullScreenPendingIntent, true)
+            .addAction(android.R.drawable.ic_menu_call, "Прийняти", answerPendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Відхилити", endCallPendingIntent)
             .build()
 
