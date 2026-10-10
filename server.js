@@ -13,10 +13,9 @@ const io = new Server(server, {
     maxHttpBufferSize: 1e7
 });
 
-// Набір для збереження email користувачів, які зараз знаходяться в дзвінку
 const busyUsers = new Set();
+const userSockets = new Map(); // Мапінг email -> socket.id для миттєвої доставки дзвінків та голосу
 
-// Підключення до бази даних SQLite
 const db = new sqlite3.Database('./chat.db', (err) => {
     if (err) {
         console.error('Помилка бази даних:', err.message);
@@ -25,7 +24,6 @@ const db = new sqlite3.Database('./chat.db', (err) => {
     }
 });
 
-// Ініціалізація таблиць SQLite
 db.serialize(() => {
     db.run(`CREATE TABLE IF NOT EXISTS users (
         email TEXT PRIMARY KEY,
@@ -52,11 +50,13 @@ db.serialize(() => {
 io.on('connection', (socket) => {
     console.log('Клієнт підключився:', socket.id);
 
-    // Реєстрація або оновлення користувача
     socket.on('register_or_update_user', (data) => {
         const { email, name, avatarUrl } = data || {};
         if (!email || typeof email !== 'string') return;
         const cleanEmail = email.trim().toLowerCase();
+        socket.userEmail = cleanEmail;
+        userSockets.set(cleanEmail, socket.id);
+
         const cleanName = name || cleanEmail.split('@')[0];
 
         db.run(
@@ -69,12 +69,13 @@ io.on('connection', (socket) => {
         );
     });
 
-    // Отримання профілю (Захищено від зависання callback)
     socket.on('get_user_profile', (email, callback) => {
         const safeCallback = typeof callback === 'function' ? callback : () => {};
         if (!email || typeof email !== 'string') return safeCallback(null);
         
         const cleanEmail = email.trim().toLowerCase();
+        socket.userEmail = cleanEmail;
+        userSockets.set(cleanEmail, socket.id);
         
         db.get("SELECT email, name, avatar_url as avatarUrl FROM users WHERE email = ?", [cleanEmail], (err, row) => {
             if (err) return safeCallback(null);
@@ -89,12 +90,16 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Додавання контакту
     socket.on('add_contact', (data, callback) => {
         const safeCallback = typeof callback === 'function' ? callback : () => {};
         const { myEmail, targetEmail } = data || {};
         const cleanMy = (typeof myEmail === 'string' ? myEmail : '').trim().toLowerCase();
         const cleanTarget = (typeof targetEmail === 'string' ? targetEmail : '').trim().toLowerCase();
+
+        if (cleanMy) {
+            socket.userEmail = cleanMy;
+            userSockets.set(cleanMy, socket.id);
+        }
 
         if (!cleanTarget || !cleanTarget.includes('@') || cleanMy === cleanTarget) {
             return safeCallback({ success: false, message: "Некоректна адреса або спроба додати самі себе!" });
@@ -124,11 +129,13 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Список контактів
     socket.on('get_contacts', (myEmail, callback) => {
         const safeCallback = typeof callback === 'function' ? callback : () => {};
         if (!myEmail || typeof myEmail !== 'string') return safeCallback([]);
         const cleanEmail = myEmail.trim().toLowerCase();
+        socket.userEmail = cleanEmail;
+        userSockets.set(cleanEmail, socket.id);
+
         const query = `
             SELECT u.email, u.name, u.avatar_url as avatarUrl 
             FROM contacts c
@@ -141,7 +148,6 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Вхід у кімнату чату
     socket.on('join_chat', (data) => {
         const chatId = typeof data === 'string' ? data : (data ? data.chatId : null);
         if (!chatId) return;
@@ -156,12 +162,10 @@ io.on('connection', (socket) => {
         );
     });
 
-    // Вихід з кімнати чату
     socket.on('leave_chat', (chatId) => {
         if (chatId) socket.leave(chatId);
     });
 
-    // Надсилання текстового повідомлення (Зберігається в БД)
     socket.on('send_message', (data) => {
         const { id, chatId, senderEmail, receiverEmail, text, timestamp } = data || {};
         if (!chatId || !text) return;
@@ -179,7 +183,6 @@ io.on('connection', (socket) => {
         );
     });
 
-    // Видалення текстового повідомлення
     socket.on('delete_message', (data) => {
         const { messageId, chatId } = data || {};
         if (!messageId || !chatId) return;
@@ -191,7 +194,6 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Сигналізація викликів та перевірка «Зайнято»
     socket.on('start_call', (data) => {
         const { callerEmail, receiverEmail } = data || {};
         if (!callerEmail || !receiverEmail) return;
@@ -199,8 +201,14 @@ io.on('connection', (socket) => {
         const cleanCaller = callerEmail.trim().toLowerCase();
         const cleanReceiver = receiverEmail.trim().toLowerCase();
 
+        socket.userEmail = cleanCaller;
+        userSockets.set(cleanCaller, socket.id);
+
         if (busyUsers.has(cleanReceiver)) {
-            io.emit(`call_busy_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
+            const callerSocketId = userSockets.get(cleanCaller);
+            if (callerSocketId) {
+                io.to(callerSocketId).emit(`call_busy_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
+            }
             return;
         }
 
@@ -208,14 +216,20 @@ io.on('connection', (socket) => {
         busyUsers.add(cleanReceiver);
         socket.myCallEmails = [cleanCaller, cleanReceiver];
 
-        io.emit(`incoming_call_${cleanReceiver}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
+        const receiverSocketId = userSockets.get(cleanReceiver);
+        if (receiverSocketId) {
+            io.to(receiverSocketId).emit(`incoming_call_${cleanReceiver}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
+        }
     });
 
     socket.on('answer_call', (data) => {
         const { callerEmail, receiverEmail } = data || {};
         if (!callerEmail) return;
         const cleanCaller = callerEmail.trim().toLowerCase();
-        io.emit(`call_answered_${cleanCaller}`, { callerEmail, receiverEmail });
+        const callerSocketId = userSockets.get(cleanCaller);
+        if (callerSocketId) {
+            io.to(callerSocketId).emit(`call_answered_${cleanCaller}`, { callerEmail, receiverEmail });
+        }
     });
 
     socket.on('reject_call', (data) => {
@@ -226,7 +240,10 @@ io.on('connection', (socket) => {
         if (cleanCaller) busyUsers.delete(cleanCaller);
         if (cleanReceiver) busyUsers.delete(cleanReceiver);
 
-        if (cleanCaller) io.emit(`call_rejected_${cleanCaller}`, { callerEmail, receiverEmail });
+        const callerSocketId = userSockets.get(cleanCaller);
+        if (callerSocketId) {
+            io.to(callerSocketId).emit(`call_rejected_${cleanCaller}`, { callerEmail, receiverEmail });
+        }
     });
 
     socket.on('end_call', (data) => {
@@ -236,23 +253,31 @@ io.on('connection', (socket) => {
 
         if (cleanCaller) {
             busyUsers.delete(cleanCaller);
-            io.emit(`call_ended_${cleanCaller}`, {});
+            const sId = userSockets.get(cleanCaller);
+            if (sId) io.to(sId).emit(`call_ended_${cleanCaller}`, {});
         }
         if (cleanReceiver) {
             busyUsers.delete(cleanReceiver);
-            io.emit(`call_ended_${cleanReceiver}`, {});
+            const sId = userSockets.get(cleanReceiver);
+            if (sId) io.to(sId).emit(`call_ended_${cleanReceiver}`, {});
         }
     });
 
-    // Передача аудіопотоку в режимі реального часу (НЕ зберігається в БД, обробляється та знищується в RAM)
+    // МИТТЄВА доставка аудіопотоку напряму отримувачу за socket.id
     socket.on('voice_chunk', (data) => {
         const { targetEmail, chunk } = data || {};
         if (!targetEmail || !chunk) return;
         const cleanTarget = targetEmail.trim().toLowerCase();
-        io.emit(`voice_chunk_${cleanTarget}`, chunk);
+        const targetSocketId = userSockets.get(cleanTarget);
+        if (targetSocketId) {
+            io.to(targetSocketId).emit(`voice_chunk_${cleanTarget}`, chunk);
+        }
     });
 
     socket.on('disconnect', () => {
+        if (socket.userEmail) {
+            userSockets.delete(socket.userEmail);
+        }
         if (socket.myCallEmails) {
             socket.myCallEmails.forEach(email => busyUsers.delete(email));
         }
