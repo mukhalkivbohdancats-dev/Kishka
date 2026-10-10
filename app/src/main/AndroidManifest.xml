@@ -26,13 +26,11 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Kishka">
 
-        <!-- Головна Activity з підтримкою показу поверх заблокованого екрана -->
+        <!-- Головна Activity (прибрано автоматичне відкриття на екрані блокування під час звичайного запуску) -->
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:exported="true"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true"
             android:theme="@style/Theme.Kishka">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
