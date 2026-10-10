@@ -116,7 +116,8 @@ io.on('connection', (socket) => {
                 stmt.run(cleanMy, cleanTarget);
                 stmt.run(cleanTarget, cleanMy);
                 stmt.finalize(() => {
-                    // Миттєве сповіщення цільового користувача про те, що його додали до контактів
+                    // Взаємне сповіщення обох користувачів про оновлення контактів
+                    io.to(cleanMy).emit('contact_updated');
                     io.to(cleanTarget).emit('contact_updated');
 
                     safeCallback({ success: true, user: userObj, message: "Контакт успішно додано!" });
@@ -186,7 +187,6 @@ io.on('connection', (socket) => {
                 if (err) return;
                 const newMessage = { id: msgId, chatId, senderEmail, receiverEmail, text, timestamp: msgTimestamp };
                 
-                // Надсилаємо і в кімнату чату, і напряму отримувачу для надійної доставки
                 io.to(chatId).emit('receive_message', newMessage);
                 if (receiverEmail) {
                     io.to(receiverEmail.trim().toLowerCase()).emit('receive_message', newMessage);
@@ -233,7 +233,6 @@ io.on('connection', (socket) => {
         if (receiverSocketId) {
             io.to(receiverSocketId).emit(`incoming_call_${cleanReceiver}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
         } else {
-            // Додатково продублювати через персональну кімнату
             io.to(cleanReceiver).emit(`incoming_call_${cleanReceiver}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
             
             const callerSocketId = userSockets.get(cleanCaller);
