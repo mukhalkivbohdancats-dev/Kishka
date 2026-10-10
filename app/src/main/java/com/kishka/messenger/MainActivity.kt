@@ -1,6 +1,7 @@
 package com.kishka.messenger
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -10,6 +11,7 @@ import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -212,6 +214,24 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Показуємо додаток на екрані блокування ТІЛЬКИ коли надходить вхідний дзвінок (перевірка прапорця EXTRA_SHOW_ON_LOCK)
+        if (intent?.getBooleanExtra("EXTRA_SHOW_ON_LOCK", false) == true) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                setShowWhenLocked(true)
+                setTurnScreenOn(true)
+                val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+                keyguardManager.requestDismissKeyguard(this, null)
+            } else {
+                @Suppress("DEPRECATION")
+                window.addFlags(
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
+                            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                )
+            }
+        }
+
         setContent {
             MaterialTheme(
                 colorScheme = lightColorScheme(
@@ -283,6 +303,9 @@ fun KishkaApp() {
     LaunchedEffect(currentUserEmail) {
         if (currentUserEmail.isNotEmpty()) {
             isDataLoading = true
+
+            // Запускаємо глобальне прослуховування нових повідомлень у фоні
+            manager.listenForGlobalMessages(currentUserEmail)
 
             manager.listenForCallEvents(
                 myEmail = currentUserEmail,
@@ -1345,7 +1368,6 @@ fun IncomingCallScreen(
     onAnswer: () -> Unit,
     onDecline: () -> Unit
 ) {
-    // Повністю блокуємо кнопку назад, щоб дзвінок не можна було закрити випадково
     BackHandler(enabled = true) {}
 
     Surface(modifier = Modifier.fillMaxSize(), color = ViberPurple) {
@@ -1410,7 +1432,6 @@ fun ActiveCallScreen(
         topBar = {
             TopAppBar(
                 title = { Text(Strings.get("active_call", lang)) }
-                // Прибрано кнопка зверху зліва (navigationIcon), щоб дзвінок не можна було згорнути/закрити звідти
             )
         }
     ) { padding ->
