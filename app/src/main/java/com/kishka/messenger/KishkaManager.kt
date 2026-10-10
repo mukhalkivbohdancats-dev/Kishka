@@ -33,6 +33,8 @@ class KishkaManager(private val context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("kishka_cache_prefs", Context.MODE_PRIVATE)
 
     private var currentActiveChatId: String? = null
+    private var currentChatCallback: ((List<Message>) -> Unit)? = null
+    private var currentChatMessagesList: MutableList<Message>? = null
 
     companion object {
         const val SERVER_URL = "https://kishka.onrender.com"
@@ -40,6 +42,7 @@ class KishkaManager(private val context: Context) {
         const val MSG_CHANNEL_ID = "KishkaMessageChannel"
         
         private var socketInstance: Socket? = null
+        private var isGlobalListenerInitialized = false
 
         @Synchronized
         fun getSocket(): Socket {
@@ -336,22 +339,64 @@ class KishkaManager(private val context: Context) {
         }
     }
 
-    // Глобальний слухач для фонових сповіщень (працює завжди у фоні, як у Telegram/Viber)
+    // Постійний глобальний слухач повідомлень (виправлено конфлікти з socket.off)
     fun startGlobalMessageListener(myEmail: String) {
         val cleanEmail = myEmail.trim().lowercase()
         if (cleanEmail.isEmpty()) return
         ensureConnected()
 
-        socket.off("global_msg_listener")
-        socket.on("receive_message") { args ->
-            if (args.isNotEmpty() && args[0] is JSONObject) {
-                val obj = args[0] as JSONObject
-                val msgSender = obj.optString("senderEmail", "")
-                val msgText = obj.optString("text", "")
-                val receiver = obj.optString("receiverEmail", "")
+        if (!isGlobalListenerInitialized) {
+            isGlobalListenerInitialized = true
+            socket.on("receive_message") { args ->
+                if (args.isNotEmpty() && args[0] is JSONObject) {
+                    val obj = args[0] as JSONObject
+                    val msgChatId = obj.optString("chatId", "")
+                    val msgSender = obj.optString("senderEmail", "")
+                    val msgText = obj.optString("text", "")
+                    val receiver = obj.optString("receiverEmail", "")
 
-                if (receiver.trim().lowercase() == cleanEmail && msgSender != cleanEmail) {
-                    showBackgroundMessageNotification(msgSender, msgText)
+                    if (receiver.trim().lowercase() == cleanEmail && msgSender.trim().lowercase() != cleanEmail) {
+                        if (msgChatId != currentActiveChatId) {
+                            showBackgroundMessageNotification(msgSender, msgText)
+                        }
+                    }
+
+                    if (msgChatId == currentActiveChatId) {
+                        currentChatMessagesList?.let { list ->
+                            val msgId = obj.optString("id", "")
+                            if (list.none { it.id == msgId }) {
+                                list.add(
+                                    Message(
+                                        id = msgId,
+                                        chatId = msgChatId,
+                                        senderEmail = msgSender,
+                                        receiverEmail = receiver,
+                                        text = msgText,
+                                        timestamp = obj.optLong("timestamp", System.currentTimeMillis())
+                                    )
+                                )
+                                cacheMessagesLocally(msgChatId, list)
+                                mainHandler.post {
+                                    currentChatCallback?.invoke(list.toList())
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            socket.on("message_deleted") { args ->
+                if (args.isNotEmpty() && args[0] is String) {
+                    val deletedId = args[0] as String
+                    currentChatMessagesList?.let { list ->
+                        list.removeAll { it.id == deletedId }
+                        currentActiveChatId?.let { chatId ->
+                            cacheMessagesLocally(chatId, list)
+                        }
+                        mainHandler.post {
+                            currentChatCallback?.invoke(list.toList())
+                        }
+                    }
                 }
             }
         }
@@ -364,20 +409,19 @@ class KishkaManager(private val context: Context) {
     ) {
         val chatId = getChatId(senderEmail, receiverEmail)
         currentActiveChatId = chatId
+        currentChatCallback = onMessagesUpdated
 
         val cachedMsgs = getCachedMessages(chatId)
-        if (cachedMsgs.isNotEmpty()) {
-            onMessagesUpdated(cachedMsgs)
+        val messagesList = mutableListOf<Message>().apply { addAll(cachedMsgs) }
+        currentChatMessagesList = messagesList
+
+        if (messagesList.isNotEmpty()) {
+            onMessagesUpdated(messagesList)
         }
 
         ensureConnected()
 
-        val messagesList = mutableListOf<Message>().apply { addAll(cachedMsgs) }
-
         socket.off("load_history")
-        socket.off("receive_message")
-        socket.off("message_deleted")
-
         socket.on("load_history") { args ->
             if (args.isNotEmpty() && args[0] is JSONArray) {
                 val array = args[0] as JSONArray
@@ -395,47 +439,6 @@ class KishkaManager(private val context: Context) {
                         )
                     )
                 }
-                cacheMessagesLocally(chatId, messagesList)
-                mainHandler.post { onMessagesUpdated(messagesList.toList()) }
-            }
-        }
-
-        socket.on("receive_message") { args ->
-            if (args.isNotEmpty() && args[0] is JSONObject) {
-                val obj = args[0] as JSONObject
-                val msgChatId = obj.optString("chatId", "")
-                val msgSender = obj.optString("senderEmail", "")
-                val msgText = obj.optString("text", "")
-                val receiver = obj.optString("receiverEmail", "")
-
-                if (receiver.trim().lowercase() == senderEmail.trim().lowercase() && msgSender != senderEmail) {
-                    showBackgroundMessageNotification(msgSender, msgText)
-                }
-
-                if (msgChatId == currentActiveChatId) {
-                    val msgId = obj.optString("id", "")
-                    if (messagesList.none { it.id == msgId }) {
-                        messagesList.add(
-                            Message(
-                                id = msgId,
-                                chatId = msgChatId,
-                                senderEmail = msgSender,
-                                receiverEmail = receiver,
-                                text = msgText,
-                                timestamp = obj.optLong("timestamp", System.currentTimeMillis())
-                            )
-                        )
-                        cacheMessagesLocally(chatId, messagesList)
-                        mainHandler.post { onMessagesUpdated(messagesList.toList()) }
-                    }
-                }
-            }
-        }
-
-        socket.on("message_deleted") { args ->
-            if (args.isNotEmpty() && args[0] is String) {
-                val deletedId = args[0] as String
-                messagesList.removeAll { it.id == deletedId }
                 cacheMessagesLocally(chatId, messagesList)
                 mainHandler.post { onMessagesUpdated(messagesList.toList()) }
             }
@@ -557,9 +560,9 @@ class KishkaManager(private val context: Context) {
             socket.emit("leave_chat", chatId)
         }
         currentActiveChatId = null
+        currentChatCallback = null
+        currentChatMessagesList = null
         socket.off("load_history")
-        socket.off("receive_message")
-        socket.off("message_deleted")
     }
 
     fun listenForCallHistory(myEmail: String, onLogsUpdated: (List<CallLogItem>) -> Unit) {
