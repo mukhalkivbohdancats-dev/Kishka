@@ -184,7 +184,6 @@ class CallService : Service() {
                     maxOf(minBuf * 2, 2048)
                 )
                 if (recorder.state == AudioRecord.STATE_INITIALIZED) {
-                    // Апаратне придушення еха та шуму для повного усунення відлуння та багів
                     try {
                         if (AcousticEchoCanceler.isAvailable()) {
                             acousticEchoCanceler = AcousticEchoCanceler.create(recorder.audioSessionId)
@@ -251,8 +250,8 @@ class CallService : Service() {
             if (myEmail.isNotEmpty()) {
                 manager.listenForVoiceChunks(myEmail) { chunk ->
                     if (isCallActive) {
-                        if (audioQueue.size > 3) {
-                            audioQueue.poll() // скидання старих пакетів для мінімізації затримки та еха
+                        if (audioQueue.size > 2) {
+                            audioQueue.poll() // Миттєве скидання застарілих пакетів для нульової затримки
                         }
                         audioQueue.offer(chunk)
                     }
@@ -262,7 +261,7 @@ class CallService : Service() {
             playbackThread = thread(start = true) {
                 while (isCallActive) {
                     try {
-                        val chunk = audioQueue.poll(10, TimeUnit.MILLISECONDS)
+                        val chunk = audioQueue.poll(5, TimeUnit.MILLISECONDS)
                         if (chunk != null && isCallActive) {
                             audioTrack?.write(chunk, 0, chunk.size)
                         }
@@ -278,7 +277,7 @@ class CallService : Service() {
                 while (isCallActive) {
                     val rec = audioRecord
                     if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) {
-                        try { Thread.sleep(50) } catch (e: Exception) { break }
+                        try { Thread.sleep(20) } catch (e: Exception) { break }
                         continue
                     }
 
@@ -289,7 +288,7 @@ class CallService : Service() {
                             manager.sendVoiceChunk(targetEmail, chunkToSend)
                         }
                     } else {
-                        try { Thread.sleep(10) } catch (e: Exception) { break }
+                        try { Thread.sleep(5) } catch (e: Exception) { break }
                     }
                 }
             }
@@ -461,7 +460,7 @@ class CallService : Service() {
         }
     }
 
-    private fun stopCall() {
+    private, fun stopCall() {
         stopAudioStreaming()
         stopRingtone()
         try {
