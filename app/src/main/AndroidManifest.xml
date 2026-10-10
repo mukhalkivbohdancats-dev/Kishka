@@ -26,7 +26,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Kishka">
 
-        <!-- Головна Activity (прибрано автоматичне відкриття на екрані блокування під час звичайного запуску) -->
+        <!-- Головна Activity -->
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
