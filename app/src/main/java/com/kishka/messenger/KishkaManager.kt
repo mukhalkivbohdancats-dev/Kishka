@@ -50,7 +50,8 @@ class KishkaManager(private val context: Context) {
         const val GEMINI_LOGO_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/Assets/Logo.png"
         const val MSG_CHANNEL_ID = "KishkaMessageChannel"
         
-        const val HARDCODED_GEMINI_API_KEY = ""
+        // Вставте сюди ваш API-ключ Google AI Studio. Друзі не матимуть доступу до коду, а Gemini працюватиме для всіх автоматично!
+        const val HARDCODED_GEMINI_API_KEY = "AQ.Ab8RN6JxqFu04kWD1j1ViZB05xS9F2z3p0HuIIK6Hp1zs-qIsQ"
 
         private var socketInstance: Socket? = null
         private var isGlobalListenerInitialized = false
@@ -748,10 +749,10 @@ class KishkaManager(private val context: Context) {
     }
 
     // Запит для вкладки Gemini з повною історією (пам'ять без забувань)
-    fun askGeminiTab(apiKeyInput: String, history: List<GeminiChatModel>, onResult: (String) -> Unit) {
-        val apiKey = if (apiKeyInput.isNotBlank()) apiKeyInput else HARDCODED_GEMINI_API_KEY
-        if (apiKey.isBlank()) {
-            onResult("Помилка: API ключ не вказано.")
+    fun askGeminiTab(history: List<GeminiChatModel>, onResult: (String) -> Unit) {
+        val apiKey = HARDCODED_GEMINI_API_KEY
+        if (apiKey.isBlank() || apiKey == "ВАШ_АПІ_КЛЮЧ_ТУТ") {
+            onResult("Помилка: API ключ не вказано в коді.")
             return
         }
         thread {
@@ -801,10 +802,10 @@ class KishkaManager(private val context: Context) {
     }
 
     // Запит через @Gemini у чатах (з пам'яттю всієї розмови у чаті)
-    fun askGemini(apiKeyInput: String, messages: List<Message>, myEmail: String, onResult: (String) -> Unit) {
-        val apiKey = if (apiKeyInput.isNotBlank()) apiKeyInput else HARDCODED_GEMINI_API_KEY
-        if (apiKey.isBlank()) {
-            onResult("Помилка: API ключ не вказано")
+    fun askGemini(messages: List<Message>, myEmail: String, onResult: (String) -> Unit) {
+        val apiKey = HARDCODED_GEMINI_API_KEY
+        if (apiKey.isBlank() || apiKey == "ВАШ_АПІ_КЛЮЧ_ТУТ") {
+            onResult("Помилка: API ключ не вказано в коді")
             return
         }
         thread {
