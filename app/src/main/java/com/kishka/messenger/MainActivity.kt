@@ -100,7 +100,7 @@ object Strings {
             "active_call" to "Активний дзвінок Kishka",
             "end_call" to "Завершити дзвінок",
             "calling_in_progress" to "Триває розмова...",
-            "type_message" to "Повідомлення (або @Gemini ...)",
+            "type_message" to "Повідомлення...",
             "user_not_found" to "Користувача з такою поштою не знайдено!",
             "contact_added" to "Контакт успішно додано!",
             "loading_data" to "Завантажуємо ваші дані...",
@@ -147,7 +147,7 @@ object Strings {
             "active_call" to "Активный звонок Kishka",
             "end_call" to "Завершить звонок",
             "calling_in_progress" to "Идет разговор...",
-            "type_message" to "Сообщение (или @Gemini ...)",
+            "type_message" to "Сообщение...",
             "user_not_found" to "Пользователь с такой почтой не найден!",
             "contact_added" to "Контакт успешно добавлен!",
             "loading_data" to "Загружаем ваши данные...",
@@ -194,7 +194,7 @@ object Strings {
             "active_call" to "Active Kishka Call",
             "end_call" to "End Call",
             "calling_in_progress" to "Call in progress...",
-            "type_message" to "Message (or @Gemini ...)",
+            "type_message" to "Message...",
             "user_not_found" to "User with this email not found!",
             "contact_added" to "Contact successfully added!",
             "loading_data" to "Loading your data...",
@@ -555,7 +555,9 @@ fun KishkaApp() {
                     }
 
                     Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                        if (selectedUserForChat != null) {
+                        if (selectedBottomTab == 2) {
+                            GeminiTab(context = context, currentLang = currentLanguage)
+                        } else if (selectedUserForChat != null) {
                             ChatScreen(
                                 manager = manager,
                                 currentEmail = currentUserEmail,
@@ -576,7 +578,9 @@ fun KishkaApp() {
                 }
             } else {
                 Box(modifier = Modifier.weight(1f)) {
-                    if (selectedUserForChat != null) {
+                    if (selectedBottomTab == 2) {
+                        GeminiTab(context = context, currentLang = currentLanguage)
+                    } else if (selectedUserForChat != null) {
                         ChatScreen(
                             manager = manager,
                             currentEmail = currentUserEmail,
