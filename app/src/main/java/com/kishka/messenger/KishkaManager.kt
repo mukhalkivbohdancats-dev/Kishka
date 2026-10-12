@@ -23,7 +23,10 @@ import io.socket.client.IO
 import io.socket.client.Socket
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.UUID
+import kotlin.concurrent.thread
 
 class KishkaManager(private val context: Context) {
 
@@ -39,6 +42,7 @@ class KishkaManager(private val context: Context) {
     companion object {
         const val SERVER_URL = "https://kishka.onrender.com"
         const val DEFAULT_AVATAR_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/ic_launcher.png"
+        const val GEMINI_LOGO_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/Assets/Logo.png"
         const val MSG_CHANNEL_ID = "KishkaMessageChannel"
         
         private var socketInstance: Socket? = null
@@ -52,9 +56,9 @@ class KishkaManager(private val context: Context) {
                         forceNew = false
                         reconnection = true
                         reconnectionAttempts = Int.MAX_VALUE
-                        reconnectionDelay = 500 // Прискорено повторне підключення (0.5с)
+                        reconnectionDelay = 500
                         reconnectionDelayMax = 3000
-                        timeout = 10000 // Зменшено таймаут до 10с для швидкого реагування
+                        timeout = 10000
                     }
                     socketInstance = IO.socket(SERVER_URL, options)
                     socketInstance?.connect()
@@ -695,6 +699,56 @@ class KishkaManager(private val context: Context) {
 
         socket.on("call_busy_$cleanEmail") {
             mainHandler.post { onCallBusy() }
+        }
+    }
+
+    fun askGemini(apiKey: String, prompt: String, onResult: (String) -> Unit) {
+        if (apiKey.isBlank() || prompt.isBlank()) {
+            onResult("Помилка: API ключ або промт порожній")
+            return
+        }
+        thread {
+            try {
+                val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.doOutput = true
+
+                val jsonBody = JSONObject().apply {
+                    put("contents", JSONArray().put(
+                        JSONObject().apply {
+                            put("parts", JSONArray().put(
+                                JSONObject().apply {
+                                    put("text", prompt)
+                                }
+                            ))
+                        }
+                    ))
+                }
+
+                conn.outputStream.write(jsonBody.toString().toByteArray(Charsets.UTF_8))
+                
+                val responseCode = conn.responseCode
+                val stream = if (responseCode == 200) conn.inputStream else conn.errorStream
+                val responseStr = stream.bufferedReader().use { it.readText() }
+
+                if (responseCode == 200) {
+                    val root = JSONObject(responseStr)
+                    val candidates = root.optJSONArray("candidates")
+                    val text = candidates?.optJSONObject(0)
+                        ?.optJSONObject("content")
+                        ?.optJSONArray("parts")
+                        ?.optJSONObject(0)
+                        ?.optString("text", "Немає відповіді") ?: "Немає відповіді"
+                    mainHandler.post { onResult(text.trim()) }
+                } else {
+                    mainHandler.post { onResult("Помилка Gemini API ($responseCode): $responseStr") }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                mainHandler.post { onResult("Помилка запиту до Gemini: ${e.message}") }
+            }
         }
     }
 
