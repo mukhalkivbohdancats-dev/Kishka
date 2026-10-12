@@ -42,11 +42,11 @@ class KishkaManager(private val context: Context) {
     companion object {
         const val SERVER_URL = "https://kishka.onrender.com"
         const val DEFAULT_AVATAR_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/ic_launcher.png"
-        const val GEMINI_LOGO_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/Logo.png"
+        const val GEMINI_LOGO_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/Assets/Logo.png"
         const val MSG_CHANNEL_ID = "KishkaMessageChannel"
 
         // Жорстко зашитий єдиний API-ключ Gemini для тебе та твоїх друзів
-        const val HARDCODED_GEMINI_API_KEY = "AQ.Ab8RN6Io9qSUcZtAS7MgnF7mryexBM-o8dBGgp3kOvOqeZnQiA"
+        const val HARDCODED_GEMINI_API_KEY = "AQ.Ab8RN6KGFCXNTnMEkr0QCusT8aSY2E4mk8VQC75ntp3jSh8_Kg"
         
         private var socketInstance: Socket? = null
         private var isGlobalListenerInitialized = false
