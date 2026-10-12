@@ -44,7 +44,6 @@ class KishkaManager(private val context: Context) {
         const val DEFAULT_AVATAR_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/ic_launcher.png"
         const val GEMINI_LOGO_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/Assets/Logo.png"
         const val MSG_CHANNEL_ID = "KishkaMessageChannel"
-
         const val HARDCODED_GEMINI_API_KEY = "AQ.Ab8RN6LCmO7zIiqQ3m5gVwtFtsYPl7LOesIC1HEoWhHd7sfI5w"
         
         private var socketInstance: Socket? = null
@@ -297,7 +296,7 @@ class KishkaManager(private val context: Context) {
                         onResult(false, null, message)
                     }
                 } else {
-                    onResult(false, null, "Сервер прокидається. Спробуйте ще раз.")
+                    onResult(false, null, "Сервер недоступний. Спробуйте ще раз.")
                 }
             }
         })
@@ -307,17 +306,7 @@ class KishkaManager(private val context: Context) {
         val cleanEmail = myEmail.trim().lowercase()
         if (cleanEmail.isEmpty()) return
 
-        val geminiUser = User(
-            uid = "gemini@ai",
-            email = "gemini@ai",
-            name = "Gemini AI",
-            avatarUrl = GEMINI_LOGO_URL
-        )
-
-        val cached = getCachedContacts(cleanEmail).toMutableList()
-        if (cached.none { it.email == "gemini@ai" }) {
-            cached.add(0, geminiUser)
-        }
+        val cached = getCachedContacts(cleanEmail)
         if (cached.isNotEmpty()) {
             onContactsUpdated(cached)
         }
@@ -328,19 +317,17 @@ class KishkaManager(private val context: Context) {
             socket.emit("get_contacts", cleanEmail, io.socket.client.Ack { args ->
                 mainHandler.post {
                     val list = mutableListOf<User>()
-                    list.add(geminiUser)
-
                     if (args.isNotEmpty() && args[0] is JSONArray) {
                         val array = args[0] as JSONArray
                         for (i in 0 until array.length()) {
                             val obj = array.getJSONObject(i)
                             val userEmail = obj.optString("email", "")
-                            if (userEmail != "gemini@ai") {
+                            if (userEmail.isNotEmpty()) {
                                 list.add(
                                     User(
                                         uid = userEmail,
                                         email = userEmail,
-                                        name = obj.optString("name", ""),
+                                        name = obj.optString("name", userEmail.substringBefore("@")),
                                         avatarUrl = obj.optString("avatarUrl", DEFAULT_AVATAR_URL)
                                     )
                                 )
@@ -499,37 +486,18 @@ class KishkaManager(private val context: Context) {
         val jsonMsg = JSONObject().apply {
             put("id", UUID.randomUUID().toString())
             put("chatId", chatId)
-            put("senderEmail", senderEmail)
-            put("receiverEmail", receiverEmail)
+            put("senderEmail", senderEmail.trim().lowercase())
+            put("receiverEmail", receiverEmail.trim().lowercase())
             put("text", text)
             put("timestamp", System.currentTimeMillis())
         }
 
         socket.emit("send_message", jsonMsg)
-
-        if (receiverEmail == "gemini@ai" || text.trim().startsWith("@Gemini", ignoreCase = true)) {
-            val prompt = text.replace(Regex("^@Gemini\\s*", RegexOption.IGNORE_CASE), "").trim()
-            if (prompt.isNotEmpty()) {
-                askGemini(HARDCODED_GEMINI_API_KEY, prompt) { answer ->
-                    val botMsgId = UUID.randomUUID().toString()
-                    val botTimestamp = System.currentTimeMillis()
-                    val botMsgJson = JSONObject().apply {
-                        put("id", botMsgId)
-                        put("chatId", chatId)
-                        put("senderEmail", "Gemini AI")
-                        put("receiverEmail", senderEmail)
-                        put("text", answer)
-                        put("timestamp", botTimestamp)
-                    }
-                    socket.emit("send_message", botMsgJson)
-                }
-            }
-        }
     }
 
     fun askGemini(apiKey: String, prompt: String, onResult: (String) -> Unit) {
-        if (apiKey.isBlank() || apiKey == "ВСТАВТЕ_СВІЙ_КЛЮЧ_СЮДИ") {
-            onResult("Помилка: API ключ Gemini не налаштовано в коді розробника!")
+        if (apiKey.isBlank()) {
+            onResult("Помилка: API ключ Gemini не налаштовано!")
             return
         }
         thread {
@@ -653,139 +621,6 @@ class KishkaManager(private val context: Context) {
         currentChatCallback = null
         currentChatMessagesList = null
         socket.off("load_history")
-    }
-
-    fun listenForCallHistory(myEmail: String, onLogsUpdated: (List<CallLogItem>) -> Unit) {
-        onLogsUpdated(emptyList())
-    }
-
-    fun startCall(callerEmail: String, receiverEmail: String) {
-        ensureConnected()
-        val json = JSONObject().apply {
-            put("callerEmail", callerEmail.trim().lowercase())
-            put("receiverEmail", receiverEmail.trim().lowercase())
-        }
-        socket.emit("start_call", json)
-    }
-
-    fun answerCall(callerEmail: String, receiverEmail: String) {
-        ensureConnected()
-        val json = JSONObject().apply {
-            put("callerEmail", callerEmail.trim().lowercase())
-            put("receiverEmail", receiverEmail.trim().lowercase())
-        }
-        socket.emit("answer_call", json)
-    }
-
-    fun rejectCall(callerEmail: String, receiverEmail: String) {
-        ensureConnected()
-        val json = JSONObject().apply {
-            put("callerEmail", callerEmail.trim().lowercase())
-            put("receiverEmail", receiverEmail.trim().lowercase())
-        }
-        socket.emit("reject_call", json)
-    }
-
-    fun endCall(callerEmail: String, receiverEmail: String) {
-        ensureConnected()
-        val json = JSONObject().apply {
-            put("callerEmail", callerEmail.trim().lowercase())
-            put("receiverEmail", receiverEmail.trim().lowercase())
-        }
-        socket.emit("end_call", json)
-    }
-
-    fun sendVoiceChunk(targetEmail: String, chunk: ByteArray) {
-        if (targetEmail.isEmpty()) return
-        ensureConnected()
-        try {
-            val base64Str = Base64.encodeToString(chunk, Base64.NO_WRAP)
-            val json = JSONObject().apply {
-                put("targetEmail", targetEmail.trim().lowercase())
-                put("chunk", base64Str)
-            }
-            socket.emit("voice_chunk", json)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
-
-    fun listenForVoiceChunks(myEmail: String, onChunkReceived: (ByteArray) -> Unit) {
-        val cleanEmail = myEmail.trim().lowercase()
-        if (cleanEmail.isEmpty()) return
-        ensureConnected()
-
-        socket.off("voice_chunk_$cleanEmail")
-        socket.on("voice_chunk_$cleanEmail") { args ->
-            if (args.isNotEmpty()) {
-                try {
-                    val item = args[0]
-                    val chunkBytes = when (item) {
-                        is ByteArray -> item
-                        is String -> Base64.decode(item, Base64.NO_WRAP)
-                        is JSONObject -> {
-                            val chunkStr = item.optString("chunk", "")
-                            if (chunkStr.isNotEmpty()) Base64.decode(chunkStr, Base64.NO_WRAP) else null
-                        }
-                        else -> null
-                    }
-                    if (chunkBytes != null && chunkBytes.isNotEmpty()) {
-                        onChunkReceived(chunkBytes)
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-        }
-    }
-
-    fun stopListeningForVoiceChunks(myEmail: String) {
-        val cleanEmail = myEmail.trim().lowercase()
-        if (cleanEmail.isEmpty()) return
-        socket.off("voice_chunk_$cleanEmail")
-    }
-
-    fun listenForCallEvents(
-        myEmail: String,
-        onIncomingCall: (String) -> Unit,
-        onCallAnswered: () -> Unit,
-        onCallRejected: () -> Unit,
-        onCallEnded: () -> Unit,
-        onCallBusy: () -> Unit
-    ) {
-        val cleanEmail = myEmail.trim().lowercase()
-        if (cleanEmail.isEmpty()) return
-        ensureConnected()
-
-        socket.off("incoming_call_$cleanEmail")
-        socket.off("call_answered_$cleanEmail")
-        socket.off("call_rejected_$cleanEmail")
-        socket.off("call_ended_$cleanEmail")
-        socket.off("call_busy_$cleanEmail")
-
-        socket.on("incoming_call_$cleanEmail") { args ->
-            if (args.isNotEmpty() && args[0] is JSONObject) {
-                val obj = args[0] as JSONObject
-                val caller = obj.optString("callerEmail", "")
-                mainHandler.post { onIncomingCall(caller) }
-            }
-        }
-
-        socket.on("call_answered_$cleanEmail") {
-            mainHandler.post { onCallAnswered() }
-        }
-
-        socket.on("call_rejected_$cleanEmail") {
-            mainHandler.post { onCallRejected() }
-        }
-
-        socket.on("call_ended_$cleanEmail") {
-            mainHandler.post { onCallEnded() }
-        }
-
-        socket.on("call_busy_$cleanEmail") {
-            mainHandler.post { onCallBusy() }
-        }
     }
 
     private fun getChatId(email1: String, email2: String): String {
