@@ -35,12 +35,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.UnfoldLess
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -63,7 +63,7 @@ val ViberLightPurple = Color(0xFFEFEBFB)
 val ViberBg = Color(0xFFF5F6FA)
 
 const val DEFAULT_AVATAR_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/ic_launcher.png"
-const val GEMINI_LOGO_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/Assets/Logo.png"
+const val GEMINI_LOGO_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/Logo.png"
 
 object Strings {
     private val dictionary = mapOf(
@@ -98,7 +98,7 @@ object Strings {
             "active_call" to "Активний дзвінок Kishka",
             "end_call" to "Завершити дзвінок",
             "calling_in_progress" to "Триває розмова...",
-            "type_message" to "Повідомлення...",
+            "type_message" to "Повідомлення (або @Gemini ...)",
             "user_not_found" to "Користувача з такою поштою не знайдено!",
             "contact_added" to "Контакт успішно додано!",
             "loading_data" to "Завантажуємо ваші дані...",
@@ -112,11 +112,7 @@ object Strings {
             "message_copied" to "Скопійовано в буфер обміну",
             "incoming_call" to "Вхідний дзвінок",
             "answer" to "Відповісти",
-            "decline" to "Відхилити",
-            "return_to_call" to "Повернутися до виклику",
-            "gemini_tab_title" to "Штучний інтелект Gemini",
-            "gemini_hint" to "Спілкуйтеся з Gemini тут або через @Gemini у чаті",
-            "ask" to "Запитати"
+            "decline" to "Відхилити"
         ),
         "ru" to mapOf(
             "no_internet" to "No internet connection",
@@ -149,7 +145,7 @@ object Strings {
             "active_call" to "Активный звонок Kishka",
             "end_call" to "Завершить звонок",
             "calling_in_progress" to "Идет разговор...",
-            "type_message" to "Сообщение...",
+            "type_message" to "Сообщение (или @Gemini ...)",
             "user_not_found" to "Пользователь с такой почтой не найден!",
             "contact_added" to "Контакт успешно добавлен!",
             "loading_data" to "Загружаем ваши данные...",
@@ -163,11 +159,7 @@ object Strings {
             "message_copied" to "Скопировано в буфер обмена",
             "incoming_call" to "Входящий звонок",
             "answer" to "Ответить",
-            "decline" to "Отклонить",
-            "return_to_call" to "Вернуться к звонку",
-            "gemini_tab_title" to "Искусственный интеллект Gemini",
-            "gemini_hint" to "Общайтесь с Gemini здесь или через @Gemini в чате",
-            "ask" to "Спросить"
+            "decline" to "Отклонить"
         ),
         "en" to mapOf(
             "no_internet" to "No internet connection",
@@ -200,7 +192,7 @@ object Strings {
             "active_call" to "Active Kishka Call",
             "end_call" to "End Call",
             "calling_in_progress" to "Call in progress...",
-            "type_message" to "Message...",
+            "type_message" to "Message (or @Gemini ...)",
             "user_not_found" to "User with this email not found!",
             "contact_added" to "Contact successfully added!",
             "loading_data" to "Loading your data...",
@@ -214,11 +206,7 @@ object Strings {
             "message_copied" to "Copied to clipboard",
             "incoming_call" to "Incoming Call",
             "answer" to "Answer",
-            "decline" to "Decline",
-            "return_to_call" to "Return to call",
-            "gemini_tab_title" to "Gemini AI",
-            "gemini_hint" to "Chat with Gemini here or via @Gemini in chat",
-            "ask" to "Ask"
+            "decline" to "Decline"
         )
     )
 
@@ -240,9 +228,9 @@ class MainActivity : ComponentActivity() {
             } else {
                 @Suppress("DEPRECATION")
                 window.addFlags(
-                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
-                            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON |
-                            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD |
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
                             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
                 )
             }
@@ -338,14 +326,10 @@ fun KishkaApp() {
                     }
                 },
                 onCallAnswered = {
-                    val target = activeCallTargetPhone ?: incomingCallFrom ?: "Співрозмовник"
-                    if (activeCallTargetPhone == null) {
-                        activeCallTargetPhone = target
-                    }
                     val intent = Intent(context, CallService::class.java).apply {
                         action = CallService.ACTION_START_CALL
-                        putExtra(CallService.EXTRA_TARGET_NAME, target)
-                        putExtra(CallService.EXTRA_TARGET_PHONE, target)
+                        putExtra(CallService.EXTRA_TARGET_NAME, activeCallTargetPhone ?: "Співрозмовник")
+                        putExtra(CallService.EXTRA_TARGET_PHONE, activeCallTargetPhone ?: "")
                         putExtra(CallService.EXTRA_MY_EMAIL, currentUserEmail)
                     }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -431,7 +415,6 @@ fun KishkaApp() {
         if (activeCallTargetPhone != null && isCallMinimized) {
             ActiveCallBanner(
                 targetPhone = activeCallTargetPhone!!,
-                lang = currentLanguage,
                 onExpandCall = { isCallMinimized = false },
                 onEndCall = stopCallAction
             )
@@ -484,7 +467,7 @@ fun KishkaApp() {
                     }
                     context.startService(intent)
                 },
-                onMinimize = { isCallMinimized = true },
+                onMinimizeCall = { isCallMinimized = true },
                 onEndCall = stopCallAction
             )
         } else if (isDataLoading && currentUserEmail.isNotEmpty()) {
@@ -502,15 +485,6 @@ fun KishkaApp() {
                 }
             )
         } else {
-            if (activeCallTargetPhone != null) {
-                ActiveCallBanner(
-                    targetPhone = activeCallTargetPhone!!,
-                    lang = currentLanguage,
-                    onExpandCall = { isCallMinimized = false },
-                    onEndCall = stopCallAction
-                )
-            }
-
             if (isLandscape) {
                 Row(modifier = Modifier.fillMaxSize()) {
                     NavigationRail(
@@ -535,8 +509,8 @@ fun KishkaApp() {
                             icon = {
                                 AsyncImage(
                                     model = GEMINI_LOGO_URL,
-                                    contentDescription = "Gemini",
-                                    modifier = Modifier.size(24.dp).clip(CircleShape)
+                                    contentDescription = null,
+                                    modifier = Modifier.size(24.dp)
                                 )
                             },
                             label = { Text(Strings.get("gemini", currentLanguage)) }
@@ -655,8 +629,8 @@ fun KishkaApp() {
                             icon = {
                                 AsyncImage(
                                     model = GEMINI_LOGO_URL,
-                                    contentDescription = "Gemini",
-                                    modifier = Modifier.size(24.dp).clip(CircleShape)
+                                    contentDescription = null,
+                                    modifier = Modifier.size(24.dp)
                                 )
                             },
                             label = { Text(Strings.get("gemini", currentLanguage)) }
@@ -702,9 +676,8 @@ fun MainTabContent(
             onStartCall = onStartCall
         )
         2 -> GeminiTab(
-            manager = manager,
-            currentUserEmail = currentUserEmail,
-            lang = currentLanguage
+            context = LocalContext.current,
+            currentLang = currentLanguage
         )
         3 -> AccountTab(
             manager = manager,
@@ -721,106 +694,89 @@ fun MainTabContent(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GeminiTab(manager: KishkaManager, currentUserEmail: String, lang: String) {
-    var chatHistory by remember { mutableStateOf(manager.loadGeminiTabHistoryLocally(currentUserEmail)) }
-    var promptInput by remember { mutableStateOf("") }
-    var isLoading by remember { mutableStateOf(false) }
-    val listState = rememberLazyListState()
-
-    LaunchedEffect(chatHistory.size) {
-        if (chatHistory.isNotEmpty()) {
-            listState.animateScrollToItem(chatHistory.size - 1)
-        }
-    }
+fun GeminiTab(
+    context: Context,
+    currentLang: String
+) {
+    val prefs = remember { context.getSharedPreferences("kishka_cache_prefs", Context.MODE_PRIVATE) }
+    var apiKeyInput by remember { mutableStateOf(prefs.getString("gemini_api_key", "") ?: "") }
+    var testPrompt by remember { mutableStateOf("") }
+    var testResult by remember { mutableStateOf("") }
+    var isTesting by remember { mutableStateOf(false) }
+    val manager = remember { KishkaManager(context) }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text(Strings.get("gemini_tab_title", lang), fontWeight = FontWeight.Bold, color = ViberPurple) }) }
+        topBar = { TopAppBar(title = { Text("Gemini AI", fontWeight = FontWeight.Bold, color = ViberPurple) }) }
     ) { padding ->
         Column(
             modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(Strings.get("gemini_hint", lang), fontSize = 13.sp, color = Color.Gray)
-
-            Surface(
-                modifier = Modifier.fillMaxWidth().weight(1f),
-                color = Color.White,
-                shape = RoundedCornerShape(12.dp)
+            AsyncImage(
+                model = GEMINI_LOGO_URL,
+                contentDescription = "Gemini Logo",
+                modifier = Modifier.size(80.dp)
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text("Введіть свій API ключ Google AI Studio для Gemini", fontSize = 14.sp, color = Color.Gray)
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = apiKeyInput,
+                onValueChange = { apiKeyInput = it },
+                label = { Text("API Ключ Gemini") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(
+                onClick = {
+                    prefs.edit().putString("gemini_api_key", apiKeyInput.trim()).apply()
+                    Toast.makeText(context, "API ключ збережено!", Toast.LENGTH_SHORT).show()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = ViberPurple)
             ) {
-                if (chatHistory.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("Почніть діалог із Gemini нижче", color = Color.Gray, fontSize = 14.sp)
-                    }
-                } else {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize().padding(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(chatHistory) { item ->
-                            val isUser = item.role == "user"
-                            Box(
-                                modifier = Modifier.fillMaxWidth(),
-                                contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart
-                            ) {
-                                Surface(
-                                    color = if (isUser) ViberPurple else Color(0xFFF0F0F0),
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Text(
-                                        text = item.text,
-                                        color = if (isUser) Color.White else Color.Black,
-                                        modifier = Modifier.padding(10.dp),
-                                        fontSize = 15.sp
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
+                Text("Зберегти ключ")
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedTextField(
-                    value = promptInput,
-                    onValueChange = { promptInput = it },
-                    label = { Text("Промт для Gemini") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true
-                )
-
-                Button(
-                    onClick = {
-                        if (promptInput.isBlank()) return@Button
-
-                        val userText = promptInput.trim()
-                        promptInput = ""
-                        isLoading = true
-
-                        val updatedHistory = chatHistory + GeminiChatModel(role = "user", text = userText)
-                        chatHistory = updatedHistory
-                        manager.saveGeminiTabHistoryLocally(currentUserEmail, updatedHistory)
-
-                        manager.askGeminiTab(updatedHistory) { response ->
-                            isLoading = false
-                            val finalHistory = updatedHistory + GeminiChatModel(role = "model", text = response)
-                            chatHistory = finalHistory
-                            manager.saveGeminiTabHistoryLocally(currentUserEmail, finalHistory)
+            Spacer(modifier = Modifier.height(24.dp))
+            Text("Тестування Gemini:", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = testPrompt,
+                onValueChange = { testPrompt = it },
+                label = { Text("Запитати Gemini...") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(
+                onClick = {
+                    if (testPrompt.isNotBlank()) {
+                        isTesting = true
+                        testResult = "Генерую відповідь..."
+                        manager.askGemini(apiKeyInput.trim(), testPrompt) { answer ->
+                            testResult = answer
+                            isTesting = false
                         }
-                    },
-                    modifier = Modifier.height(56.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = ViberPurple),
-                    enabled = !isLoading
-                ) {
-                    if (isLoading) {
-                        CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
-                    } else {
-                        Icon(Icons.Default.Send, contentDescription = null, tint = Color.White)
                     }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !isTesting && testPrompt.isNotBlank()
+            ) {
+                if (isTesting) {
+                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
+                } else {
+                    Text("Надіслати запит")
+                }
+            }
+            if (testResult.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = ViberLightPurple
+                ) {
+                    Text(text = testResult, modifier = Modifier.padding(12.dp), color = Color.Black)
                 }
             }
         }
@@ -1452,12 +1408,13 @@ fun ChatScreen(
             ) {
                 items(messages) { msg ->
                     val isMe = msg.senderEmail == currentEmail
+                    val isGemini = msg.senderEmail == "Gemini AI"
                     Box(
                         modifier = Modifier.fillMaxWidth(),
                         contentAlignment = if (isMe) Alignment.CenterEnd else Alignment.CenterStart
                     ) {
                         Surface(
-                            color = if (isMe) ViberPurple else Color.White,
+                            color = if (isMe) ViberPurple else if (isGemini) ViberLightPurple else Color.White,
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
                                 .padding(4.dp)
@@ -1466,11 +1423,16 @@ fun ChatScreen(
                                     onLongClick = { selectedMessageForMenu = msg }
                                 )
                         ) {
-                            Text(
-                                text = msg.text,
-                                color = if (isMe) Color.White else Color.Black,
-                                modifier = Modifier.padding(10.dp)
-                            )
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                if (isGemini) {
+                                    Text("Gemini AI ✨", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ViberPurple)
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                }
+                                Text(
+                                    text = msg.text,
+                                    color = if (isMe) Color.White else Color.Black
+                                )
+                            }
                         }
 
                         DropdownMenu(
@@ -1516,16 +1478,8 @@ fun ChatScreen(
                 IconButton(
                     onClick = {
                         if (textInput.isNotEmpty()) {
-                            val currentText = textInput
+                            manager.sendMessage(currentEmail, targetUser.email, textInput)
                             textInput = ""
-                            if (currentText.startsWith("@Gemini ")) {
-                                manager.sendMessage(currentEmail, targetUser.email, currentText)
-                                manager.askGemini(messages, currentEmail) { geminiReply ->
-                                    manager.sendMessage(targetUser.email, currentEmail, "Gemini: $geminiReply")
-                                }
-                            } else {
-                                manager.sendMessage(currentEmail, targetUser.email, currentText)
-                            }
                         }
                     }
                 ) {
@@ -1593,9 +1547,10 @@ fun ActiveCallScreen(
     avatarUrl: String,
     lang: String,
     onToggleMute: () -> Unit,
-    onMinimize: () -> Unit,
+    onMinimizeCall: () -> Unit,
     onEndCall: () -> Unit
 ) {
+    // Блокування кнопки "Назад" та обертання екрана — виклик не можна закрити випадково
     BackHandler(enabled = true) {}
 
     var isMuted by remember { mutableStateOf(false) }
@@ -1609,12 +1564,13 @@ fun ActiveCallScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                title = { Text(Strings.get("active_call", lang)) },
                 navigationIcon = {
-                    IconButton(onClick = onMinimize) {
-                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Згорнути", tint = ViberPurple)
+                    // Кнопка згортання зверху зліва (не збиває трубку, дозволяє згорнути дзвінок)
+                    IconButton(onClick = onMinimizeCall) {
+                        Icon(Icons.Default.UnfoldLess, contentDescription = "Згорнути виклик", tint = ViberPurple)
                     }
-                },
-                title = { Text(Strings.get("active_call", lang)) }
+                }
             )
         }
     ) { padding ->
@@ -1686,7 +1642,6 @@ fun ActiveCallScreen(
 @Composable
 fun ActiveCallBanner(
     targetPhone: String,
-    lang: String,
     onExpandCall: () -> Unit,
     onEndCall: () -> Unit
 ) {
@@ -1703,8 +1658,8 @@ fun ActiveCallBanner(
                 Icon(Icons.Default.Call, contentDescription = null, tint = Color.White)
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
-                    Text("${Strings.get("return_to_call", lang)}: $targetPhone", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Text("Натисніть сюди", color = Color.White.copy(alpha = 0.8f), fontSize = 11.sp)
+                    Text("Дзвінок: $targetPhone", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Натисніть для повернення до виклику", color = Color.White.copy(alpha = 0.8f), fontSize = 11.sp)
                 }
             }
             IconButton(onClick = onEndCall, modifier = Modifier.size(36.dp)) {
