@@ -35,6 +35,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
@@ -62,6 +63,7 @@ val ViberLightPurple = Color(0xFFEFEBFB)
 val ViberBg = Color(0xFFF5F6FA)
 
 const val DEFAULT_AVATAR_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/ic_launcher.png"
+const val GEMINI_LOGO_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/Assets/Logo.png"
 
 object Strings {
     private val dictionary = mapOf(
@@ -70,6 +72,7 @@ object Strings {
             "select_lang" to "Мова інтерфейсу",
             "chats" to "Чати",
             "calls" to "Дзвінки",
+            "gemini" to "Gemini",
             "account" to "Акаунт",
             "all" to "Усі",
             "unread" to "Непрочитані",
@@ -109,13 +112,19 @@ object Strings {
             "message_copied" to "Скопійовано в буфер обміну",
             "incoming_call" to "Вхідний дзвінок",
             "answer" to "Відповісти",
-            "decline" to "Відхилити"
+            "decline" to "Відхилити",
+            "return_to_call" to "Повернутися до виклику",
+            "gemini_tab_title" to "Штучний інтелект Gemini",
+            "gemini_api_key_label" to "API ключ Google AI Studio",
+            "gemini_hint" to "Запитуйте Gemini тут або через @Gemini у чаті",
+            "ask" to "Запитати"
         ),
         "ru" to mapOf(
             "no_internet" to "No internet connection",
             "select_lang" to "Язык интерфейса",
             "chats" to "Чаты",
             "calls" to "Звонки",
+            "gemini" to "Gemini",
             "account" to "Аккаунт",
             "all" to "Все",
             "unread" to "Непрочитанные",
@@ -155,13 +164,19 @@ object Strings {
             "message_copied" to "Скопировано в буфер обмена",
             "incoming_call" to "Входящий звонок",
             "answer" to "Ответить",
-            "decline" to "Отклонить"
+            "decline" to "Отклонить",
+            "return_to_call" to "Вернуться к звонку",
+            "gemini_tab_title" to "Искусственный интеллект Gemini",
+            "gemini_api_key_label" to "API ключ Google AI Studio",
+            "gemini_hint" to "Спрашивайте Gemini здесь или через @Gemini в чате",
+            "ask" to "Спросить"
         ),
         "en" to mapOf(
             "no_internet" to "No internet connection",
             "select_lang" to "Interface Language",
             "chats" to "Chats",
             "calls" to "Calls",
+            "gemini" to "Gemini",
             "account" to "Account",
             "all" to "All",
             "unread" to "Unread",
@@ -201,7 +216,12 @@ object Strings {
             "message_copied" to "Copied to clipboard",
             "incoming_call" to "Incoming Call",
             "answer" to "Answer",
-            "decline" to "Decline"
+            "decline" to "Decline",
+            "return_to_call" to "Return to call",
+            "gemini_tab_title" to "Gemini AI",
+            "gemini_api_key_label" to "Google AI Studio API Key",
+            "gemini_hint" to "Ask Gemini here or via @Gemini in chat",
+            "ask" to "Ask"
         )
     )
 
@@ -223,9 +243,9 @@ class MainActivity : ComponentActivity() {
             } else {
                 @Suppress("DEPRECATION")
                 window.addFlags(
-                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
+                            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON |
+                            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD |
                             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
                 )
             }
@@ -303,7 +323,6 @@ fun KishkaApp() {
         if (currentUserEmail.isNotEmpty()) {
             isDataLoading = true
 
-            // Запускаємо глобальний слухач для отримання повідомлень у фоні
             manager.startGlobalMessageListener(currentUserEmail)
 
             manager.listenForCallEvents(
@@ -411,6 +430,7 @@ fun KishkaApp() {
         if (activeCallTargetPhone != null && isCallMinimized) {
             ActiveCallBanner(
                 targetPhone = activeCallTargetPhone!!,
+                lang = currentLanguage,
                 onExpandCall = { isCallMinimized = false },
                 onEndCall = stopCallAction
             )
@@ -463,6 +483,7 @@ fun KishkaApp() {
                     }
                     context.startService(intent)
                 },
+                onMinimize = { isCallMinimized = true },
                 onEndCall = stopCallAction
             )
         } else if (isDataLoading && currentUserEmail.isNotEmpty()) {
@@ -480,6 +501,16 @@ fun KishkaApp() {
                 }
             )
         } else {
+            if (activeCallTargetPhone != null) {
+                // Банер повернення до виклику у верхній частині екрана на будь-якій вкладці чи контакті
+                ActiveCallBanner(
+                    targetPhone = activeCallTargetPhone!!,
+                    lang = currentLanguage,
+                    onExpandCall = { isCallMinimized = false },
+                    onEndCall = stopCallAction
+                )
+            }
+
             if (isLandscape) {
                 Row(modifier = Modifier.fillMaxSize()) {
                     NavigationRail(
@@ -501,6 +532,18 @@ fun KishkaApp() {
                         NavigationRailItem(
                             selected = selectedBottomTab == 2,
                             onClick = { selectedBottomTab = 2 },
+                            icon = {
+                                AsyncImage(
+                                    model = GEMINI_LOGO_URL,
+                                    contentDescription = "Gemini",
+                                    modifier = Modifier.size(24.dp).clip(CircleShape)
+                                )
+                            },
+                            label = { Text(Strings.get("gemini", currentLanguage)) }
+                        )
+                        NavigationRailItem(
+                            selected = selectedBottomTab == 3,
+                            onClick = { selectedBottomTab = 3 },
                             icon = { Icon(Icons.Default.Person, contentDescription = null) },
                             label = { Text(Strings.get("account", currentLanguage)) }
                         )
@@ -609,6 +652,18 @@ fun KishkaApp() {
                         NavigationBarItem(
                             selected = selectedBottomTab == 2,
                             onClick = { selectedBottomTab = 2 },
+                            icon = {
+                                AsyncImage(
+                                    model = GEMINI_LOGO_URL,
+                                    contentDescription = "Gemini",
+                                    modifier = Modifier.size(24.dp).clip(CircleShape)
+                                )
+                            },
+                            label = { Text(Strings.get("gemini", currentLanguage)) }
+                        )
+                        NavigationBarItem(
+                            selected = selectedBottomTab == 3,
+                            onClick = { selectedBottomTab = 3 },
                             icon = { Icon(Icons.Default.Person, contentDescription = null) },
                             label = { Text(Strings.get("account", currentLanguage)) }
                         )
@@ -646,7 +701,11 @@ fun MainTabContent(
             lang = currentLanguage,
             onStartCall = onStartCall
         )
-        2 -> AccountTab(
+        2 -> GeminiTab(
+            manager = manager,
+            lang = currentLanguage
+        )
+        3 -> AccountTab(
             manager = manager,
             displayName = currentDisplayName,
             email = currentUserEmail,
@@ -656,6 +715,85 @@ fun MainTabContent(
             onProfileUpdated = onProfileUpdated,
             onLogout = onLogout
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun GeminiTab(manager: KishkaManager, lang: String) {
+    val context = LocalContext.current
+    val prefs = context.getSharedPreferences("kishka_cache_prefs", Context.MODE_PRIVATE)
+    var apiKey by remember { mutableStateOf(prefs.getString("gemini_api_key", "") ?: "") }
+    var promptInput by remember { mutableStateOf("") }
+    var geminiResponse by remember { mutableStateOf("") }
+    var isLoading by remember { mutableStateOf(false) }
+
+    Scaffold(
+        topBar = { TopAppBar(title = { Text(Strings.get("gemini_tab_title", lang), fontWeight = FontWeight.Bold, color = ViberPurple) }) }
+    ) { padding ->
+        Column(
+            modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            OutlinedTextField(
+                value = apiKey,
+                onValueChange = {
+                    apiKey = it
+                    prefs.edit().putString("gemini_api_key", it.trim()).apply()
+                },
+                label = { Text(Strings.get("gemini_api_key_label", lang)) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            Text(Strings.get("gemini_hint", lang), fontSize = 13.sp, color = Color.Gray)
+
+            OutlinedTextField(
+                value = promptInput,
+                onValueChange = { promptInput = it },
+                label = { Text("Промт для Gemini") },
+                modifier = Modifier.fillMaxWidth().height(120.dp)
+            )
+
+            Button(
+                onClick = {
+                    if (apiKey.isBlank()) {
+                        Toast.makeText(context, "Введіть API ключ Google AI Studio!", Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
+                    if (promptInput.isBlank()) return@Button
+                    isLoading = true
+                    geminiResponse = ""
+                    manager.askGemini(apiKey, promptInput) { response ->
+                        isLoading = false
+                        geminiResponse = response
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = ViberPurple),
+                enabled = !isLoading
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
+                } else {
+                    Text(Strings.get("ask", lang))
+                }
+            }
+
+            if (geminiResponse.isNotEmpty()) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    color = Color.White,
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    LazyColumn(modifier = Modifier.padding(12.dp)) {
+                        item {
+                            Text(geminiResponse, fontSize = 15.sp, color = Color.Black)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1348,8 +1486,23 @@ fun ChatScreen(
                 IconButton(
                     onClick = {
                         if (textInput.isNotEmpty()) {
-                            manager.sendMessage(currentEmail, targetUser.email, textInput)
+                            val currentText = textInput
                             textInput = ""
+                            if (currentText.startsWith("@Gemini ")) {
+                                val prompt = currentText.removePrefix("@Gemini ").trim()
+                                manager.sendMessage(currentEmail, targetUser.email, currentText)
+                                val prefs = context.getSharedPreferences("kishka_cache_prefs", Context.MODE_PRIVATE)
+                                val apiKey = prefs.getString("gemini_api_key", "") ?: ""
+                                if (apiKey.isNotEmpty()) {
+                                    manager.askGemini(apiKey, prompt) { geminiReply ->
+                                        manager.sendMessage(targetUser.email, currentEmail, "Gemini: $geminiReply")
+                                    }
+                                } else {
+                                    manager.sendMessage(targetUser.email, currentEmail, "Gemini: Помилка - не вказано API ключ у вкладці Gemini!")
+                                }
+                            } else {
+                                manager.sendMessage(currentEmail, targetUser.email, currentText)
+                            }
                         }
                     }
                 ) {
@@ -1417,8 +1570,12 @@ fun ActiveCallScreen(
     avatarUrl: String,
     lang: String,
     onToggleMute: () -> Unit,
+    onMinimize: () -> Unit,
     onEndCall: () -> Unit
 ) {
+    // Повне блокування виходу без кнопки зверху зліва (навіть при перевертанні екрана чи кнопці Назад)
+    BackHandler(enabled = true) {}
+
     var isMuted by remember { mutableStateOf(false) }
 
     val lineAnimProgress by animateFloatAsState(
@@ -1430,6 +1587,11 @@ fun ActiveCallScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = onMinimize) {
+                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Згорнути", tint = ViberPurple)
+                    }
+                },
                 title = { Text(Strings.get("active_call", lang)) }
             )
         }
@@ -1502,6 +1664,7 @@ fun ActiveCallScreen(
 @Composable
 fun ActiveCallBanner(
     targetPhone: String,
+    lang: String,
     onExpandCall: () -> Unit,
     onEndCall: () -> Unit
 ) {
@@ -1518,8 +1681,8 @@ fun ActiveCallBanner(
                 Icon(Icons.Default.Call, contentDescription = null, tint = Color.White)
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
-                    Text("Дзвінок: $targetPhone", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Text("Натисніть для повернення", color = Color.White.copy(alpha = 0.8f), fontSize = 11.sp)
+                    Text("${Strings.get("return_to_call", lang)}: $targetPhone", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Натисніть сюди", color = Color.White.copy(alpha = 0.8f), fontSize = 11.sp)
                 }
             }
             IconButton(onClick = onEndCall, modifier = Modifier.size(36.dp)) {
