@@ -698,8 +698,6 @@ fun GeminiTab(
     context: Context,
     currentLang: String
 ) {
-    val prefs = remember { context.getSharedPreferences("kishka_cache_prefs", Context.MODE_PRIVATE) }
-    var apiKeyInput by remember { mutableStateOf(prefs.getString("gemini_api_key", "") ?: "") }
     var testPrompt by remember { mutableStateOf("") }
     var testResult by remember { mutableStateOf("") }
     var isTesting by remember { mutableStateOf(false) }
@@ -718,27 +716,8 @@ fun GeminiTab(
                 modifier = Modifier.size(80.dp)
             )
             Spacer(modifier = Modifier.height(12.dp))
-            Text("Введіть свій API ключ Google AI Studio для Gemini", fontSize = 14.sp, color = Color.Gray)
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedTextField(
-                value = apiKeyInput,
-                onValueChange = { apiKeyInput = it },
-                label = { Text("API Ключ Gemini") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Button(
-                onClick = {
-                    prefs.edit().putString("gemini_api_key", apiKeyInput.trim()).apply()
-                    Toast.makeText(context, "API ключ збережено!", Toast.LENGTH_SHORT).show()
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = ViberPurple)
-            ) {
-                Text("Зберегти ключ")
-            }
-
+            Text("Gemini AI інтегровано впевнено та працює автоматично для всіх у чатах через `@Gemini`!", fontSize = 14.sp, color = Color.Gray)
+            
             Spacer(modifier = Modifier.height(24.dp))
             Text("Тестування Gemini:", fontWeight = FontWeight.Bold, fontSize = 16.sp)
             Spacer(modifier = Modifier.height(8.dp))
@@ -754,7 +733,7 @@ fun GeminiTab(
                     if (testPrompt.isNotBlank()) {
                         isTesting = true
                         testResult = "Генерую відповідь..."
-                        manager.askGemini(apiKeyInput.trim(), testPrompt) { answer ->
+                        manager.askGemini(KishkaManager.HARDCODED_GEMINI_API_KEY, testPrompt) { answer ->
                             testResult = answer
                             isTesting = false
                         }
@@ -1185,7 +1164,7 @@ fun CallsTab(
                                         fontWeight = FontWeight.Bold,
                                         color = if (log.isMissed) Color.Red else Color.Unspecified
                                     )
-                                    Text("${log.time} • ${log.duration}", color = Color.Gray, fontSize = 12.sp)
+                                    Text("${log.time} •${log.duration}", color = Color.Gray, fontSize = 12.sp)
                                 }
                             }
                             IconButton(onClick = { onStartCall(log.callerEmail) }) {
@@ -1550,7 +1529,6 @@ fun ActiveCallScreen(
     onMinimizeCall: () -> Unit,
     onEndCall: () -> Unit
 ) {
-    // Блокування кнопки "Назад" та обертання екрана — виклик не можна закрити випадково
     BackHandler(enabled = true) {}
 
     var isMuted by remember { mutableStateOf(false) }
@@ -1566,7 +1544,6 @@ fun ActiveCallScreen(
             TopAppBar(
                 title = { Text(Strings.get("active_call", lang)) },
                 navigationIcon = {
-                    // Кнопка згортання зверху зліва (не збиває трубку, дозволяє згорнути дзвінок)
                     IconButton(onClick = onMinimizeCall) {
                         Icon(Icons.Default.UnfoldLess, contentDescription = "Згорнути виклик", tint = ViberPurple)
                     }
