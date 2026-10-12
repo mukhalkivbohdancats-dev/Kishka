@@ -13,7 +13,6 @@ const io = new Server(server, {
     maxHttpBufferSize: 1e7
 });
 
-// Додано кореневий маршрут для підтримання активності (keep-alive) на Render
 app.get('/', (req, res) => {
     res.send('Kishka Messenger Server is active and running!');
 });
@@ -58,7 +57,7 @@ io.on('connection', (socket) => {
     socket.on('register_or_update_user', (data) => {
         const { email, name, avatarUrl } = data || {};
         if (!email || typeof email !== 'string') return;
-        const cleanEmail = email.trim().toLowerCase();
+        const cleanEmail = email.trim().lowercase();
         socket.userEmail = cleanEmail;
         userSockets.set(cleanEmail, socket.id);
         socket.join(cleanEmail);
@@ -79,7 +78,7 @@ io.on('connection', (socket) => {
         const safeCallback = typeof callback === 'function' ? callback : () => {};
         if (!email || typeof email !== 'string') return safeCallback(null);
         
-        const cleanEmail = email.trim().toLowerCase();
+        const cleanEmail = email.trim().lowercase();
         socket.userEmail = cleanEmail;
         userSockets.set(cleanEmail, socket.id);
         socket.join(cleanEmail);
@@ -100,8 +99,8 @@ io.on('connection', (socket) => {
     socket.on('add_contact', (data, callback) => {
         const safeCallback = typeof callback === 'function' ? callback : () => {};
         const { myEmail, targetEmail } = data || {};
-        const cleanMy = (typeof myEmail === 'string' ? myEmail : '').trim().toLowerCase();
-        const cleanTarget = (typeof targetEmail === 'string' ? targetEmail : '').trim().toLowerCase();
+        const cleanMy = (typeof myEmail === 'string' ? myEmail : '').trim().lowercase();
+        const cleanTarget = (typeof targetEmail === 'string' ? targetEmail : '').trim().lowercase();
 
         if (cleanMy) {
             socket.userEmail = cleanMy;
@@ -143,7 +142,7 @@ io.on('connection', (socket) => {
     socket.on('get_contacts', (myEmail, callback) => {
         const safeCallback = typeof callback === 'function' ? callback : () => {};
         if (!myEmail || typeof myEmail !== 'string') return safeCallback([]);
-        const cleanEmail = myEmail.trim().toLowerCase();
+        const cleanEmail = myEmail.trim().lowercase();
         socket.userEmail = cleanEmail;
         userSockets.set(cleanEmail, socket.id);
         socket.join(cleanEmail);
@@ -193,7 +192,7 @@ io.on('connection', (socket) => {
                 
                 io.to(chatId).emit('receive_message', newMessage);
                 if (receiverEmail) {
-                    io.to(receiverEmail.trim().toLowerCase()).emit('receive_message', newMessage);
+                    io.to(receiverEmail.trim().lowercase()).emit('receive_message', newMessage);
                 }
             }
         );
@@ -214,8 +213,8 @@ io.on('connection', (socket) => {
         const { callerEmail, receiverEmail } = data || {};
         if (!callerEmail || !receiverEmail) return;
 
-        const cleanCaller = callerEmail.trim().toLowerCase();
-        const cleanReceiver = receiverEmail.trim().toLowerCase();
+        const cleanCaller = callerEmail.trim().lowercase();
+        const cleanReceiver = receiverEmail.trim().lowercase();
 
         socket.userEmail = cleanCaller;
         userSockets.set(cleanCaller, socket.id);
@@ -251,8 +250,8 @@ io.on('connection', (socket) => {
     socket.on('answer_call', (data) => {
         const { callerEmail, receiverEmail } = data || {};
         if (!callerEmail) return;
-        const cleanCaller = callerEmail.trim().toLowerCase();
-        const cleanReceiver = (receiverEmail || '').trim().toLowerCase();
+        const cleanCaller = callerEmail.trim().lowercase();
+        const cleanReceiver = (receiverEmail || '').trim().lowercase();
 
         if (cleanCaller) busyUsers.add(cleanCaller);
         if (cleanReceiver) busyUsers.add(cleanReceiver);
@@ -266,8 +265,8 @@ io.on('connection', (socket) => {
 
     socket.on('reject_call', (data) => {
         const { callerEmail, receiverEmail } = data || {};
-        const cleanCaller = (callerEmail || '').trim().toLowerCase();
-        const cleanReceiver = (receiverEmail || '').trim().toLowerCase();
+        const cleanCaller = (callerEmail || '').trim().lowercase();
+        const cleanReceiver = (receiverEmail || '').trim().lowercase();
 
         if (cleanCaller) busyUsers.delete(cleanCaller);
         if (cleanReceiver) busyUsers.delete(cleanReceiver);
@@ -281,8 +280,8 @@ io.on('connection', (socket) => {
 
     socket.on('end_call', (data) => {
         const { callerEmail, receiverEmail } = data || {};
-        const cleanCaller = (callerEmail || '').trim().toLowerCase();
-        const cleanReceiver = (receiverEmail || '').trim().toLowerCase();
+        const cleanCaller = (callerEmail || '').trim().lowercase();
+        const cleanReceiver = (receiverEmail || '').trim().lowercase();
 
         if (cleanCaller) {
             busyUsers.delete(cleanCaller);
@@ -301,7 +300,7 @@ io.on('connection', (socket) => {
     socket.on('voice_chunk', (data) => {
         const { targetEmail, chunk } = data || {};
         if (!targetEmail || !chunk) return;
-        const cleanTarget = targetEmail.trim().toLowerCase();
+        const cleanTarget = targetEmail.trim().lowercase();
         io.to(cleanTarget).emit(`voice_chunk_${cleanTarget}`, chunk);
     });
 
