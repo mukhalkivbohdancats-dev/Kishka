@@ -338,10 +338,14 @@ fun KishkaApp() {
                     }
                 },
                 onCallAnswered = {
+                    val target = activeCallTargetPhone ?: incomingCallFrom ?: "Співрозмовник"
+                    if (activeCallTargetPhone == null) {
+                        activeCallTargetPhone = target
+                    }
                     val intent = Intent(context, CallService::class.java).apply {
                         action = CallService.ACTION_START_CALL
-                        putExtra(CallService.EXTRA_TARGET_NAME, activeCallTargetPhone ?: "Співрозмовник")
-                        putExtra(CallService.EXTRA_TARGET_PHONE, activeCallTargetPhone ?: "")
+                        putExtra(CallService.EXTRA_TARGET_NAME, target)
+                        putExtra(CallService.EXTRA_TARGET_PHONE, target)
                         putExtra(CallService.EXTRA_MY_EMAIL, currentUserEmail)
                     }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -738,7 +742,6 @@ fun GeminiTab(manager: KishkaManager, currentUserEmail: String, lang: String) {
         ) {
             Text(Strings.get("gemini_hint", lang), fontSize = 13.sp, color = Color.Gray)
 
-            // Список повідомлень чату Gemini з окремою пам'яттю для кожного користувача
             Surface(
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 color = Color.White,
