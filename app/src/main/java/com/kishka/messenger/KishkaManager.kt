@@ -307,7 +307,17 @@ class KishkaManager(private val context: Context) {
         val cleanEmail = myEmail.trim().lowercase()
         if (cleanEmail.isEmpty()) return
 
-        val cached = getCachedContacts(cleanEmail)
+        val geminiUser = User(
+            uid = "gemini@ai",
+            email = "gemini@ai",
+            name = "Gemini AI",
+            avatarUrl = GEMINI_LOGO_URL
+        )
+
+        val cached = getCachedContacts(cleanEmail).toMutableList()
+        if (cached.none { it.email == "gemini@ai" }) {
+            cached.add(0, geminiUser)
+        }
         if (cached.isNotEmpty()) {
             onContactsUpdated(cached)
         }
@@ -317,23 +327,28 @@ class KishkaManager(private val context: Context) {
         fun fetchAndNotify() {
             socket.emit("get_contacts", cleanEmail, io.socket.client.Ack { args ->
                 mainHandler.post {
+                    val list = mutableListOf<User>()
+                    list.add(geminiUser)
+
                     if (args.isNotEmpty() && args[0] is JSONArray) {
                         val array = args[0] as JSONArray
-                        val list = mutableListOf<User>()
                         for (i in 0 until array.length()) {
                             val obj = array.getJSONObject(i)
-                            list.add(
-                                User(
-                                    uid = obj.optString("email", ""),
-                                    email = obj.optString("email", ""),
-                                    name = obj.optString("name", ""),
-                                    avatarUrl = obj.optString("avatarUrl", DEFAULT_AVATAR_URL)
+                            val userEmail = obj.optString("email", "")
+                            if (userEmail != "gemini@ai") {
+                                list.add(
+                                    User(
+                                        uid = userEmail,
+                                        email = userEmail,
+                                        name = obj.optString("name", ""),
+                                        avatarUrl = obj.optString("avatarUrl", DEFAULT_AVATAR_URL)
+                                    )
                                 )
-                            )
+                            }
                         }
-                        cacheContactsLocally(cleanEmail, list)
-                        onContactsUpdated(list)
                     }
+                    cacheContactsLocally(cleanEmail, list)
+                    onContactsUpdated(list)
                 }
             })
         }
@@ -492,19 +507,21 @@ class KishkaManager(private val context: Context) {
 
         socket.emit("send_message", jsonMsg)
 
-        if (text.trim().startsWith("@Gemini", ignoreCase = true)) {
+        if (receiverEmail == "gemini@ai" || text.trim().startsWith("@Gemini", ignoreCase = true)) {
             val prompt = text.replace(Regex("^@Gemini\\s*", RegexOption.IGNORE_CASE), "").trim()
             if (prompt.isNotEmpty()) {
                 askGemini(HARDCODED_GEMINI_API_KEY, prompt) { answer ->
-                    val botMsg = JSONObject().apply {
-                        put("id", UUID.randomUUID().toString())
+                    val botMsgId = UUID.randomUUID().toString()
+                    val botTimestamp = System.currentTimeMillis()
+                    val botMsgJson = JSONObject().apply {
+                        put("id", botMsgId)
                         put("chatId", chatId)
                         put("senderEmail", "Gemini AI")
-                        put("receiverEmail", receiverEmail)
+                        put("receiverEmail", senderEmail)
                         put("text", answer)
-                        put("timestamp", System.currentTimeMillis())
+                        put("timestamp", botTimestamp)
                     }
-                    socket.emit("send_message", botMsg)
+                    socket.emit("send_message", botMsgJson)
                 }
             }
         }
