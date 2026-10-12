@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import com.google.firebase.auth.FirebaseAuth
+import java.util.UUID
 
 val ViberPurple = Color(0xFF6F32E2)
 val ViberLightPurple = Color(0xFFEFEBFB)
@@ -703,66 +704,143 @@ fun GeminiTab(
     context: Context,
     currentLang: String
 ) {
-    var testPrompt by remember { mutableStateOf("") }
-    var testResult by remember { mutableStateOf("") }
-    var isTesting by remember { mutableStateOf(false) }
     val manager = remember { KishkaManager(context) }
+    var messages by remember { 
+        mutableStateOf(
+            listOf(
+                Message(
+                    id = "welcome",
+                    chatId = "gemini_chat",
+                    senderEmail = "Gemini AI",
+                    receiverEmail = "user",
+                    text = "Привіт! Я твій повноцінний чат Gemini AI. Напиши мені будь-яке запитання або завдання!",
+                    timestamp = System.currentTimeMillis()
+                )
+            )
+        ) 
+    }
+    var textInput by remember { mutableStateOf("") }
+    var isSending by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.size - 1)
+        }
+    }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Gemini AI", fontWeight = FontWeight.Bold, color = ViberPurple) }) }
+        topBar = { 
+            TopAppBar(
+                title = { 
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        AsyncImage(
+                            model = GEMINI_LOGO_URL,
+                            contentDescription = "Gemini Logo",
+                            modifier = Modifier.size(32.dp).clip(CircleShape),
+                            error = painterResource(id = android.R.drawable.star_on),
+                            placeholder = painterResource(id = android.R.drawable.star_on)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Gemini AI Chat", fontWeight = FontWeight.Bold, color = ViberPurple)
+                    }
+                } 
+            ) 
+        }
     ) { padding ->
         Column(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            modifier = Modifier.fillMaxSize().padding(padding)
         ) {
-            AsyncImage(
-                model = GEMINI_LOGO_URL,
-                contentDescription = "Gemini Logo",
-                modifier = Modifier.size(80.dp),
-                error = painterResource(id = android.R.drawable.star_on),
-                placeholder = painterResource(id = android.R.drawable.star_on)
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            Text("Gemini AI інтегровано впевнено та працює автоматично для всіх у чатах через `@Gemini`!", fontSize = 14.sp, color = Color.Gray)
-            
-            Spacer(modifier = Modifier.height(24.dp))
-            Text("Тестування Gemini:", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedTextField(
-                value = testPrompt,
-                onValueChange = { testPrompt = it },
-                label = { Text("Запитати Gemini...") },
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Button(
-                onClick = {
-                    if (testPrompt.isNotBlank()) {
-                        isTesting = true
-                        testResult = "Генерую відповідь..."
-                        manager.askGemini(KishkaManager.HARDCODED_GEMINI_API_KEY, testPrompt) { answer ->
-                            testResult = answer
-                            isTesting = false
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.weight(1f).padding(8.dp)
+            ) {
+                items(messages) { msg ->
+                    val isMe = msg.senderEmail != "Gemini AI"
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = if (isMe) Alignment.CenterEnd else Alignment.CenterStart
+                    ) {
+                        Surface(
+                            color = if (isMe) ViberPurple else ViberLightPurple,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.padding(4.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                if (!isMe) {
+                                    Text("Gemini AI ✨", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ViberPurple)
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                }
+                                Text(
+                                    text = msg.text,
+                                    color = if (isMe) Color.White else Color.Black
+                                )
+                            }
                         }
                     }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !isTesting && testPrompt.isNotBlank()
-            ) {
-                if (isTesting) {
-                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
-                } else {
-                    Text("Надіслати запит")
+                }
+                if (isSending) {
+                    item {
+                        Box(modifier = Modifier.fillMaxWidth().padding(8.dp), contentAlignment = Alignment.CenterStart) {
+                            Surface(
+                                color = ViberLightPurple,
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = ViberPurple, strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Gemini друкує відповідь...", fontSize = 12.sp, color = Color.Gray)
+                                }
+                            }
+                        }
+                    }
                 }
             }
-            if (testResult.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = ViberLightPurple
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = textInput,
+                    onValueChange = { textInput = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Напишіть повідомлення Gemini...") },
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                IconButton(
+                    onClick = {
+                        if (textInput.isNotBlank() && !isSending) {
+                            val userMsgText = textInput.trim()
+                            val userMsg = Message(
+                                id = UUID.randomUUID().toString(),
+                                chatId = "gemini_chat",
+                                senderEmail = "user",
+                                receiverEmail = "Gemini AI",
+                                text = userMsgText,
+                                timestamp = System.currentTimeMillis()
+                            )
+                            messages = messages + userMsg
+                            textInput = ""
+                            isSending = true
+
+                            manager.askGemini(KishkaManager.HARDCODED_GEMINI_API_KEY, userMsgText) { answer ->
+                                val botMsg = Message(
+                                    id = UUID.randomUUID().toString(),
+                                    chatId = "gemini_chat",
+                                    senderEmail = "Gemini AI",
+                                    receiverEmail = "user",
+                                    text = answer,
+                                    timestamp = System.currentTimeMillis()
+                                )
+                                messages = messages + botMsg
+                                isSending = false
+                            }
+                        }
+                    }
                 ) {
-                    Text(text = testResult, modifier = Modifier.padding(12.dp), color = Color.Black)
+                    Icon(Icons.Default.Send, contentDescription = "Send", tint = ViberPurple)
                 }
             }
         }
@@ -1171,7 +1249,7 @@ fun CallsTab(
                                         fontWeight = FontWeight.Bold,
                                         color = if (log.isMissed) Color.Red else Color.Unspecified
                                     )
-                                    Text("${log.time} •${log.duration}", color = Color.Gray, fontSize = 12.sp)
+                                    Text("${log.time} • ${log.duration}", color = Color.Gray, fontSize = 12.sp)
                                 }
                             }
                             IconButton(onClick = { onStartCall(log.callerEmail) }) {
