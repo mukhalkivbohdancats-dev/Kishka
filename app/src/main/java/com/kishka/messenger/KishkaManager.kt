@@ -28,6 +28,11 @@ import java.net.URL
 import java.util.UUID
 import kotlin.concurrent.thread
 
+data class GeminiChatModel(
+    val role: String, // "user" або "model"
+    val text: String
+)
+
 class KishkaManager(private val context: Context) {
 
     private val storage = FirebaseStorage.getInstance()
@@ -45,7 +50,6 @@ class KishkaManager(private val context: Context) {
         const val GEMINI_LOGO_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/Assets/Logo.png"
         const val MSG_CHANNEL_ID = "KishkaMessageChannel"
         
-        // ВААРІАНТ 2: Вставте ваш API-ключ сюди (або залиште порожнім, якщо вводите в інтерфейсі)
         const val HARDCODED_GEMINI_API_KEY = ""
 
         private var socketInstance: Socket? = null
@@ -207,6 +211,44 @@ class KishkaManager(private val context: Context) {
                         receiverEmail = obj.optString("receiverEmail", ""),
                         text = obj.optString("text", ""),
                         timestamp = obj.optLong("timestamp", System.currentTimeMillis())
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return list
+    }
+
+    fun saveGeminiTabHistoryLocally(userEmail: String, history: List<GeminiChatModel>) {
+        try {
+            val cleanEmail = userEmail.trim().lowercase().ifEmpty { "default_user" }
+            val jsonArray = JSONArray()
+            for (item in history) {
+                val obj = JSONObject().apply {
+                    put("role", item.role)
+                    put("text", item.text)
+                }
+                jsonArray.put(obj)
+            }
+            prefs.edit().putString("gemini_tab_history_$cleanEmail", jsonArray.toString()).apply()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun loadGeminiTabHistoryLocally(userEmail: String): List<GeminiChatModel> {
+        val list = mutableListOf<GeminiChatModel>()
+        try {
+            val cleanEmail = userEmail.trim().lowercase().ifEmpty { "default_user" }
+            val str = prefs.getString("gemini_tab_history_$cleanEmail", null) ?: return list
+            val jsonArray = JSONArray(str)
+            for (i in 0 until jsonArray.length()) {
+                val obj = jsonArray.getJSONObject(i)
+                list.add(
+                    GeminiChatModel(
+                        role = obj.optString("role", "user"),
+                        text = obj.optString("text", "")
                     )
                 )
             }
@@ -705,11 +747,64 @@ class KishkaManager(private val context: Context) {
         }
     }
 
-    // Зберігає повну історію розмови для поточного користувача/чату (Gemini пам'ятає весь контекст)
+    // Запит для вкладки Gemini з повною історією (пам'ять без забувань)
+    fun askGeminiTab(apiKeyInput: String, history: List<GeminiChatModel>, onResult: (String) -> Unit) {
+        val apiKey = if (apiKeyInput.isNotBlank()) apiKeyInput else HARDCODED_GEMINI_API_KEY
+        if (apiKey.isBlank()) {
+            onResult("Помилка: API ключ не вказано.")
+            return
+        }
+        thread {
+            try {
+                val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.doOutput = true
+
+                val contentsArray = JSONArray()
+                for (item in history) {
+                    val contentObj = JSONObject().apply {
+                        put("role", item.role)
+                        put("parts", JSONArray().put(JSONObject().put("text", item.text)))
+                    }
+                    contentsArray.put(contentObj)
+                }
+
+                val jsonBody = JSONObject().apply {
+                    put("contents", contentsArray)
+                }
+
+                conn.outputStream.write(jsonBody.toString().toByteArray(Charsets.UTF_8))
+                
+                val responseCode = conn.responseCode
+                val stream = if (responseCode == 200) conn.inputStream else conn.errorStream
+                val responseStr = stream.bufferedReader().use { it.readText() }
+
+                if (responseCode == 200) {
+                    val root = JSONObject(responseStr)
+                    val candidates = root.optJSONArray("candidates")
+                    val text = candidates?.optJSONObject(0)
+                        ?.optJSONObject("content")
+                        ?.optJSONArray("parts")
+                        ?.optJSONObject(0)
+                        ?.optString("text", "Немає відповіді") ?: "Немає відповіді"
+                    mainHandler.post { onResult(text.trim()) }
+                } else {
+                    mainHandler.post { onResult("Помилка Gemini API ($responseCode): $responseStr") }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                mainHandler.post { onResult("Помилка запиту до Gemini: ${e.message}") }
+            }
+        }
+    }
+
+    // Запит через @Gemini у чатах (з пам'яттю всієї розмови у чаті)
     fun askGemini(apiKeyInput: String, messages: List<Message>, myEmail: String, onResult: (String) -> Unit) {
         val apiKey = if (apiKeyInput.isNotBlank()) apiKeyInput else HARDCODED_GEMINI_API_KEY
         if (apiKey.isBlank()) {
-            onResult("Помилка: API ключ не вказано (введіть у вкладці Gemini або в константі HARDCODED_GEMINI_API_KEY)")
+            onResult("Помилка: API ключ не вказано")
             return
         }
         thread {
