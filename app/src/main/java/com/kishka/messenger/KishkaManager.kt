@@ -44,6 +44,9 @@ class KishkaManager(private val context: Context) {
         const val DEFAULT_AVATAR_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/ic_launcher.png"
         const val GEMINI_LOGO_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/Logo.png"
         const val MSG_CHANNEL_ID = "KishkaMessageChannel"
+
+        // Жорстко зашитий єдиний API-ключ Gemini для тебе та твоїх друзів
+        const val HARDCODED_GEMINI_API_KEY = "AQ.Ab8RN6Io9qSUcZtAS7MgnF7mryexBM-o8dBGgp3kOvOqeZnQiA"
         
         private var socketInstance: Socket? = null
         private var isGlobalListenerInitialized = false
@@ -490,12 +493,11 @@ class KishkaManager(private val context: Context) {
 
         socket.emit("send_message", jsonMsg)
 
-        // Обробка запиту до Gemini, якщо повідомлення починається з @Gemini
+        // Обробка запиту до Gemini через жорстко зашитий API-ключ
         if (text.trim().startsWith("@Gemini", ignoreCase = true)) {
             val prompt = text.replace(Regex("^@Gemini\\s*", RegexOption.IGNORE_CASE), "").trim()
             if (prompt.isNotEmpty()) {
-                val apiKey = prefs.getString("gemini_api_key", "") ?: ""
-                askGemini(apiKey, prompt) { answer ->
+                askGemini(HARDCODED_GEMINI_API_KEY, prompt) { answer ->
                     val botMsg = JSONObject().apply {
                         put("id", UUID.randomUUID().toString())
                         put("chatId", chatId)
@@ -511,8 +513,8 @@ class KishkaManager(private val context: Context) {
     }
 
     fun askGemini(apiKey: String, prompt: String, onResult: (String) -> Unit) {
-        if (apiKey.isBlank()) {
-            onResult("Помилка: API ключ Gemini не налаштовано! Будь ласка, введіть ваш ключ у вкладці Gemini.")
+        if (apiKey.isBlank() || apiKey == "ВСТАВТЕ_СВІЙ_КЛЮЧ_СЮДИ") {
+            onResult("Помилка: API ключ Gemini не налаштовано в коді розробника!")
             return
         }
         thread {
