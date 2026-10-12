@@ -45,7 +45,7 @@ class KishkaManager(private val context: Context) {
         const val GEMINI_LOGO_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/Assets/Logo.png"
         const val MSG_CHANNEL_ID = "KishkaMessageChannel"
 
-        const val HARDCODED_GEMINI_API_KEY = "AIzaSyBhKDZbgEClPWw9BzRMMABzzgPpqMLZDAg"
+        const val HARDCODED_GEMINI_API_KEY = "AQ.Ab8RN6LCmO7zIiqQ3m5gVwtFtsYPl7LOesIC1HEoWhHd7sfI5w"
         
         private var socketInstance: Socket? = null
         private var isGlobalListenerInitialized = false
