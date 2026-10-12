@@ -45,6 +45,9 @@ class KishkaManager(private val context: Context) {
         const val GEMINI_LOGO_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/Assets/Logo.png"
         const val MSG_CHANNEL_ID = "KishkaMessageChannel"
         
+        // ВААРІАНТ 2: Вставте ваш API-ключ сюди (або залиште порожнім, якщо вводите в інтерфейсі)
+        const val HARDCODED_GEMINI_API_KEY = ""
+
         private var socketInstance: Socket? = null
         private var isGlobalListenerInitialized = false
 
@@ -702,9 +705,11 @@ class KishkaManager(private val context: Context) {
         }
     }
 
-    fun askGemini(apiKey: String, prompt: String, onResult: (String) -> Unit) {
-        if (apiKey.isBlank() || prompt.isBlank()) {
-            onResult("Помилка: API ключ або промт порожній")
+    // Зберігає повну історію розмови для поточного користувача/чату (Gemini пам'ятає весь контекст)
+    fun askGemini(apiKeyInput: String, messages: List<Message>, myEmail: String, onResult: (String) -> Unit) {
+        val apiKey = if (apiKeyInput.isNotBlank()) apiKeyInput else HARDCODED_GEMINI_API_KEY
+        if (apiKey.isBlank()) {
+            onResult("Помилка: API ключ не вказано (введіть у вкладці Gemini або в константі HARDCODED_GEMINI_API_KEY)")
             return
         }
         thread {
@@ -715,16 +720,27 @@ class KishkaManager(private val context: Context) {
                 conn.setRequestProperty("Content-Type", "application/json")
                 conn.doOutput = true
 
-                val jsonBody = JSONObject().apply {
-                    put("contents", JSONArray().put(
-                        JSONObject().apply {
-                            put("parts", JSONArray().put(
-                                JSONObject().apply {
-                                    put("text", prompt)
-                                }
-                            ))
+                val contentsArray = JSONArray()
+                for (msg in messages) {
+                    val isUser = msg.senderEmail.trim().lowercase() == myEmail.trim().lowercase()
+                    val role = if (isUser) "user" else "model"
+                    var cleanText = msg.text
+                    if (isUser && cleanText.startsWith("@Gemini ")) {
+                        cleanText = cleanText.removePrefix("@Gemini ").trim()
+                    } else if (!isUser && cleanText.startsWith("Gemini: ")) {
+                        cleanText = cleanText.removePrefix("Gemini: ").trim()
+                    }
+                    if (cleanText.isNotEmpty()) {
+                        val contentObj = JSONObject().apply {
+                            put("role", role)
+                            put("parts", JSONArray().put(JSONObject().put("text", cleanText)))
                         }
-                    ))
+                        contentsArray.put(contentObj)
+                    }
+                }
+
+                val jsonBody = JSONObject().apply {
+                    put("contents", contentsArray)
                 }
 
                 conn.outputStream.write(jsonBody.toString().toByteArray(Charsets.UTF_8))
