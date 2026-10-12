@@ -115,8 +115,7 @@ object Strings {
             "decline" to "Відхилити",
             "return_to_call" to "Повернутися до виклику",
             "gemini_tab_title" to "Штучний інтелект Gemini",
-            "gemini_api_key_label" to "API ключ Google AI Studio",
-            "gemini_hint" to "Запитуйте Gemini тут або через @Gemini у чаті",
+            "gemini_hint" to "Спілкуйтеся з Gemini тут або через @Gemini у чаті",
             "ask" to "Запитати"
         ),
         "ru" to mapOf(
@@ -167,8 +166,7 @@ object Strings {
             "decline" to "Отклонить",
             "return_to_call" to "Вернуться к звонку",
             "gemini_tab_title" to "Искусственный интеллект Gemini",
-            "gemini_api_key_label" to "API ключ Google AI Studio",
-            "gemini_hint" to "Спрашивайте Gemini здесь или через @Gemini в чате",
+            "gemini_hint" to "Общайтесь с Gemini здесь или через @Gemini в чате",
             "ask" to "Спросить"
         ),
         "en" to mapOf(
@@ -219,8 +217,7 @@ object Strings {
             "decline" to "Decline",
             "return_to_call" to "Return to call",
             "gemini_tab_title" to "Gemini AI",
-            "gemini_api_key_label" to "Google AI Studio API Key",
-            "gemini_hint" to "Ask Gemini here or via @Gemini in chat",
+            "gemini_hint" to "Chat with Gemini here or via @Gemini in chat",
             "ask" to "Ask"
         )
     )
@@ -721,15 +718,6 @@ fun MainTabContent(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GeminiTab(manager: KishkaManager, currentUserEmail: String, lang: String) {
-    val context = LocalContext.current
-    val prefs = context.getSharedPreferences("kishka_cache_prefs", Context.MODE_PRIVATE)
-    var apiKey by remember {
-        mutableStateOf(
-            prefs.getString("gemini_api_key", "").takeIf { !it.isNullOrBlank() }
-                ?: KishkaManager.HARDCODED_GEMINI_API_KEY
-        )
-    }
-
     var chatHistory by remember { mutableStateOf(manager.loadGeminiTabHistoryLocally(currentUserEmail)) }
     var promptInput by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
@@ -748,20 +736,9 @@ fun GeminiTab(manager: KishkaManager, currentUserEmail: String, lang: String) {
             modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            OutlinedTextField(
-                value = apiKey,
-                onValueChange = {
-                    apiKey = it
-                    prefs.edit().putString("gemini_api_key", it.trim()).apply()
-                },
-                label = { Text(Strings.get("gemini_api_key_label", lang)) },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-
             Text(Strings.get("gemini_hint", lang), fontSize = 13.sp, color = Color.Gray)
 
-            // Список повідомлень чату Gemini з пам'яттю
+            // Список повідомлень чату Gemini з окремою пам'яттю для кожного користувача
             Surface(
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 color = Color.White,
@@ -815,11 +792,6 @@ fun GeminiTab(manager: KishkaManager, currentUserEmail: String, lang: String) {
 
                 Button(
                     onClick = {
-                        val keyToUse = if (apiKey.isNotBlank()) apiKey else KishkaManager.HARDCODED_GEMINI_API_KEY
-                        if (keyToUse.isBlank()) {
-                            Toast.makeText(context, "Введіть API ключ Google AI Studio!", Toast.LENGTH_SHORT).show()
-                            return@Button
-                        }
                         if (promptInput.isBlank()) return@Button
 
                         val userText = promptInput.trim()
@@ -830,7 +802,7 @@ fun GeminiTab(manager: KishkaManager, currentUserEmail: String, lang: String) {
                         chatHistory = updatedHistory
                         manager.saveGeminiTabHistoryLocally(currentUserEmail, updatedHistory)
 
-                        manager.askGeminiTab(keyToUse, updatedHistory) { response ->
+                        manager.askGeminiTab(updatedHistory) { response ->
                             isLoading = false
                             val finalHistory = updatedHistory + GeminiChatModel(role = "model", text = response)
                             chatHistory = finalHistory
@@ -1545,16 +1517,8 @@ fun ChatScreen(
                             textInput = ""
                             if (currentText.startsWith("@Gemini ")) {
                                 manager.sendMessage(currentEmail, targetUser.email, currentText)
-                                val prefs = context.getSharedPreferences("kishka_cache_prefs", Context.MODE_PRIVATE)
-                                val apiKey = prefs.getString("gemini_api_key", "").takeIf { !it.isNullOrBlank() }
-                                    ?: KishkaManager.HARDCODED_GEMINI_API_KEY
-                                if (apiKey.isNotEmpty()) {
-                                    // Передаємо всю історію повідомлень поточного чату для збереження контексту і пам'яті Gemini у цьому чаті
-                                    manager.askGemini(apiKey, messages, currentEmail) { geminiReply ->
-                                        manager.sendMessage(targetUser.email, currentEmail, "Gemini: $geminiReply")
-                                    }
-                                } else {
-                                    manager.sendMessage(targetUser.email, currentEmail, "Gemini: Помилка - не вказано API ключ!")
+                                manager.askGemini(messages, currentEmail) { geminiReply ->
+                                    manager.sendMessage(targetUser.email, currentEmail, "Gemini: $geminiReply")
                                 }
                             } else {
                                 manager.sendMessage(currentEmail, targetUser.email, currentText)
