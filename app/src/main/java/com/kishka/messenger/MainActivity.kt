@@ -502,7 +502,6 @@ fun KishkaApp() {
             )
         } else {
             if (activeCallTargetPhone != null) {
-                // Банер повернення до виклику у верхній частині екрана на будь-якій вкладці чи контакті
                 ActiveCallBanner(
                     targetPhone = activeCallTargetPhone!!,
                     lang = currentLanguage,
@@ -723,7 +722,12 @@ fun MainTabContent(
 fun GeminiTab(manager: KishkaManager, lang: String) {
     val context = LocalContext.current
     val prefs = context.getSharedPreferences("kishka_cache_prefs", Context.MODE_PRIVATE)
-    var apiKey by remember { mutableStateOf(prefs.getString("gemini_api_key", "") ?: "") }
+    var apiKey by remember {
+        mutableStateOf(
+            prefs.getString("gemini_api_key", "").takeIf { !it.isNullOrBlank() }
+                ?: KishkaManager.HARDCODED_GEMINI_API_KEY
+        )
+    }
     var promptInput by remember { mutableStateOf("") }
     var geminiResponse by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
@@ -757,17 +761,18 @@ fun GeminiTab(manager: KishkaManager, lang: String) {
 
             Button(
                 onClick = {
-                    if (apiKey.isBlank()) {
-                        Toast.makeText(context, "Введіть API ключ Google AI Studio!", Toast.LENGTH_SHORT).show()
+                    val keyToUse = if (apiKey.isNotBlank()) apiKey else KishkaManager.HARDCODED_GEMINI_API_KEY
+                    if (keyToUse.isBlank()) {
+                        Toast.makeText(context, "Введіть API ключ Google AI Studio або заповніть HARDCODED_GEMINI_API_KEY!", Toast.LENGTH_SHORT).show()
                         return@Button
                     }
                     if (promptInput.isBlank()) return@Button
                     isLoading = true
                     geminiResponse = ""
-                    manager.askGemini(apiKey, promptInput) { response ->
+                    manager.askGemini(keyToUse, emptyList(), "", response = { resp ->
                         isLoading = false
-                        geminiResponse = response
-                    }
+                        geminiResponse = resp
+                    })
                 },
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = ViberPurple),
@@ -1489,16 +1494,17 @@ fun ChatScreen(
                             val currentText = textInput
                             textInput = ""
                             if (currentText.startsWith("@Gemini ")) {
-                                val prompt = currentText.removePrefix("@Gemini ").trim()
                                 manager.sendMessage(currentEmail, targetUser.email, currentText)
                                 val prefs = context.getSharedPreferences("kishka_cache_prefs", Context.MODE_PRIVATE)
-                                val apiKey = prefs.getString("gemini_api_key", "") ?: ""
+                                val apiKey = prefs.getString("gemini_api_key", "").takeIf { !it.isNullOrBlank() }
+                                    ?: KishkaManager.HARDCODED_GEMINI_API_KEY
                                 if (apiKey.isNotEmpty()) {
-                                    manager.askGemini(apiKey, prompt) { geminiReply ->
+                                    // Передаємо всю історію повідомлень поточного чату для збереження контексту і пам'яті Gemini
+                                    manager.askGemini(apiKey, messages, currentEmail) { geminiReply ->
                                         manager.sendMessage(targetUser.email, currentEmail, "Gemini: $geminiReply")
                                     }
                                 } else {
-                                    manager.sendMessage(targetUser.email, currentEmail, "Gemini: Помилка - не вказано API ключ у вкладці Gemini!")
+                                    manager.sendMessage(targetUser.email, currentEmail, "Gemini: Помилка - не вказано API ключ!")
                                 }
                             } else {
                                 manager.sendMessage(currentEmail, targetUser.email, currentText)
@@ -1573,7 +1579,6 @@ fun ActiveCallScreen(
     onMinimize: () -> Unit,
     onEndCall: () -> Unit
 ) {
-    // Повне блокування виходу без кнопки зверху зліва (навіть при перевертанні екрана чи кнопці Назад)
     BackHandler(enabled = true) {}
 
     var isMuted by remember { mutableStateOf(false) }
