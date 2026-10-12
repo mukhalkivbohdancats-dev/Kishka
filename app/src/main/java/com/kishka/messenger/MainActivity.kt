@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -63,7 +64,7 @@ val ViberLightPurple = Color(0xFFEFEBFB)
 val ViberBg = Color(0xFFF5F6FA)
 
 const val DEFAULT_AVATAR_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/ic_launcher.png"
-const val GEMINI_LOGO_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/Logo.png"
+const val GEMINI_LOGO_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/Assets/Logo.png"
 
 object Strings {
     private val dictionary = mapOf(
@@ -510,7 +511,9 @@ fun KishkaApp() {
                                 AsyncImage(
                                     model = GEMINI_LOGO_URL,
                                     contentDescription = null,
-                                    modifier = Modifier.size(24.dp)
+                                    modifier = Modifier.size(24.dp),
+                                    error = painterResource(id = android.R.drawable.star_on),
+                                    placeholder = painterResource(id = android.R.drawable.star_on)
                                 )
                             },
                             label = { Text(Strings.get("gemini", currentLanguage)) }
@@ -630,7 +633,9 @@ fun KishkaApp() {
                                 AsyncImage(
                                     model = GEMINI_LOGO_URL,
                                     contentDescription = null,
-                                    modifier = Modifier.size(24.dp)
+                                    modifier = Modifier.size(24.dp),
+                                    error = painterResource(id = android.R.drawable.star_on),
+                                    placeholder = painterResource(id = android.R.drawable.star_on)
                                 )
                             },
                             label = { Text(Strings.get("gemini", currentLanguage)) }
@@ -713,7 +718,9 @@ fun GeminiTab(
             AsyncImage(
                 model = GEMINI_LOGO_URL,
                 contentDescription = "Gemini Logo",
-                modifier = Modifier.size(80.dp)
+                modifier = Modifier.size(80.dp),
+                error = painterResource(id = android.R.drawable.star_on),
+                placeholder = painterResource(id = android.R.drawable.star_on)
             )
             Spacer(modifier = Modifier.height(12.dp))
             Text("Gemini AI інтегровано впевнено та працює автоматично для всіх у чатах через `@Gemini`!", fontSize = 14.sp, color = Color.Gray)
