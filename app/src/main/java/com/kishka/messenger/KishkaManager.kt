@@ -45,8 +45,7 @@ class KishkaManager(private val context: Context) {
         const val GEMINI_LOGO_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/Assets/Logo.png"
         const val MSG_CHANNEL_ID = "KishkaMessageChannel"
 
-        // Жорстко зашитий єдиний API-ключ Gemini для тебе та твоїх друзів
-        const val HARDCODED_GEMINI_API_KEY = "AQ.Ab8RN6KGFCXNTnMEkr0QCusT8aSY2E4mk8VQC75ntp3jSh8_Kg"
+        const val HARDCODED_GEMINI_API_KEY = "AIzaSyBhKDZbgEClPWw9BzRMMABzzgPpqMLZDAg"
         
         private var socketInstance: Socket? = null
         private var isGlobalListenerInitialized = false
@@ -59,9 +58,9 @@ class KishkaManager(private val context: Context) {
                         forceNew = false
                         reconnection = true
                         reconnectionAttempts = Int.MAX_VALUE
-                        reconnectionDelay = 500
-                        reconnectionDelayMax = 3000
-                        timeout = 10000
+                        reconnectionDelay = 200
+                        reconnectionDelayMax = 1000
+                        timeout = 5000
                     }
                     socketInstance = IO.socket(SERVER_URL, options)
                     socketInstance?.connect()
@@ -493,7 +492,6 @@ class KishkaManager(private val context: Context) {
 
         socket.emit("send_message", jsonMsg)
 
-        // Обробка запиту до Gemini через жорстко зашитий API-ключ
         if (text.trim().startsWith("@Gemini", ignoreCase = true)) {
             val prompt = text.replace(Regex("^@Gemini\\s*", RegexOption.IGNORE_CASE), "").trim()
             if (prompt.isNotEmpty()) {
