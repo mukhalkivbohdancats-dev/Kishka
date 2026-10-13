@@ -17,7 +17,6 @@ app.get('/', (req, res) => {
     res.send('Kishka Messenger Server is active and running!');
 });
 
-const busyUsers = new Set();
 const userSockets = new Map();
 
 const db = new sqlite3.Database('./chat.db', (err) => {
