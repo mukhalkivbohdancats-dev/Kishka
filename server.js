@@ -13,10 +13,12 @@ const io = new Server(server, {
     maxHttpBufferSize: 1e7
 });
 
+// Додано кореневий маршрут для підтримання активності (keep-alive) на Render
 app.get('/', (req, res) => {
     res.send('Kishka Messenger Server is active and running!');
 });
 
+const busyUsers = new Set();
 const userSockets = new Map();
 
 const db = new sqlite3.Database('./chat.db', (err) => {
@@ -108,30 +110,32 @@ io.on('connection', (socket) => {
         }
 
         if (!cleanTarget || !cleanTarget.includes('@') || cleanMy === cleanTarget) {
-            return safeCallback({ success: false, message: "Некоректна пошта або спроба додати себе!" });
+            return safeCallback({ success: false, message: "Некоректна адреса або спроба додати самі себе!" });
         }
 
         db.get("SELECT email, name, avatar_url as avatarUrl FROM users WHERE email = ?", [cleanTarget], (err, targetUser) => {
+            let finalUser = targetUser;
+
             const processAddContact = (userObj) => {
                 const stmt = db.prepare("INSERT OR IGNORE INTO contacts (owner_email, contact_email) VALUES (?, ?)");
-                stmt.run(cleanMy, cleanTarget, (err1) => {
-                    stmt.run(cleanTarget, cleanMy, (err2) => {
-                        stmt.finalize(() => {
-                            io.to(cleanMy).emit('contact_updated');
-                            io.to(cleanTarget).emit('contact_updated');
-                            safeCallback({ success: true, user: userObj, message: "Контакт успішно додано!" });
-                        });
-                    });
+                stmt.run(cleanMy, cleanTarget);
+                stmt.run(cleanTarget, cleanMy);
+                stmt.finalize(() => {
+                    io.to(cleanMy).emit('contact_updated');
+                    io.to(cleanTarget).emit('contact_updated');
+
+                    safeCallback({ success: true, user: userObj, message: "Контакт успішно додано!" });
                 });
             };
 
-            if (!targetUser) {
+            if (!finalUser) {
                 const defaultName = cleanTarget.split('@')[0];
                 db.run("INSERT OR IGNORE INTO users (email, name, avatar_url) VALUES (?, ?, NULL)", [cleanTarget, defaultName], () => {
-                    processAddContact({ email: cleanTarget, name: defaultName, avatarUrl: null });
+                    finalUser = { email: cleanTarget, name: defaultName, avatarUrl: null };
+                    processAddContact(finalUser);
                 });
             } else {
-                processAddContact(targetUser);
+                processAddContact(finalUser);
             }
         });
     });
@@ -186,6 +190,7 @@ io.on('connection', (socket) => {
             (err) => {
                 if (err) return;
                 const newMessage = { id: msgId, chatId, senderEmail, receiverEmail, text, timestamp: msgTimestamp };
+                
                 io.to(chatId).emit('receive_message', newMessage);
                 if (receiverEmail) {
                     io.to(receiverEmail.trim().toLowerCase()).emit('receive_message', newMessage);
@@ -205,9 +210,107 @@ io.on('connection', (socket) => {
         });
     });
 
+    socket.on('start_call', (data) => {
+        const { callerEmail, receiverEmail } = data || {};
+        if (!callerEmail || !receiverEmail) return;
+
+        const cleanCaller = callerEmail.trim().toLowerCase();
+        const cleanReceiver = receiverEmail.trim().toLowerCase();
+
+        socket.userEmail = cleanCaller;
+        userSockets.set(cleanCaller, socket.id);
+        socket.join(cleanCaller);
+
+        if (busyUsers.has(cleanReceiver) || busyUsers.has(cleanCaller)) {
+            const callerSocketId = userSockets.get(cleanCaller);
+            if (callerSocketId) {
+                io.to(callerSocketId).emit(`call_busy_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
+            }
+            return;
+        }
+
+        busyUsers.add(cleanCaller);
+        busyUsers.add(cleanReceiver);
+        socket.myCallEmails = [cleanCaller, cleanReceiver];
+
+        const receiverSocketId = userSockets.get(cleanReceiver);
+        if (receiverSocketId) {
+            io.to(receiverSocketId).emit(`incoming_call_${cleanReceiver}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
+        } else {
+            io.to(cleanReceiver).emit(`incoming_call_${cleanReceiver}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
+            
+            const callerSocketId = userSockets.get(cleanCaller);
+            if (callerSocketId) {
+                io.to(callerSocketId).emit(`call_busy_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
+            }
+            busyUsers.delete(cleanCaller);
+            busyUsers.delete(cleanReceiver);
+        }
+    });
+
+    socket.on('answer_call', (data) => {
+        const { callerEmail, receiverEmail } = data || {};
+        if (!callerEmail) return;
+        const cleanCaller = callerEmail.trim().toLowerCase();
+        const cleanReceiver = (receiverEmail || '').trim().toLowerCase();
+
+        if (cleanCaller) busyUsers.add(cleanCaller);
+        if (cleanReceiver) busyUsers.add(cleanReceiver);
+
+        const callerSocketId = userSockets.get(cleanCaller);
+        if (callerSocketId) {
+            io.to(callerSocketId).emit(`call_answered_${cleanCaller}`, { callerEmail, receiverEmail });
+        }
+        io.to(cleanCaller).emit(`call_answered_${cleanCaller}`, { callerEmail, receiverEmail });
+    });
+
+    socket.on('reject_call', (data) => {
+        const { callerEmail, receiverEmail } = data || {};
+        const cleanCaller = (callerEmail || '').trim().toLowerCase();
+        const cleanReceiver = (receiverEmail || '').trim().toLowerCase();
+
+        if (cleanCaller) busyUsers.delete(cleanCaller);
+        if (cleanReceiver) busyUsers.delete(cleanReceiver);
+
+        const callerSocketId = userSockets.get(cleanCaller);
+        if (callerSocketId) {
+            io.to(callerSocketId).emit(`call_rejected_${cleanCaller}`, { callerEmail, receiverEmail });
+        }
+        io.to(cleanCaller).emit(`call_rejected_${cleanCaller}`, { callerEmail, receiverEmail });
+    });
+
+    socket.on('end_call', (data) => {
+        const { callerEmail, receiverEmail } = data || {};
+        const cleanCaller = (callerEmail || '').trim().toLowerCase();
+        const cleanReceiver = (receiverEmail || '').trim().toLowerCase();
+
+        if (cleanCaller) {
+            busyUsers.delete(cleanCaller);
+            const sId = userSockets.get(cleanCaller);
+            if (sId) io.to(sId).emit(`call_ended_${cleanCaller}`, {});
+            io.to(cleanCaller).emit(`call_ended_${cleanCaller}`, {});
+        }
+        if (cleanReceiver) {
+            busyUsers.delete(cleanReceiver);
+            const sId = userSockets.get(cleanReceiver);
+            if (sId) io.to(sId).emit(`call_ended_${cleanReceiver}`, {});
+            io.to(cleanReceiver).emit(`call_ended_${cleanReceiver}`, {});
+        }
+    });
+
+    socket.on('voice_chunk', (data) => {
+        const { targetEmail, chunk } = data || {};
+        if (!targetEmail || !chunk) return;
+        const cleanTarget = targetEmail.trim().toLowerCase();
+        io.to(cleanTarget).emit(`voice_chunk_${cleanTarget}`, chunk);
+    });
+
     socket.on('disconnect', () => {
         if (socket.userEmail) {
             userSockets.delete(socket.userEmail);
+        }
+        if (socket.myCallEmails) {
+            socket.myCallEmails.forEach(email => busyUsers.delete(email));
         }
         console.log('Клієнт відключився');
     });
