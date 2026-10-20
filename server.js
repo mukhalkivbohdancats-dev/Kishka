@@ -316,6 +316,208 @@ io.on('connection', (socket) => {
     });
 });
 
+// =====================================================================
+// ===== GEMINI (ДОДАНО): окрема пам'ять ШІ для кожного користувача =====
+// Існуючі події (повідомлення, контакти, дзвінки) НЕ змінені.
+// Потрібна змінна середовища GEMINI_API_KEY (Render -> Environment).
+// Необов'язково: GEMINI_MODEL (за замовчуванням gemini-2.5-flash).
+// =====================================================================
+const https = require('https');
+
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const GEMINI_CONTEXT_LIMIT = 40;      // скільки останніх повідомлень памʼяті йде в запит до Gemini
+const GEMINI_HISTORY_LIMIT = 500;     // скільки повідомлень віддаємо в застосунок при відкритті вкладки
+const GEMINI_MAX_TEXT = 8000;
+const geminiBusy = new Set();
+
+db.serialize(() => {
+    db.run(`CREATE TABLE IF NOT EXISTS gemini_messages (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL,
+        role TEXT NOT NULL,
+        text TEXT NOT NULL,
+        timestamp INTEGER NOT NULL
+    )`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_gemini_email_time ON gemini_messages (email, timestamp)`);
+});
+
+function geminiDbRun(sql, params = []) {
+    return new Promise((resolve, reject) => {
+        db.run(sql, params, function (err) {
+            if (err) reject(err); else resolve(this);
+        });
+    });
+}
+
+function geminiDbAll(sql, params = []) {
+    return new Promise((resolve, reject) => {
+        db.all(sql, params, (err, rows) => {
+            if (err) reject(err); else resolve(rows || []);
+        });
+    });
+}
+
+function callGemini(contents, systemText) {
+    return new Promise((resolve, reject) => {
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) return reject(new Error('NO_KEY'));
+
+        const body = JSON.stringify({
+            systemInstruction: { parts: [{ text: systemText }] },
+            contents: contents
+        });
+
+        const req = https.request({
+            hostname: 'generativelanguage.googleapis.com',
+            path: `/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body),
+                'x-goog-api-key': apiKey
+            },
+            timeout: 60000
+        }, (res) => {
+            let data = '';
+            res.setEncoding('utf8');
+            res.on('data', (chunk) => { data += chunk; });
+            res.on('end', () => {
+                let json;
+                try { json = JSON.parse(data); } catch (e) { return reject(new Error('BAD_RESPONSE')); }
+
+                if (res.statusCode !== 200) {
+                    const msg = (json && json.error && json.error.message) ? json.error.message : ('HTTP ' + res.statusCode);
+                    return reject(new Error(msg));
+                }
+
+                const candidate = json.candidates && json.candidates[0];
+                const parts = candidate && candidate.content && candidate.content.parts;
+                const text = parts ? parts.filter(p => !p.thought).map(p => p.text || '').join('') : '';
+                if (!text.trim()) return reject(new Error('EMPTY'));
+                resolve(text);
+            });
+        });
+
+        req.on('timeout', () => req.destroy(new Error('TIMEOUT')));
+        req.on('error', reject);
+        req.write(body);
+        req.end();
+    });
+}
+
+function geminiErrorText(err) {
+    const m = err && err.message ? err.message : '';
+    if (m === 'NO_KEY') return 'На сервері не налаштований GEMINI_API_KEY';
+    if (m === 'TIMEOUT') return 'Gemini не відповів вчасно. Спробуйте ще раз';
+    if (m === 'EMPTY') return 'Gemini не зміг відповісти на це повідомлення';
+    if (m === 'BAD_RESPONSE') return 'Некоректна відповідь від Gemini';
+    return 'Помилка Gemini: ' + (m || 'невідома');
+}
+
+function geminiCleanEmail(email) {
+    return (typeof email === 'string' ? email : '').trim().toLowerCase();
+}
+
+io.on('connection', (socket) => {
+
+    // Історія (памʼять) Gemini конкретного користувача
+    socket.on('gemini_get_history', async (email, callback) => {
+        const cb = typeof callback === 'function' ? callback : () => {};
+        const cleanEmail = geminiCleanEmail(email);
+        if (!cleanEmail) return cb({ success: false, messages: [] });
+        try {
+            const rows = await geminiDbAll(
+                `SELECT id, role, text, timestamp FROM (
+                    SELECT id, role, text, timestamp FROM gemini_messages
+                    WHERE email = ? ORDER BY timestamp DESC LIMIT ?
+                 ) ORDER BY timestamp ASC`,
+                [cleanEmail, GEMINI_HISTORY_LIMIT]
+            );
+            cb({ success: true, messages: rows });
+        } catch (err) {
+            console.error('Gemini history error:', err.message);
+            cb({ success: false, messages: [] });
+        }
+    });
+
+    // Нове повідомлення до Gemini (з урахуванням памʼяті цього користувача)
+    socket.on('gemini_send', async (data, callback) => {
+        const cb = typeof callback === 'function' ? callback : () => {};
+        const { email, name, text } = data || {};
+        const cleanEmail = geminiCleanEmail(email);
+        const cleanText = (typeof text === 'string' ? text : '').trim();
+
+        if (!cleanEmail || !cleanText) return cb({ success: false, error: 'Порожнє повідомлення' });
+        if (cleanText.length > GEMINI_MAX_TEXT) return cb({ success: false, error: 'Повідомлення занадто довге' });
+        if (geminiBusy.has(cleanEmail)) return cb({ success: false, error: 'Gemini ще відповідає на попереднє повідомлення' });
+
+        geminiBusy.add(cleanEmail);
+
+        const now = Date.now();
+        const userMsgId = `g_${now}_${Math.random().toString(36).slice(2, 8)}`;
+
+        try {
+            await geminiDbRun(
+                "INSERT INTO gemini_messages (id, email, role, text, timestamp) VALUES (?, ?, 'user', ?, ?)",
+                [userMsgId, cleanEmail, cleanText, now]
+            );
+
+            const rows = await geminiDbAll(
+                "SELECT role, text FROM gemini_messages WHERE email = ? ORDER BY timestamp DESC, rowid DESC LIMIT ?",
+                [cleanEmail, GEMINI_CONTEXT_LIMIT]
+            );
+            rows.reverse();
+            while (rows.length > 0 && rows[0].role !== 'user') rows.shift();
+
+            const contents = rows.map(r => ({ role: r.role, parts: [{ text: r.text }] }));
+
+            const safeName = (typeof name === 'string' ? name : '').trim().slice(0, 60);
+            const systemText =
+                'Ти — Gemini, штучний інтелект усередині месенджера Kishka. ' +
+                'Відповідай тією мовою, якою пише користувач. Пиши чітко, доброзичливо і по суті. ' +
+                'Ти памʼятаєш попередні повідомлення цієї розмови з цим користувачем.' +
+                (safeName ? ` Користувача звати ${safeName}.` : '');
+
+            const replyText = await callGemini(contents, systemText);
+
+            const reply = {
+                id: `g_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                role: 'model',
+                text: replyText,
+                timestamp: Date.now()
+            };
+            await geminiDbRun(
+                "INSERT INTO gemini_messages (id, email, role, text, timestamp) VALUES (?, ?, 'model', ?, ?)",
+                [reply.id, cleanEmail, reply.text, reply.timestamp]
+            );
+
+            cb({ success: true, reply });
+        } catch (err) {
+            console.error('Gemini send error:', err.message);
+            // Відкочуємо повідомлення користувача, щоб памʼять не мала "висячих" питань без відповіді
+            try { await geminiDbRun("DELETE FROM gemini_messages WHERE id = ?", [userMsgId]); } catch (e) {}
+            cb({ success: false, error: geminiErrorText(err) });
+        } finally {
+            geminiBusy.delete(cleanEmail);
+        }
+    });
+
+    // Очищення памʼяті Gemini (тільки для цього користувача)
+    socket.on('gemini_clear', async (email, callback) => {
+        const cb = typeof callback === 'function' ? callback : () => {};
+        const cleanEmail = geminiCleanEmail(email);
+        if (!cleanEmail) return cb({ success: false });
+        try {
+            await geminiDbRun("DELETE FROM gemini_messages WHERE email = ?", [cleanEmail]);
+            cb({ success: true });
+        } catch (err) {
+            console.error('Gemini clear error:', err.message);
+            cb({ success: false });
+        }
+    });
+});
+// ===================== КІНЕЦЬ БЛОКУ GEMINI =====================
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`Сервер працює на порту ${PORT}`);
