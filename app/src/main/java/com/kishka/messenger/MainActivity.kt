@@ -109,7 +109,15 @@ object Strings {
             "message_copied" to "Скопійовано в буфер обміну",
             "incoming_call" to "Вхідний дзвінок",
             "answer" to "Відповісти",
-            "decline" to "Відхилити"
+            "decline" to "Відхилити",
+            "gemini" to "Gemini",
+            "gemini_subtitle" to "Штучний інтелект",
+            "gemini_empty" to "Привіт! Я Gemini. Запитайте мене про що завгодно — я пам'ятаю нашу розмову.",
+            "gemini_thinking" to "Gemini думає...",
+            "gemini_clear" to "Очистити пам'ять",
+            "gemini_clear_confirm" to "Видалити всю історію та пам'ять вашої розмови з Gemini?",
+            "gemini_cleared" to "Пам'ять Gemini очищено",
+            "gemini_error" to "Gemini зараз недоступний. Спробуйте пізніше."
         ),
         "ru" to mapOf(
             "no_internet" to "No internet connection",
@@ -155,7 +163,15 @@ object Strings {
             "message_copied" to "Скопировано в буфер обмена",
             "incoming_call" to "Входящий звонок",
             "answer" to "Ответить",
-            "decline" to "Отклонить"
+            "decline" to "Отклонить",
+            "gemini" to "Gemini",
+            "gemini_subtitle" to "Искусственный интеллект",
+            "gemini_empty" to "Привет! Я Gemini. Спросите меня о чём угодно — я помню наш разговор.",
+            "gemini_thinking" to "Gemini думает...",
+            "gemini_clear" to "Очистить память",
+            "gemini_clear_confirm" to "Удалить всю историю и память вашего разговора с Gemini?",
+            "gemini_cleared" to "Память Gemini очищена",
+            "gemini_error" to "Gemini сейчас недоступен. Попробуйте позже."
         ),
         "en" to mapOf(
             "no_internet" to "No internet connection",
@@ -201,7 +217,15 @@ object Strings {
             "message_copied" to "Copied to clipboard",
             "incoming_call" to "Incoming Call",
             "answer" to "Answer",
-            "decline" to "Decline"
+            "decline" to "Decline",
+            "gemini" to "Gemini",
+            "gemini_subtitle" to "Artificial Intelligence",
+            "gemini_empty" to "Hi! I'm Gemini. Ask me anything — I remember our conversation.",
+            "gemini_thinking" to "Gemini is thinking...",
+            "gemini_clear" to "Clear memory",
+            "gemini_clear_confirm" to "Delete the whole history and memory of your conversation with Gemini?",
+            "gemini_cleared" to "Gemini memory cleared",
+            "gemini_error" to "Gemini is unavailable right now. Please try again later."
         )
     )
 
@@ -501,11 +525,26 @@ fun KishkaApp() {
                         NavigationRailItem(
                             selected = selectedBottomTab == 2,
                             onClick = { selectedBottomTab = 2 },
+                            icon = { AsyncImage(model = GEMINI_LOGO_URL, contentDescription = null, modifier = Modifier.size(24.dp)) },
+                            label = { Text(Strings.get("gemini", currentLanguage)) }
+                        )
+                        NavigationRailItem(
+                            selected = selectedBottomTab == 3,
+                            onClick = { selectedBottomTab = 3 },
                             icon = { Icon(Icons.Default.Person, contentDescription = null) },
                             label = { Text(Strings.get("account", currentLanguage)) }
                         )
                     }
 
+                    if (selectedBottomTab == 2) {
+                        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                            GeminiTab(
+                                currentEmail = currentUserEmail,
+                                displayName = currentDisplayName,
+                                lang = currentLanguage
+                            )
+                        }
+                    } else {
                     Box(modifier = Modifier.width(320.dp).fillMaxHeight()) {
                         MainTabContent(
                             selectedBottomTab = selectedBottomTab,
@@ -551,6 +590,7 @@ fun KishkaApp() {
                                 Text("Оберіть чат для початку спілкування", color = Color.Gray)
                             }
                         }
+                    }
                     }
                 }
             } else {
@@ -609,6 +649,12 @@ fun KishkaApp() {
                         NavigationBarItem(
                             selected = selectedBottomTab == 2,
                             onClick = { selectedBottomTab = 2 },
+                            icon = { AsyncImage(model = GEMINI_LOGO_URL, contentDescription = null, modifier = Modifier.size(24.dp)) },
+                            label = { Text(Strings.get("gemini", currentLanguage)) }
+                        )
+                        NavigationBarItem(
+                            selected = selectedBottomTab == 3,
+                            onClick = { selectedBottomTab = 3 },
                             icon = { Icon(Icons.Default.Person, contentDescription = null) },
                             label = { Text(Strings.get("account", currentLanguage)) }
                         )
@@ -646,7 +692,12 @@ fun MainTabContent(
             lang = currentLanguage,
             onStartCall = onStartCall
         )
-        2 -> AccountTab(
+        2 -> GeminiTab(
+            currentEmail = currentUserEmail,
+            displayName = currentDisplayName,
+            lang = currentLanguage
+        )
+        3 -> AccountTab(
             manager = manager,
             displayName = currentDisplayName,
             email = currentUserEmail,
