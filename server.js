@@ -324,7 +324,11 @@ io.on('connection', (socket) => {
 // =====================================================================
 const https = require('https');
 
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+// Запасна модель: використовується, якщо основна перевантажена (503/429). Можна змінити змінною GEMINI_FALLBACK_MODEL.
+const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.7-flash';
+const GEMINI_ATTEMPT_TIMEOUT_MS = 25000;   // таймаут одного запиту до Google
+const GEMINI_TOTAL_BUDGET_MS = 35000;      // після цього часу нові спроби не починаємо
 const GEMINI_CONTEXT_LIMIT = 40;      // скільки останніх повідомлень памʼяті йде в запит до Gemini
 const GEMINI_HISTORY_LIMIT = 500;     // скільки повідомлень віддаємо в застосунок при відкритті вкладки
 const GEMINI_MAX_TEXT = 8000;
@@ -357,7 +361,7 @@ function geminiDbAll(sql, params = []) {
     });
 }
 
-function callGemini(contents, systemText) {
+function callGemini(contents, systemText, model) {
     return new Promise((resolve, reject) => {
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) return reject(new Error('NO_KEY'));
@@ -369,14 +373,14 @@ function callGemini(contents, systemText) {
 
         const req = https.request({
             hostname: 'generativelanguage.googleapis.com',
-            path: `/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`,
+            path: `/v1beta/models/${encodeURIComponent(model || GEMINI_MODEL)}:generateContent`,
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Content-Length': Buffer.byteLength(body),
                 'x-goog-api-key': apiKey
             },
-            timeout: 60000
+            timeout: GEMINI_ATTEMPT_TIMEOUT_MS
         }, (res) => {
             let data = '';
             res.setEncoding('utf8');
@@ -387,7 +391,9 @@ function callGemini(contents, systemText) {
 
                 if (res.statusCode !== 200) {
                     const msg = (json && json.error && json.error.message) ? json.error.message : ('HTTP ' + res.statusCode);
-                    return reject(new Error(msg));
+                    const apiErr = new Error(msg);
+                    apiErr.status = res.statusCode;
+                    return reject(apiErr);
                 }
 
                 const candidate = json.candidates && json.candidates[0];
@@ -405,9 +411,50 @@ function callGemini(contents, systemText) {
     });
 }
 
+function isRetryableGeminiError(err) {
+    const s = err && err.status;
+    if (s === 429 || s === 500 || s === 502 || s === 503 || s === 504) return true;
+    const m = err && err.message ? err.message : '';
+    return m === 'TIMEOUT' || /ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(m);
+}
+
+const geminiSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Основна модель (3 спроби) -> запасна модель (2 спроби). Якщо Google перевантажений, користувач цього не помітить.
+async function callGeminiResilient(contents, systemText) {
+    const started = Date.now();
+    const models = [GEMINI_MODEL];
+    if (GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== GEMINI_MODEL) models.push(GEMINI_FALLBACK_MODEL);
+
+    let firstError = null;
+    for (let m = 0; m < models.length; m++) {
+        const attempts = m === 0 ? 3 : 2;
+        for (let a = 0; a < attempts; a++) {
+            if (Date.now() - started > GEMINI_TOTAL_BUDGET_MS) throw firstError || new Error('TIMEOUT');
+            try {
+                return await callGemini(contents, systemText, models[m]);
+            } catch (err) {
+                if (!firstError) firstError = err;
+                if (err.message === 'NO_KEY') throw err;
+                if (!isRetryableGeminiError(err)) {
+                    // помилка запасної моделі (напр. невірна назва) не має ховати справжню причину
+                    throw (m > 0 ? firstError : err);
+                }
+                console.error(`Gemini ${models[m]} спроба ${a + 1}/${attempts}:`, err.message);
+                if (a < attempts - 1) await geminiSleep(1500 * (a + 1));
+            }
+        }
+    }
+    throw firstError || new Error('UNAVAILABLE');
+}
+
 function geminiErrorText(err) {
     const m = err && err.message ? err.message : '';
     if (m === 'NO_KEY') return 'На сервері не налаштований GEMINI_API_KEY';
+    if (err && err.status === 429) return 'Перевищено ліміт запитів до Gemini. Зачекайте хвилину і спробуйте ще раз';
+    if (err && (err.status === 503 || err.status === 500 || err.status === 502 || err.status === 504)) {
+        return 'Gemini зараз перевантажений. Спробуйте ще раз за хвилину';
+    }
     if (m === 'TIMEOUT') return 'Gemini не відповів вчасно. Спробуйте ще раз';
     if (m === 'EMPTY') return 'Gemini не зміг відповісти на це повідомлення';
     if (m === 'BAD_RESPONSE') return 'Некоректна відповідь від Gemini';
@@ -478,7 +525,7 @@ io.on('connection', (socket) => {
                 'Ти памʼятаєш попередні повідомлення цієї розмови з цим користувачем.' +
                 (safeName ? ` Користувача звати ${safeName}.` : '');
 
-            const replyText = await callGemini(contents, systemText);
+            const replyText = await callGeminiResilient(contents, systemText);
 
             const reply = {
                 id: `g_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
