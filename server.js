@@ -317,22 +317,78 @@ io.on('connection', (socket) => {
 });
 
 // =====================================================================
-// ===== GEMINI (ДОДАНО): окрема пам'ять ШІ для кожного користувача =====
+// ===== GEMINI (ДОДАНО): моделі, зображення, зупинка запиту, памʼять ШІ =====
 // Існуючі події (повідомлення, контакти, дзвінки) НЕ змінені.
-// Потрібна змінна середовища GEMINI_API_KEY (Render -> Environment).
-// Необов'язково: GEMINI_MODEL (за замовчуванням gemini-2.5-flash).
+//
+// Environment (Render -> Environment):
+//   GEMINI_API_KEY        — ключ з Google AI Studio (обовʼязково)
+//   GEMINI_MODEL          — модель за замовчуванням (необовʼязково, напр. gemini-3.8-flash)
+//   GEMINI_FALLBACK_MODEL — запасна модель при перевантаженні Google (необовʼязково)
+//   GEMINI_EXTRA_MODELS   — додаткові моделі, через кому:  id|Назва|text|paid
+//                           приклад: gemini-5-flash|Gemini 5 Flash|text,my-image-model|Моя картинка|image|paid
+//   GEMINI_HIDE_MODELS    — id моделей, які треба сховати зі списку, через кому
 // =====================================================================
 const https = require('https');
+const crypto = require('crypto');
 
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-// Запасна модель: використовується, якщо основна перевантажена (503/429). Можна змінити змінною GEMINI_FALLBACK_MODEL.
-const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.7-flash';
-const GEMINI_ATTEMPT_TIMEOUT_MS = 25000;   // таймаут одного запиту до Google
-const GEMINI_TOTAL_BUDGET_MS = 35000;      // після цього часу нові спроби не починаємо
+const GEMINI_DEFAULT_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.5-flash-lite';
 const GEMINI_CONTEXT_LIMIT = 40;      // скільки останніх повідомлень памʼяті йде в запит до Gemini
 const GEMINI_HISTORY_LIMIT = 500;     // скільки повідомлень віддаємо в застосунок при відкритті вкладки
 const GEMINI_MAX_TEXT = 8000;
-const geminiBusy = new Set();
+// Таймаутів на відповідь моделі НЕМАЄ: запит триває, поки Google не відповість або користувач не натисне "Стоп".
+
+// ---------------------------------------------------------------------
+// КАТАЛОГ МОДЕЛЕЙ (усі моделі зі списку AI Studio, які працюють як чат / генерація зображень).
+// paid: true  — у AI Studio позначені "Paid" (потрібен платний ключ Gemini API).
+// type: 'text' | 'image'.   noSystem: модель не підтримує system instruction (Gemma).
+// ---------------------------------------------------------------------
+const GEMINI_CATALOG = [
+    // ----- Текст -----
+    { id: 'gemini-4-argon',                          label: 'Gemini 4 Argon',                    type: 'text',  paid: true,  note: 'Найпотужніша модель' },
+    { id: 'gemini-3.8-flash',                        label: 'Gemini 3.8 Flash',                  type: 'text',  paid: false, note: 'Найрозумніша Flash-модель' },
+    { id: 'gemini-3.6-flash',                        label: 'Gemini 3.6 Flash',                  type: 'text',  paid: true,  note: 'Попереднє покоління Flash' },
+    { id: 'gemini-3.5-flash-lite',                   label: 'Gemini 3.5 Flash-Lite',             type: 'text',  paid: false, note: 'Найшвидша' },
+    { id: 'gemini-3.1-pro-preview',                  label: 'Gemini 3.1 Pro Preview',            type: 'text',  paid: false, note: 'Складні завдання та код' },
+    { id: 'gemini-3.1-flash-lite',                   label: 'Gemini 3.1 Flash-Lite',             type: 'text',  paid: false, note: 'Легка та швидка' },
+    { id: 'gemini-3-flash-preview',                  label: 'Gemini 3 Flash Preview',            type: 'text',  paid: true,  note: 'Застаріла Flash' },
+    { id: 'gemini-pro-latest',                       label: 'Gemini Pro Latest',                 type: 'text',  paid: false, note: 'Завжди остання Pro' },
+    { id: 'gemini-flash-latest',                     label: 'Gemini Flash Latest',               type: 'text',  paid: false, note: 'Завжди остання Flash' },
+    { id: 'gemini-flash-lite-latest',                label: 'Gemini Flash-Lite Latest',          type: 'text',  paid: false, note: 'Завжди остання Flash-Lite' },
+    { id: 'gemini-robotics-er-2-preview',            label: 'Gemini Robotics-ER 2 Preview',      type: 'text',  paid: false, note: 'Розуміння простору та відео' },
+    { id: 'gemini-robotics-er-2-streaming-preview',  label: 'Gemini Robotics-ER 2 Streaming',    type: 'text',  paid: false, note: 'Швидкий потоковий режим' },
+    // ----- Зображення (Nano Banana) -----
+    { id: 'gemini-nano-banana-2.1',                  label: 'Nano Banana 2.1',                   type: 'image', paid: true,  note: 'Найкраща якість, до 4K' },
+    { id: 'gemini-3.1-flash-lite-image',             label: 'Nano Banana 2 Lite',                type: 'image', paid: false, note: 'Найшвидша' },
+    { id: 'gemini-3.1-flash-image',                  label: 'Nano Banana 2',                     type: 'image', paid: true,  note: 'Збалансована' },
+    { id: 'gemini-3-pro-image',                      label: 'Nano Banana Pro',                   type: 'image', paid: true,  note: 'Професійна' },
+    { id: 'gemini-2.5-flash-image',                  label: 'Nano Banana',                       type: 'image', paid: true,  note: 'Перша версія' }
+];
+// Не включені (це не чат-моделі): gemini-3.8-flash-tts (озвучка), gemini-3.5-transcribe (розпізнавання мови),
+// antigravity-preview-09-2026 та deep-research-preview-04-2026 (агенти з іншим API).
+
+function geminiParseList(raw) {
+    return String(raw || '').split(/[,\n;]+/).map(s => s.trim()).filter(Boolean);
+}
+
+// Додаткові моделі з Environment: GEMINI_EXTRA_MODELS = id|Назва|text|paid, id2|Назва2|image
+function geminiExtraModels() {
+    const result = [];
+    geminiParseList(process.env.GEMINI_EXTRA_MODELS).forEach((entry) => {
+        const [id, label, type, flag] = entry.split('|').map(x => (x || '').trim());
+        if (!id || !/^[A-Za-z0-9._-]+$/.test(id)) return;
+        const typeLower = (type || '').toLowerCase();
+        const guessedType = /image|nano-banana|imagen/i.test(id) ? 'image' : 'text';
+        result.push({
+            id,
+            label: label || id,
+            type: (typeLower === 'image' || typeLower === 'text') ? typeLower : guessedType,
+            paid: typeLower === 'paid' || (flag || '').toLowerCase() === 'paid',
+            note: 'Додано через Environment'
+        });
+    });
+    return result;
+}
 
 db.serialize(() => {
     db.run(`CREATE TABLE IF NOT EXISTS gemini_messages (
@@ -342,7 +398,17 @@ db.serialize(() => {
         text TEXT NOT NULL,
         timestamp INTEGER NOT NULL
     )`);
+    // Міграції для вже існуючої таблиці (помилку "duplicate column" ігноруємо)
+    db.run("ALTER TABLE gemini_messages ADD COLUMN image_id TEXT", () => {});
+    db.run("ALTER TABLE gemini_messages ADD COLUMN model TEXT", () => {});
     db.run(`CREATE INDEX IF NOT EXISTS idx_gemini_email_time ON gemini_messages (email, timestamp)`);
+    db.run(`CREATE TABLE IF NOT EXISTS gemini_images (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL,
+        mime TEXT NOT NULL,
+        data BLOB NOT NULL,
+        timestamp INTEGER NOT NULL
+    )`);
 });
 
 function geminiDbRun(sql, params = []) {
@@ -361,102 +427,324 @@ function geminiDbAll(sql, params = []) {
     });
 }
 
-function callGemini(contents, systemText, model) {
+// Віддаємо згенеровані зображення (id випадковий і непередбачуваний)
+app.get('/gemini-image/:id', (req, res) => {
+    const id = String(req.params.id || '').replace(/[^a-zA-Z0-9_-]/g, '');
+    db.get("SELECT mime, data FROM gemini_images WHERE id = ?", [id], (err, row) => {
+        if (err || !row) return res.status(404).send('Not found');
+        const mime = /^image\/(png|jpeg|webp|gif)$/.test(row.mime) ? row.mime : 'image/png';
+        res.set('Content-Type', mime);
+        res.set('Cache-Control', 'public, max-age=31536000, immutable');
+        res.send(row.data);
+    });
+});
+
+// ---------- Активні запити та їх зупинка ----------
+const geminiJobs = new Map(); // email -> { cancelled, reqs }
+
+function geminiMakeJob() {
+    return { cancelled: false, reqs: new Set() };
+}
+
+function geminiCancelJob(job) {
+    job.cancelled = true;
+    job.reqs.forEach((r) => { try { r.destroy(new Error('CANCELLED')); } catch (e) {} });
+    job.reqs.clear();
+}
+
+function geminiCheckCancelled(job) {
+    if (job && job.cancelled) throw new Error('CANCELLED');
+}
+
+// ---------- Низькорівневий HTTPS-запит до Gemini API (БЕЗ таймауту) ----------
+function geminiRequest(method, path, bodyObj, job) {
     return new Promise((resolve, reject) => {
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) return reject(new Error('NO_KEY'));
+        if (job && job.cancelled) return reject(new Error('CANCELLED'));
 
-        const body = JSON.stringify({
-            systemInstruction: { parts: [{ text: systemText }] },
-            contents: contents
-        });
+        const body = bodyObj ? JSON.stringify(bodyObj) : null;
+        const headers = { 'x-goog-api-key': apiKey };
+        if (body) {
+            headers['Content-Type'] = 'application/json';
+            headers['Content-Length'] = Buffer.byteLength(body);
+        }
 
         const req = https.request({
             hostname: 'generativelanguage.googleapis.com',
-            path: `/v1beta/models/${encodeURIComponent(model || GEMINI_MODEL)}:generateContent`,
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(body),
-                'x-goog-api-key': apiKey
-            },
-            timeout: GEMINI_ATTEMPT_TIMEOUT_MS
+            path,
+            method,
+            headers
         }, (res) => {
-            let data = '';
-            res.setEncoding('utf8');
-            res.on('data', (chunk) => { data += chunk; });
+            const chunks = [];
+            res.on('data', (c) => chunks.push(c));
             res.on('end', () => {
-                let json;
-                try { json = JSON.parse(data); } catch (e) { return reject(new Error('BAD_RESPONSE')); }
-
-                if (res.statusCode !== 200) {
-                    const msg = (json && json.error && json.error.message) ? json.error.message : ('HTTP ' + res.statusCode);
-                    const apiErr = new Error(msg);
-                    apiErr.status = res.statusCode;
-                    return reject(apiErr);
-                }
-
-                const candidate = json.candidates && json.candidates[0];
-                const parts = candidate && candidate.content && candidate.content.parts;
-                const text = parts ? parts.filter(p => !p.thought).map(p => p.text || '').join('') : '';
-                if (!text.trim()) return reject(new Error('EMPTY'));
-                resolve(text);
+                if (job) job.reqs.delete(req);
+                const raw = Buffer.concat(chunks).toString('utf8');
+                let json = null;
+                try { json = JSON.parse(raw); } catch (e) {}
+                resolve({ status: res.statusCode, json });
             });
+            res.on('error', (e) => { if (job) job.reqs.delete(req); reject(e); });
         });
 
-        req.on('timeout', () => req.destroy(new Error('TIMEOUT')));
-        req.on('error', reject);
-        req.write(body);
+        if (job) job.reqs.add(req);
+        req.on('error', (e) => { if (job) job.reqs.delete(req); reject(e); });
+        if (body) req.write(body);
         req.end();
     });
 }
 
-function isRetryableGeminiError(err) {
+function geminiApiError(res) {
+    const msg = (res.json && res.json.error && res.json.error.message) ? res.json.error.message : ('HTTP ' + res.status);
+    const err = new Error(msg);
+    err.status = res.status;
+    return err;
+}
+
+// ---------- Каталог моделей ----------
+let geminiCatalogCache = { at: 0, ttl: 0, models: null };
+
+async function geminiFetchRemoteModels() {
+    const all = [];
+    let pageToken = '';
+    for (let page = 0; page < 4; page++) {
+        const q = '/v1beta/models?pageSize=1000' + (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : '');
+        const res = await geminiRequest('GET', q, null, null);
+        if (res.status !== 200 || !res.json || !Array.isArray(res.json.models)) throw geminiApiError(res);
+        all.push(...res.json.models);
+        pageToken = res.json.nextPageToken || '';
+        if (!pageToken) break;
+    }
+    return all;
+}
+
+async function geminiGetCatalog() {
+    const now = Date.now();
+    if (geminiCatalogCache.models && now - geminiCatalogCache.at < geminiCatalogCache.ttl) {
+        return geminiCatalogCache.models;
+    }
+
+    const models = GEMINI_CATALOG.map(m => Object.assign({}, m));
+
+    // Додаткові моделі з Environment (перекривають однакові id)
+    geminiExtraModels().forEach((extra) => {
+        const idx = models.findIndex(m => m.id === extra.id);
+        if (idx >= 0) models[idx] = extra; else models.push(extra);
+    });
+
+    // Відкриті моделі Gemma (безкоштовні) підтягуємо автоматично зі списку Google
+    let remoteOk = false;
+    try {
+        const remote = await geminiFetchRemoteModels();
+        remoteOk = true;
+        remote.forEach((m) => {
+            const id = String(m.name || '').replace(/^models\//, '');
+            const methods = m.supportedGenerationMethods || [];
+            if (/^gemma-/.test(id) && methods.includes('generateContent') && !models.some(x => x.id === id)) {
+                models.push({ id, label: m.displayName || id, type: 'text', paid: false, note: 'Gemma (відкрита модель)', noSystem: true });
+            }
+        });
+    } catch (e) {
+        console.error('Gemini ListModels:', e.message);
+    }
+
+    const hidden = new Set(geminiParseList(process.env.GEMINI_HIDE_MODELS));
+    const result = models.filter(m => !hidden.has(m.id));
+
+    geminiCatalogCache = { at: now, ttl: remoteOk ? 3600000 : 300000, models: result };
+    return result;
+}
+
+function geminiDefaultModel(catalog) {
+    return catalog.find(m => m.id === GEMINI_DEFAULT_MODEL && m.type === 'text')
+        || catalog.find(m => m.type === 'text' && !m.paid)
+        || catalog.find(m => m.type === 'text')
+        || catalog[0];
+}
+
+function geminiPickModel(catalog, requestedId) {
+    return catalog.find(m => m.id === requestedId) || geminiDefaultModel(catalog);
+}
+
+// ---------- Текстова відповідь ----------
+async function callGemini(contents, systemText, model, job) {
+    const body = { contents };
+    if (model.noSystem) {
+        // Gemma не підтримує systemInstruction: вшиваємо інструкцію в перше повідомлення
+        body.contents = contents.map(c => ({ role: c.role, parts: c.parts.map(p => ({ text: p.text })) }));
+        if (body.contents[0] && body.contents[0].parts[0]) {
+            body.contents[0].parts[0].text = systemText + '\n\n' + body.contents[0].parts[0].text;
+        }
+    } else {
+        body.systemInstruction = { parts: [{ text: systemText }] };
+    }
+
+    const res = await geminiRequest('POST', `/v1beta/models/${encodeURIComponent(model.id)}:generateContent`, body, job);
+    if (res.status !== 200) throw geminiApiError(res);
+    if (!res.json) throw new Error('BAD_RESPONSE');
+
+    const candidate = res.json.candidates && res.json.candidates[0];
+    const parts = candidate && candidate.content && candidate.content.parts;
+    const text = parts ? parts.filter(p => !p.thought).map(p => p.text || '').join('') : '';
+    if (!text.trim()) throw new Error('EMPTY');
+    return text;
+}
+
+function geminiIsOverload(err) {
     const s = err && err.status;
-    if (s === 429 || s === 500 || s === 502 || s === 503 || s === 504) return true;
+    if (s === 500 || s === 502 || s === 503 || s === 504) return true;
     const m = err && err.message ? err.message : '';
-    return m === 'TIMEOUT' || /ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(m);
+    return /ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(m);
+}
+
+function isRetryableGeminiError(err) {
+    return geminiIsOverload(err) || (err && err.status === 429);
 }
 
 const geminiSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Основна модель (3 спроби) -> запасна модель (2 спроби). Якщо Google перевантажений, користувач цього не помітить.
-async function callGeminiResilient(contents, systemText) {
-    const started = Date.now();
-    const models = [GEMINI_MODEL];
-    if (GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== GEMINI_MODEL) models.push(GEMINI_FALLBACK_MODEL);
+// Обрана модель (до 6 спроб при перевантаженні) -> запасна безкоштовна модель (2 спроби).
+// Запасна модель вмикається ТІЛЬКИ при перевантаженні Google (5xx), а не при ліміті/платній моделі.
+async function callGeminiResilient(contents, systemText, picked, catalog, job) {
+    const chain = [picked];
+    const fallback = catalog.find(m => m.type === 'text' && m.id === GEMINI_FALLBACK_MODEL && m.id !== picked.id && !m.paid)
+        || catalog.find(m => m.type === 'text' && !m.paid && !m.noSystem && m.id !== picked.id);
+    if (fallback) chain.push(fallback);
 
     let firstError = null;
-    for (let m = 0; m < models.length; m++) {
-        const attempts = m === 0 ? 3 : 2;
-        for (let a = 0; a < attempts; a++) {
-            if (Date.now() - started > GEMINI_TOTAL_BUDGET_MS) throw firstError || new Error('TIMEOUT');
+    for (let m = 0; m < chain.length; m++) {
+        const maxAttempts = m === 0 ? 6 : 2;
+        for (let a = 0; a < maxAttempts; a++) {
+            geminiCheckCancelled(job);
             try {
-                return await callGemini(contents, systemText, models[m]);
+                const text = await callGemini(contents, systemText, chain[m], job);
+                return { text, model: chain[m].id };
             } catch (err) {
+                if (err.message === 'CANCELLED' || err.message === 'NO_KEY') throw err;
                 if (!firstError) firstError = err;
-                if (err.message === 'NO_KEY') throw err;
-                if (!isRetryableGeminiError(err)) {
-                    // помилка запасної моделі (напр. невірна назва) не має ховати справжню причину
-                    throw (m > 0 ? firstError : err);
+                if (!isRetryableGeminiError(err)) throw (m > 0 ? firstError : err);
+
+                const limit = err.status === 429 ? 2 : maxAttempts; // ліміт квоти повторами не лікується
+                console.error(`Gemini ${chain[m].id} спроба ${a + 1}/${limit}:`, err.message);
+                if (a + 1 >= limit) {
+                    if (err.status === 429) throw err;   // без підміни моделі
+                    break;                               // перевантаження -> пробуємо запасну модель
                 }
-                console.error(`Gemini ${models[m]} спроба ${a + 1}/${attempts}:`, err.message);
-                if (a < attempts - 1) await geminiSleep(1500 * (a + 1));
+                await geminiSleep(Math.min(2000 * (a + 1), 10000));
             }
         }
     }
     throw firstError || new Error('UNAVAILABLE');
 }
 
-function geminiErrorText(err) {
-    const m = err && err.message ? err.message : '';
-    if (m === 'NO_KEY') return 'На сервері не налаштований GEMINI_API_KEY';
-    if (err && err.status === 429) return 'Перевищено ліміт запитів до Gemini. Зачекайте хвилину і спробуйте ще раз';
-    if (err && (err.status === 503 || err.status === 500 || err.status === 502 || err.status === 504)) {
-        return 'Gemini зараз перевантажений. Спробуйте ще раз за хвилину';
+// ---------- Генерація зображення ----------
+function geminiExtractImage(json) {
+    let text = '';
+    let image = null;
+
+    const visit = (b) => {
+        if (!b || typeof b !== 'object') return;
+        if (b.type === 'text' && typeof b.text === 'string') text += b.text;
+        else if (!b.type && typeof b.text === 'string' && !b.thought) text += b.text;
+
+        if (b.type === 'image' && b.data && !image) {
+            image = { mime: b.mime_type || b.mimeType || 'image/png', data: b.data };
+        }
+        const inline = b.inlineData || b.inline_data;
+        if (inline && inline.data && !image) {
+            image = { mime: inline.mimeType || inline.mime_type || 'image/png', data: inline.data };
+        }
+    };
+
+    // Interactions API
+    if (Array.isArray(json.steps)) {
+        json.steps.forEach((st) => {
+            if (st && st.type === 'model_output' && Array.isArray(st.content)) st.content.forEach(visit);
+        });
     }
-    if (m === 'TIMEOUT') return 'Gemini не відповів вчасно. Спробуйте ще раз';
+    if (!image && json.output_image && json.output_image.data) {
+        image = { mime: json.output_image.mime_type || 'image/png', data: json.output_image.data };
+    }
+    if (!text && typeof json.output_text === 'string') text = json.output_text;
+
+    // Класичний generateContent
+    if (Array.isArray(json.candidates)) {
+        json.candidates.forEach((c) => {
+            const parts = c && c.content && c.content.parts;
+            if (Array.isArray(parts)) parts.forEach((p) => { if (!p.thought) visit(p); });
+        });
+    }
+
+    return image ? { mime: image.mime, data: image.data, text: text.trim() } : null;
+}
+
+async function callGeminiImage(prompt, modelId, job) {
+    // 1) Interactions API (так зображення генеруються за актуальною документацією)
+    let res = await geminiRequest('POST', '/v1beta/interactions', {
+        model: modelId,
+        input: [{ type: 'text', text: prompt }]
+    }, job);
+
+    if (res.status === 200 && res.json) {
+        const out = geminiExtractImage(res.json);
+        if (out) return out;
+        throw new Error('EMPTY_IMAGE');
+    }
+
+    // 2) Запасний шлях: класичний generateContent з режимом IMAGE
+    if (res.status === 400 || res.status === 404 || res.status === 501) {
+        res = await geminiRequest('POST', `/v1beta/models/${encodeURIComponent(modelId)}:generateContent`, {
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
+        }, job);
+
+        if (res.status === 200 && res.json) {
+            const out = geminiExtractImage(res.json);
+            if (out) return out;
+            throw new Error('EMPTY_IMAGE');
+        }
+    }
+    throw geminiApiError(res);
+}
+
+async function callGeminiImageResilient(prompt, modelId, job) {
+    let lastErr = null;
+    for (let a = 0; a < 3; a++) {
+        geminiCheckCancelled(job);
+        try {
+            return await callGeminiImage(prompt, modelId, job);
+        } catch (err) {
+            lastErr = err;
+            if (err.message === 'CANCELLED' || err.message === 'NO_KEY') throw err;
+            if (!geminiIsOverload(err)) throw err;   // 429/403/400 повторами не лікуються
+            console.error(`Gemini image ${modelId} спроба ${a + 1}/3:`, err.message);
+            await geminiSleep(3000 * (a + 1));
+        }
+    }
+    throw lastErr;
+}
+
+function geminiErrorText(err, picked) {
+    const m = err && err.message ? err.message : '';
+    const s = err && err.status;
+    const name = picked ? picked.label : 'Ця модель';
+
+    if (m === 'CANCELLED') return 'Запит зупинено';
+    if (m === 'NO_KEY') return 'На сервері не налаштований GEMINI_API_KEY';
+    if ((s === 403 || s === 429) && picked && picked.paid) {
+        return `${name} платна: ваш ключ Google не має до неї доступу (потрібен платний тариф Gemini API)`;
+    }
+    if (s === 403) return `Немає доступу до моделі ${name} з вашим ключем Google`;
+    if (s === 404) return `Модель ${name} недоступна для вашого ключа Google`;
+    if (s === 429) {
+        return picked && picked.type === 'image'
+            ? `Генерація зображень моделлю ${name} недоступна на вашому ключі (ліміт або платний тариф)`
+            : 'Перевищено ліміт запитів до Gemini. Зачекайте хвилину і спробуйте ще раз';
+    }
+    if (s === 500 || s === 502 || s === 503 || s === 504) return 'Gemini зараз перевантажений. Спробуйте ще раз за хвилину';
     if (m === 'EMPTY') return 'Gemini не зміг відповісти на це повідомлення';
+    if (m === 'EMPTY_IMAGE') return 'Gemini не повернув зображення (можливо, запит заблоковано фільтром безпеки). Спробуйте інший опис';
     if (m === 'BAD_RESPONSE') return 'Некоректна відповідь від Gemini';
     return 'Помилка Gemini: ' + (m || 'невідома');
 }
@@ -467,6 +755,22 @@ function geminiCleanEmail(email) {
 
 io.on('connection', (socket) => {
 
+    // Список моделей
+    socket.on('gemini_get_models', async (arg1, arg2) => {
+        const cb = typeof arg1 === 'function' ? arg1 : (typeof arg2 === 'function' ? arg2 : () => {});
+        try {
+            const catalog = await geminiGetCatalog();
+            cb({
+                success: true,
+                defaultModel: geminiDefaultModel(catalog).id,
+                models: catalog.map(m => ({ id: m.id, label: m.label, type: m.type, paid: !!m.paid, note: m.note || '' }))
+            });
+        } catch (err) {
+            console.error('Gemini models error:', err.message);
+            cb({ success: false, models: [] });
+        }
+    });
+
     // Історія (памʼять) Gemini конкретного користувача
     socket.on('gemini_get_history', async (email, callback) => {
         const cb = typeof callback === 'function' ? callback : () => {};
@@ -474,79 +778,142 @@ io.on('connection', (socket) => {
         if (!cleanEmail) return cb({ success: false, messages: [] });
         try {
             const rows = await geminiDbAll(
-                `SELECT id, role, text, timestamp FROM (
-                    SELECT id, role, text, timestamp FROM gemini_messages
+                `SELECT id, role, text, timestamp, imageId, model FROM (
+                    SELECT id, role, text, timestamp, image_id AS imageId, model FROM gemini_messages
                     WHERE email = ? ORDER BY timestamp DESC LIMIT ?
                  ) ORDER BY timestamp ASC`,
                 [cleanEmail, GEMINI_HISTORY_LIMIT]
             );
-            cb({ success: true, messages: rows });
+            const messages = rows.map(r => ({
+                id: r.id,
+                role: r.role,
+                text: r.text,
+                timestamp: r.timestamp,
+                model: r.model || null,
+                imageUrl: r.imageId ? '/gemini-image/' + r.imageId : null
+            }));
+            cb({ success: true, messages });
         } catch (err) {
             console.error('Gemini history error:', err.message);
             cb({ success: false, messages: [] });
         }
     });
 
-    // Нове повідомлення до Gemini (з урахуванням памʼяті цього користувача)
+    // Нове повідомлення до Gemini (текст або зображення залежно від моделі)
     socket.on('gemini_send', async (data, callback) => {
         const cb = typeof callback === 'function' ? callback : () => {};
-        const { email, name, text } = data || {};
+        const { email, name, text, model } = data || {};
         const cleanEmail = geminiCleanEmail(email);
         const cleanText = (typeof text === 'string' ? text : '').trim();
 
         if (!cleanEmail || !cleanText) return cb({ success: false, error: 'Порожнє повідомлення' });
         if (cleanText.length > GEMINI_MAX_TEXT) return cb({ success: false, error: 'Повідомлення занадто довге' });
-        if (geminiBusy.has(cleanEmail)) return cb({ success: false, error: 'Gemini ще відповідає на попереднє повідомлення' });
+        if (geminiJobs.has(cleanEmail)) return cb({ success: false, error: 'Gemini ще відповідає на попереднє повідомлення' });
 
-        geminiBusy.add(cleanEmail);
+        const job = geminiMakeJob();
+        geminiJobs.set(cleanEmail, job);
 
         const now = Date.now();
         const userMsgId = `g_${now}_${Math.random().toString(36).slice(2, 8)}`;
+        let picked = null;
 
         try {
+            const catalog = await geminiGetCatalog();
+            picked = geminiPickModel(catalog, typeof model === 'string' ? model : '');
+            const isImage = picked.type === 'image';
+
             await geminiDbRun(
                 "INSERT INTO gemini_messages (id, email, role, text, timestamp) VALUES (?, ?, 'user', ?, ?)",
                 [userMsgId, cleanEmail, cleanText, now]
             );
 
-            const rows = await geminiDbAll(
-                "SELECT role, text FROM gemini_messages WHERE email = ? ORDER BY timestamp DESC, rowid DESC LIMIT ?",
-                [cleanEmail, GEMINI_CONTEXT_LIMIT]
-            );
-            rows.reverse();
-            while (rows.length > 0 && rows[0].role !== 'user') rows.shift();
+            let reply;
 
-            const contents = rows.map(r => ({ role: r.role, parts: [{ text: r.text }] }));
+            if (isImage) {
+                const img = await callGeminiImageResilient(cleanText, picked.id, job);
+                geminiCheckCancelled(job);
+                const imageId = crypto.randomBytes(16).toString('hex');
+                await geminiDbRun(
+                    "INSERT INTO gemini_images (id, email, mime, data, timestamp) VALUES (?, ?, ?, ?, ?)",
+                    [imageId, cleanEmail, img.mime, Buffer.from(img.data, 'base64'), Date.now()]
+                );
+                reply = {
+                    id: `g_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                    role: 'model',
+                    text: img.text || '',
+                    timestamp: Date.now(),
+                    model: picked.id,
+                    imageId
+                };
+            } else {
+                const rows = await geminiDbAll(
+                    "SELECT role, text, image_id AS imageId FROM gemini_messages WHERE email = ? ORDER BY timestamp DESC, rowid DESC LIMIT ?",
+                    [cleanEmail, GEMINI_CONTEXT_LIMIT]
+                );
+                rows.reverse();
+                while (rows.length > 0 && rows[0].role !== 'user') rows.shift();
 
-            const safeName = (typeof name === 'string' ? name : '').trim().slice(0, 60);
-            const systemText =
-                'Ти — Gemini, штучний інтелект усередині месенджера Kishka. ' +
-                'Відповідай тією мовою, якою пише користувач. Пиши чітко, доброзичливо і по суті. ' +
-                'Ти памʼятаєш попередні повідомлення цієї розмови з цим користувачем.' +
-                (safeName ? ` Користувача звати ${safeName}.` : '');
+                const contents = rows.map(r => ({
+                    role: r.role,
+                    parts: [{ text: (((r.text || '') + (r.imageId ? ' [згенероване зображення]' : '')).trim()) || '[порожнє повідомлення]' }]
+                }));
 
-            const replyText = await callGeminiResilient(contents, systemText);
+                const safeName = (typeof name === 'string' ? name : '').trim().slice(0, 60);
+                const systemText =
+                    'Ти — Gemini, штучний інтелект усередині месенджера Kishka. ' +
+                    'Відповідай тією мовою, якою пише користувач. Пиши чітко, доброзичливо і по суті. ' +
+                    'Ти памʼятаєш попередні повідомлення цієї розмови з цим користувачем.' +
+                    (safeName ? ` Користувача звати ${safeName}.` : '');
 
-            const reply = {
-                id: `g_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-                role: 'model',
-                text: replyText,
-                timestamp: Date.now()
-            };
+                const result = await callGeminiResilient(contents, systemText, picked, catalog, job);
+                geminiCheckCancelled(job);
+                reply = {
+                    id: `g_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                    role: 'model',
+                    text: result.text,
+                    timestamp: Date.now(),
+                    model: result.model,
+                    imageId: null
+                };
+            }
+
             await geminiDbRun(
-                "INSERT INTO gemini_messages (id, email, role, text, timestamp) VALUES (?, ?, 'model', ?, ?)",
-                [reply.id, cleanEmail, reply.text, reply.timestamp]
+                "INSERT INTO gemini_messages (id, email, role, text, timestamp, image_id, model) VALUES (?, ?, 'model', ?, ?, ?, ?)",
+                [reply.id, cleanEmail, reply.text, reply.timestamp, reply.imageId, reply.model]
             );
 
-            cb({ success: true, reply });
+            cb({
+                success: true,
+                reply: {
+                    id: reply.id,
+                    role: 'model',
+                    text: reply.text,
+                    timestamp: reply.timestamp,
+                    model: reply.model,
+                    imageUrl: reply.imageId ? '/gemini-image/' + reply.imageId : null
+                }
+            });
         } catch (err) {
-            console.error('Gemini send error:', err.message);
+            const cancelled = err && err.message === 'CANCELLED';
+            if (!cancelled) console.error('Gemini send error:', err && err.message);
             // Відкочуємо повідомлення користувача, щоб памʼять не мала "висячих" питань без відповіді
             try { await geminiDbRun("DELETE FROM gemini_messages WHERE id = ?", [userMsgId]); } catch (e) {}
-            cb({ success: false, error: geminiErrorText(err) });
+            cb({ success: false, cancelled, error: geminiErrorText(err, picked) });
         } finally {
-            geminiBusy.delete(cleanEmail);
+            if (geminiJobs.get(cleanEmail) === job) geminiJobs.delete(cleanEmail);
         }
+    });
+
+    // Зупинка поточного запиту до Gemini (кнопка "стоп" у застосунку)
+    socket.on('gemini_cancel', (email, callback) => {
+        const cb = typeof callback === 'function' ? callback : () => {};
+        const cleanEmail = geminiCleanEmail(email);
+        const job = geminiJobs.get(cleanEmail);
+        if (job) {
+            geminiCancelJob(job);
+            geminiJobs.delete(cleanEmail);
+        }
+        cb({ success: true });
     });
 
     // Очищення памʼяті Gemini (тільки для цього користувача)
@@ -556,6 +923,7 @@ io.on('connection', (socket) => {
         if (!cleanEmail) return cb({ success: false });
         try {
             await geminiDbRun("DELETE FROM gemini_messages WHERE email = ?", [cleanEmail]);
+            await geminiDbRun("DELETE FROM gemini_images WHERE email = ?", [cleanEmail]);
             cb({ success: true });
         } catch (err) {
             console.error('Gemini clear error:', err.message);
