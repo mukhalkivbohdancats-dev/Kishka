@@ -15,15 +15,22 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.core.app.NotificationCompat
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.UserProfileChangeRequest
+import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.storage.FirebaseStorage
 import io.socket.client.IO
 import io.socket.client.Socket
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
+
+/** Хто зараз пише повідомлення (email -> час, до якого показуємо "пише..."). Спостерігається з Compose. */
+object TypingState {
+    val until = mutableStateMapOf<String, Long>()
+}
 
 class KishkaManager(private val context: Context) {
 
@@ -44,6 +51,44 @@ class KishkaManager(private val context: Context) {
         private var socketInstance: Socket? = null
         private var isGlobalListenerInitialized = false
 
+        // Дані для повторної ідентифікації після перепідключення сокета
+        @Volatile var identifiedEmail: String? = null
+        @Volatile var pushToken: String? = null
+        @Volatile var activeChatForRejoin: String? = null
+
+        /** Перетворює відносне посилання сервера (/media/..) на повну адресу. */
+        fun absoluteUrl(path: String?): String? {
+            if (path.isNullOrEmpty()) return null
+            return if (path.startsWith("http")) path else SERVER_URL + path
+        }
+
+        /** Повертає відносну частину посилання (для відправлення на сервер). */
+        fun relativeUrl(url: String?): String? {
+            if (url.isNullOrEmpty()) return null
+            return if (url.startsWith(SERVER_URL)) url.removePrefix(SERVER_URL) else url
+        }
+
+        /** Каже серверу, хто ми (і наш push-токен), та повертає в активний чат. Викликається при кожному (пере)підключенні. */
+        fun sendIdentify() {
+            val email = identifiedEmail
+            val s = socketInstance
+            if (email.isNullOrEmpty() || s == null) return
+            try {
+                val json = JSONObject().apply {
+                    put("email", email)
+                    val token = pushToken
+                    if (!token.isNullOrEmpty()) put("pushToken", token)
+                }
+                s.emit("identify", json)
+                val chatId = activeChatForRejoin
+                if (!chatId.isNullOrEmpty()) {
+                    s.emit("join_chat", JSONObject().apply { put("chatId", chatId) })
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
         @Synchronized
         fun getSocket(): Socket {
             if (socketInstance == null) {
@@ -57,6 +102,7 @@ class KishkaManager(private val context: Context) {
                         timeout = 10000 // Зменшено таймаут до 10с для швидкого реагування
                     }
                     socketInstance = IO.socket(SERVER_URL, options)
+                    socketInstance?.on(Socket.EVENT_CONNECT) { sendIdentify() }
                     socketInstance?.connect()
                 } catch (e: Exception) {
                     e.printStackTrace()
@@ -176,6 +222,9 @@ class KishkaManager(private val context: Context) {
                     put("receiverEmail", m.receiverEmail)
                     put("text", m.text)
                     put("timestamp", m.timestamp)
+                    if (m.fileUrl != null) put("fileUrl", m.fileUrl)
+                    if (m.fileType != null) put("fileType", m.fileType)
+                    if (m.thumbUrl != null) put("thumbUrl", m.thumbUrl)
                 }
                 jsonArray.put(obj)
             }
@@ -192,21 +241,40 @@ class KishkaManager(private val context: Context) {
             val jsonArray = JSONArray(str)
             for (i in 0 until jsonArray.length()) {
                 val obj = jsonArray.getJSONObject(i)
-                list.add(
-                    Message(
-                        id = obj.optString("id", ""),
-                        chatId = obj.optString("chatId", chatId),
-                        senderEmail = obj.optString("senderEmail", ""),
-                        receiverEmail = obj.optString("receiverEmail", ""),
-                        text = obj.optString("text", ""),
-                        timestamp = obj.optLong("timestamp", System.currentTimeMillis())
-                    )
-                )
+                list.add(parseMessageJson(obj, chatId))
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
         return list
+    }
+
+    /** Розбирає повідомлення з JSON (сервер, кеш) разом із фото/відео. */
+    private fun parseMessageJson(obj: JSONObject, defaultChatId: String): Message {
+        fun optNullable(name: String): String? =
+            if (obj.isNull(name)) null else obj.optString(name, "").ifEmpty { null }
+
+        return Message(
+            id = obj.optString("id", ""),
+            chatId = obj.optString("chatId", defaultChatId),
+            senderEmail = obj.optString("senderEmail", ""),
+            receiverEmail = obj.optString("receiverEmail", ""),
+            text = obj.optString("text", ""),
+            timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
+            fileUrl = absoluteUrl(optNullable("fileUrl")),
+            fileType = optNullable("fileType"),
+            thumbUrl = absoluteUrl(optNullable("thumbUrl"))
+        )
+    }
+
+    // ---------- "Видалити в мене": приховані повідомлення зберігаються лише на цьому пристрої ----------
+    private fun getHiddenIds(chatId: String): Set<String> =
+        prefs.getStringSet("hidden_msgs_$chatId", emptySet()) ?: emptySet()
+
+    private fun addHiddenId(chatId: String, messageId: String) {
+        val updated = HashSet(getHiddenIds(chatId))
+        updated.add(messageId)
+        prefs.edit().putStringSet("hidden_msgs_$chatId", updated).apply()
     }
 
     fun registerOrUpdateUserInDb(email: String, name: String, avatarUrl: String? = null) {
@@ -345,8 +413,30 @@ class KishkaManager(private val context: Context) {
         if (cleanEmail.isEmpty()) return
         ensureConnected()
 
+        identifiedEmail = cleanEmail
+        sendIdentify()
+        registerPushToken()
+
         if (!isGlobalListenerInitialized) {
             isGlobalListenerInitialized = true
+
+            socket.on("user_typing") { args ->
+                if (args.isNotEmpty() && args[0] is JSONObject) {
+                    val obj = args[0] as JSONObject
+                    val from = obj.optString("from", "").trim().lowercase()
+                    val typing = obj.optBoolean("isTyping", false)
+                    if (from.isNotEmpty()) {
+                        mainHandler.post {
+                            if (typing) {
+                                TypingState.until[from] = System.currentTimeMillis() + 6000L
+                            } else {
+                                TypingState.until.remove(from)
+                            }
+                        }
+                    }
+                }
+            }
+
             socket.on("receive_message") { args ->
                 if (args.isNotEmpty() && args[0] is JSONObject) {
                     val obj = args[0] as JSONObject
@@ -354,27 +444,29 @@ class KishkaManager(private val context: Context) {
                     val msgSender = obj.optString("senderEmail", "")
                     val msgText = obj.optString("text", "")
                     val receiver = obj.optString("receiverEmail", "")
+                    val parsed = parseMessageJson(obj, msgChatId)
+
+                    if (msgSender.isNotEmpty()) {
+                        mainHandler.post { TypingState.until.remove(msgSender.trim().lowercase()) }
+                    }
 
                     if (receiver.trim().lowercase() == cleanEmail && msgSender.trim().lowercase() != cleanEmail) {
                         if (msgChatId != currentActiveChatId) {
-                            showBackgroundMessageNotification(msgSender, msgText)
+                            val preview = when {
+                                msgText.isNotEmpty() -> msgText
+                                parsed.fileType == "video" -> "🎬 Відео"
+                                parsed.fileType == "image" -> "📷 Фото"
+                                else -> ""
+                            }
+                            showBackgroundMessageNotification(msgSender, preview)
                         }
                     }
 
                     if (msgChatId == currentActiveChatId) {
                         currentChatMessagesList?.let { list ->
                             val msgId = obj.optString("id", "")
-                            if (list.none { it.id == msgId }) {
-                                list.add(
-                                    Message(
-                                        id = msgId,
-                                        chatId = msgChatId,
-                                        senderEmail = msgSender,
-                                        receiverEmail = receiver,
-                                        text = msgText,
-                                        timestamp = obj.optLong("timestamp", System.currentTimeMillis())
-                                    )
-                                )
+                            if (list.none { it.id == msgId } && !getHiddenIds(msgChatId).contains(msgId)) {
+                                list.add(parsed)
                                 cacheMessagesLocally(msgChatId, list)
                                 mainHandler.post {
                                     currentChatCallback?.invoke(list.toList())
@@ -409,9 +501,10 @@ class KishkaManager(private val context: Context) {
     ) {
         val chatId = getChatId(senderEmail, receiverEmail)
         currentActiveChatId = chatId
+        activeChatForRejoin = chatId
         currentChatCallback = onMessagesUpdated
 
-        val cachedMsgs = getCachedMessages(chatId)
+        val cachedMsgs = getCachedMessages(chatId).filter { !getHiddenIds(chatId).contains(it.id) }
         val messagesList = mutableListOf<Message>().apply { addAll(cachedMsgs) }
         currentChatMessagesList = messagesList
 
@@ -425,19 +518,14 @@ class KishkaManager(private val context: Context) {
         socket.on("load_history") { args ->
             if (args.isNotEmpty() && args[0] is JSONArray) {
                 val array = args[0] as JSONArray
+                val hidden = getHiddenIds(chatId)
                 messagesList.clear()
                 for (i in 0 until array.length()) {
                     val obj = array.getJSONObject(i)
-                    messagesList.add(
-                        Message(
-                            id = obj.optString("id", ""),
-                            chatId = obj.optString("chatId", chatId),
-                            senderEmail = obj.optString("senderEmail", ""),
-                            receiverEmail = obj.optString("receiverEmail", ""),
-                            text = obj.optString("text", ""),
-                            timestamp = obj.optLong("timestamp", System.currentTimeMillis())
-                        )
-                    )
+                    val parsed = parseMessageJson(obj, chatId)
+                    if (!hidden.contains(parsed.id)) {
+                        messagesList.add(parsed)
+                    }
                 }
                 cacheMessagesLocally(chatId, messagesList)
                 mainHandler.post { onMessagesUpdated(messagesList.toList()) }
@@ -470,8 +558,16 @@ class KishkaManager(private val context: Context) {
         notificationManager.notify(sender.hashCode(), notification)
     }
 
-    fun sendMessage(senderEmail: String, receiverEmail: String, text: String) {
-        if (text.isBlank()) return
+    fun sendMessage(
+        senderEmail: String,
+        receiverEmail: String,
+        text: String,
+        fileUrl: String? = null,
+        fileType: String? = null,
+        thumbUrl: String? = null
+    ) {
+        val relFile = relativeUrl(fileUrl)
+        if (text.isBlank() && relFile.isNullOrEmpty()) return
         val chatId = getChatId(senderEmail, receiverEmail)
         ensureConnected()
 
@@ -482,19 +578,81 @@ class KishkaManager(private val context: Context) {
             put("receiverEmail", receiverEmail)
             put("text", text)
             put("timestamp", System.currentTimeMillis())
+            if (!relFile.isNullOrEmpty()) {
+                put("fileUrl", relFile)
+                put("fileType", fileType ?: "image")
+                val relThumb = relativeUrl(thumbUrl)
+                if (!relThumb.isNullOrEmpty()) put("thumbUrl", relThumb)
+            }
         }
 
         socket.emit("send_message", jsonMsg)
+        sendTyping(senderEmail, receiverEmail, false)
     }
 
-    fun deleteMessage(senderEmail: String, receiverEmail: String, messageId: String) {
+    /**
+     * Видалення повідомлення.
+     * forEveryone = true  — видалити в обох співрозмовників (сервер дозволяє лише автору);
+     * forEveryone = false — приховати лише на цьому пристрої.
+     */
+    fun deleteMessage(senderEmail: String, receiverEmail: String, messageId: String, forEveryone: Boolean = true) {
         val chatId = getChatId(senderEmail, receiverEmail)
-        ensureConnected()
-        val json = JSONObject().apply {
-            put("messageId", messageId)
-            put("chatId", chatId)
+        if (forEveryone) {
+            ensureConnected()
+            val json = JSONObject().apply {
+                put("messageId", messageId)
+                put("chatId", chatId)
+                put("requesterEmail", senderEmail.trim().lowercase())
+            }
+            socket.emit("delete_message", json)
+        } else {
+            addHiddenId(chatId, messageId)
+            currentChatMessagesList?.let { list ->
+                list.removeAll { it.id == messageId }
+                if (currentActiveChatId == chatId) {
+                    cacheMessagesLocally(chatId, list)
+                    mainHandler.post { currentChatCallback?.invoke(list.toList()) }
+                }
+            }
         }
-        socket.emit("delete_message", json)
+    }
+
+    private var lastTypingSentAt = 0L
+
+    /** Індикатор "пише...": true надсилається не частіше ніж раз на 2 с, false — одразу. */
+    fun sendTyping(senderEmail: String, receiverEmail: String, isTyping: Boolean) {
+        val now = System.currentTimeMillis()
+        if (isTyping) {
+            if (now - lastTypingSentAt < 2000L) return
+            lastTypingSentAt = now
+        } else {
+            lastTypingSentAt = 0L
+        }
+        if (!socket.connected()) return
+        try {
+            val json = JSONObject().apply {
+                put("from", senderEmail.trim().lowercase())
+                put("to", receiverEmail.trim().lowercase())
+                put("isTyping", isTyping)
+            }
+            socket.emit("typing", json)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    /** Отримує токен FCM та передає його серверу (для повідомлень, коли застосунок закритий). */
+    fun registerPushToken() {
+        try {
+            FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+                if (!token.isNullOrEmpty()) {
+                    pushToken = token
+                    sendIdentify()
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     fun sendFileMessage(senderEmail: String, receiverEmail: String, fileUri: Uri, fileType: String) {
@@ -560,6 +718,7 @@ class KishkaManager(private val context: Context) {
             socket.emit("leave_chat", chatId)
         }
         currentActiveChatId = null
+        activeChatForRejoin = null
         currentChatCallback = null
         currentChatMessagesList = null
         socket.off("load_history")
@@ -605,14 +764,17 @@ class KishkaManager(private val context: Context) {
         socket.emit("end_call", json)
     }
 
+    /** Надсилає аудіопакет (див. VoiceCodec) бінарно, без base64. Якщо звʼязку немає — пакет відкидається. */
     fun sendVoiceChunk(targetEmail: String, chunk: ByteArray) {
         if (targetEmail.isEmpty()) return
-        ensureConnected()
         try {
-            val base64Str = Base64.encodeToString(chunk, Base64.NO_WRAP)
+            if (!socket.connected()) {
+                ensureConnected()
+                return
+            }
             val json = JSONObject().apply {
                 put("targetEmail", targetEmail.trim().lowercase())
-                put("chunk", base64Str)
+                put("chunk", chunk)
             }
             socket.emit("voice_chunk", json)
         } catch (e: Exception) {
