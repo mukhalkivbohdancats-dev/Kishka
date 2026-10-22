@@ -1,19 +1,16 @@
 package com.kishka.messenger
 
-import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.pm.PackageManager
-import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -25,17 +22,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.SaveAlt
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
@@ -53,11 +47,9 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
-import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 
@@ -65,7 +57,7 @@ const val GEMINI_LOGO_URL =
     "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/Assets/Logo.png"
 
 /** Рядки вкладки Gemini (нові ключі; старі gemini_* беруться з Strings у MainActivity.kt). */
-private object GeminiStrings {
+object GeminiStrings {
     private val dictionary = mapOf(
         "uk" to mapOf(
             "gemini_model_choose" to "Обрати модель",
@@ -75,6 +67,7 @@ private object GeminiStrings {
             "gemini_image_tag" to "Зображення",
             "gemini_thinking_label" to "Gemini думає",
             "gemini_generating_label" to "Gemini створює зображення",
+            "gemini_upload_label" to "Завантаження файлу",
             "gemini_stop_hint" to "Натисніть ■ ще раз, щоб зупинити",
             "gemini_stopped" to "Запит зупинено",
             "gemini_image_hint" to "Опишіть зображення...",
@@ -96,6 +89,7 @@ private object GeminiStrings {
             "gemini_image_tag" to "Изображения",
             "gemini_thinking_label" to "Gemini думает",
             "gemini_generating_label" to "Gemini создаёт изображение",
+            "gemini_upload_label" to "Загрузка файла",
             "gemini_stop_hint" to "Нажмите ■ ещё раз, чтобы остановить",
             "gemini_stopped" to "Запрос остановлен",
             "gemini_image_hint" to "Опишите изображение...",
@@ -117,6 +111,7 @@ private object GeminiStrings {
             "gemini_image_tag" to "Image",
             "gemini_thinking_label" to "Gemini is thinking",
             "gemini_generating_label" to "Gemini is creating an image",
+            "gemini_upload_label" to "Uploading file",
             "gemini_stop_hint" to "Tap ■ again to stop",
             "gemini_stopped" to "Request stopped",
             "gemini_image_hint" to "Describe the image...",
@@ -139,6 +134,7 @@ private object GeminiStrings {
     }
 }
 
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun GeminiTab(
@@ -147,172 +143,64 @@ fun GeminiTab(
     lang: String
 ) {
     val context = LocalContext.current
-    val gemini = remember { GeminiManager(context) }
+    // Увесь стан живе в GeminiSession: він переживає поворот екрана та перехід між вкладками
+    val session = remember(currentEmail) { GeminiSessions.get(context, currentEmail) }
+    session.lang = lang
+
+    val saver = rememberGallerySaver(lang)
+    val listState = rememberLazyListState()
     val gs: (String) -> String = { key -> GeminiStrings.get(key, lang) }
 
-    var messages by remember(currentEmail) { mutableStateOf(gemini.getCachedHistory(currentEmail)) }
-    var models by remember { mutableStateOf(gemini.getCachedModels()) }
-    var selectedModelId by remember(currentEmail) {
-        mutableStateOf(gemini.getSelectedModel(currentEmail) ?: "")
-    }
-    var textInput by remember { mutableStateOf("") }
-    var isSending by remember { mutableStateOf(false) }
-    var elapsedSeconds by remember { mutableStateOf(0) }
-    var stopArmed by remember { mutableStateOf(false) }
-    var currentCall by remember { mutableStateOf<GeminiCall?>(null) }
-    var isLoadingHistory by remember { mutableStateOf(true) }
-    var selectedMessageForMenu by remember { mutableStateOf<GeminiMessage?>(null) }
     var showClearDialog by remember { mutableStateOf(false) }
     var showModelPopup by remember { mutableStateOf(false) }
-    var fullImageUrl by remember { mutableStateOf<String?>(null) }
-    var isSavingImage by remember { mutableStateOf(false) }
-    var showSavedDialog by remember { mutableStateOf(false) }
-    var pendingSaveUrl by remember { mutableStateOf<String?>(null) }
-    val listState = rememberLazyListState()
+    var viewerMessage by remember { mutableStateOf<GeminiMessage?>(null) }
+    var menuMessage by remember { mutableStateOf<GeminiMessage?>(null) }
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
 
-    // Обрана модель: збережена -> gemini-3.8-flash -> перша безкоштовна текстова -> перша зі списку
-    val selectedModel: GeminiModel = models.firstOrNull { it.id == selectedModelId }
-        ?: models.firstOrNull { it.id == "gemini-3.8-flash" }
-        ?: models.firstOrNull { !it.isImage && !it.paid }
-        ?: models.first()
+    val messages = session.messages
+    val models = session.models
+    val selectedModel = session.selectedModel
 
     fun labelOf(id: String?): String? =
         if (id == null) null else (models.firstOrNull { it.id == id }?.label ?: id)
 
-    // Список моделей із сервера
-    LaunchedEffect(currentEmail) {
-        gemini.loadModels { loaded, defaultId ->
-            if (loaded != null) {
-                models = loaded
-                if (loaded.none { it.id == selectedModelId }) {
-                    selectedModelId = defaultId ?: loaded.firstOrNull { !it.isImage && !it.paid }?.id ?: loaded.first().id
-                }
-            }
+    LaunchedEffect(session) { session.onTabShown() }
+
+    // Секунди «Gemini думає…» рахуються від часу початку запиту, тому не скидаються при повороті екрана
+    LaunchedEffect(session.isSending) {
+        while (session.isSending) {
+            now = System.currentTimeMillis()
+            delay(500)
         }
     }
+    val elapsedSeconds = ((now - session.sendStartedAt) / 1000L).toInt().coerceAtLeast(0)
 
-    // Памʼять Gemini окрема для кожного акаунта: завантажуємо історію саме цього користувача
-    LaunchedEffect(currentEmail) {
-        isLoadingHistory = true
-        gemini.loadHistory(currentEmail) { loaded ->
-            isLoadingHistory = false
-            if (loaded != null && !isSending) {
-                messages = loaded
-            }
-        }
-    }
-
-    // Лічильник секунд, поки Gemini думає
-    LaunchedEffect(isSending) {
-        if (isSending) {
-            elapsedSeconds = 0
-            while (true) {
-                delay(1000)
-                elapsedSeconds += 1
-            }
-        }
-    }
-
-    // Кнопка "стоп" натиснута один раз: чекаємо друге натискання 3 секунди
-    LaunchedEffect(stopArmed) {
-        if (stopArmed) {
-            delay(3000)
-            stopArmed = false
-        }
-    }
-
-    val totalItems = messages.size + if (isSending) 1 else 0
-
+    val totalItems = messages.size + if (session.isSending) 1 else 0
     LaunchedEffect(totalItems) {
         if (totalItems > 0) {
             listState.animateScrollToItem(totalItems - 1)
         }
     }
 
-    // ---------- Збереження зображення в галерею ----------
-    fun doSave(url: String) {
-        if (isSavingImage) return
-        isSavingImage = true
-        gemini.saveImageToGallery(url) { ok ->
-            isSavingImage = false
-            if (ok) {
-                showSavedDialog = true
-            } else {
-                Toast.makeText(context, gs("gemini_save_failed"), Toast.LENGTH_LONG).show()
+    val mediaPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) {
+            val media = MediaUtils.describe(context, uri)
+            when {
+                media == null -> Toast.makeText(context, ChatStrings.get("media_bad", lang), Toast.LENGTH_LONG).show()
+                media.size > MediaUtils.MAX_FILE_BYTES ->
+                    Toast.makeText(context, ChatStrings.get("media_too_big", lang), Toast.LENGTH_LONG).show()
+                else -> session.pendingMedia = media
             }
-        }
-    }
-
-    val storagePermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        val url = pendingSaveUrl
-        pendingSaveUrl = null
-        if (granted && url != null) {
-            doSave(url)
-        } else {
-            Toast.makeText(context, gs("gemini_permission_denied"), Toast.LENGTH_LONG).show()
-        }
-    }
-
-    fun requestSave(url: String) {
-        val needsPermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
-        if (needsPermission) {
-            pendingSaveUrl = url
-            storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-        } else {
-            doSave(url)
-        }
-    }
-
-    // ---------- Відправка / зупинка ----------
-    val sendAction: () -> Unit = send@{
-        val text = textInput.trim()
-        if (text.isEmpty() || isSending) return@send
-
-        val localMessage = GeminiMessage(
-            id = "local_${System.currentTimeMillis()}",
-            role = "user",
-            text = text,
-            timestamp = System.currentTimeMillis()
-        )
-        messages = messages + localMessage
-        textInput = ""
-        isSending = true
-        stopArmed = false
-
-        currentCall = gemini.sendMessage(currentEmail, displayName, text, selectedModel.id) { result ->
-            isSending = false
-            stopArmed = false
-            currentCall = null
-            if (result.success && result.reply != null) {
-                messages = messages + result.reply
-                gemini.saveCache(currentEmail, messages)
-            } else {
-                // Не вдалося або зупинено — прибираємо повідомлення і повертаємо текст у поле вводу
-                messages = messages.filterNot { it.id == localMessage.id }
-                if (textInput.isEmpty()) textInput = text
-                val message = if (result.cancelled) gs("gemini_stopped") else (result.error ?: Strings.get("gemini_error", lang))
-                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    // Зупинка: перше натискання "озброює" кнопку, друге — зупиняє запит
-    val stopAction: () -> Unit = {
-        if (stopArmed) {
-            stopArmed = false
-            currentCall?.cancel()
-        } else {
-            stopArmed = true
         }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White),
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        GeminiAvatar(size = 36.dp)
+                        GeminiAvatar(size = 38.dp)
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
@@ -322,19 +210,20 @@ fun GeminiTab(
                                 color = ViberPurple
                             )
                             Text(
-                                Strings.get("gemini_subtitle", lang),
+                                if (session.isSending) {
+                                    gs(if (selectedModel.isImage) "gemini_generating_label" else "gemini_thinking_label") + "…"
+                                } else {
+                                    Strings.get("gemini_subtitle", lang)
+                                },
                                 fontSize = 11.sp,
-                                color = Color.Gray
+                                color = if (session.isSending) ViberPurple else Color.Gray
                             )
                         }
                     }
                 },
                 actions = {
-                    val canClear = messages.isNotEmpty() && !isSending
-                    IconButton(
-                        onClick = { showClearDialog = true },
-                        enabled = canClear
-                    ) {
+                    val canClear = messages.isNotEmpty() && !session.isSending
+                    IconButton(onClick = { showClearDialog = true }, enabled = canClear) {
                         Icon(
                             Icons.Default.Delete,
                             contentDescription = Strings.get("gemini_clear", lang),
@@ -347,7 +236,7 @@ fun GeminiTab(
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
 
-            if (isLoadingHistory) {
+            if (session.isLoadingHistory) {
                 LinearProgressIndicator(
                     modifier = Modifier.fillMaxWidth(),
                     color = ViberPurple,
@@ -355,7 +244,7 @@ fun GeminiTab(
                 )
             }
 
-            if (messages.isEmpty() && !isSending) {
+            if (messages.isEmpty() && !session.isSending) {
                 Box(
                     modifier = Modifier.weight(1f).fillMaxWidth().padding(32.dp),
                     contentAlignment = Alignment.Center
@@ -381,109 +270,98 @@ fun GeminiTab(
             } else {
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier.weight(1f).padding(8.dp)
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
                 ) {
-                    itemsIndexed(messages, key = { index, msg -> "${msg.id}_$index" }) { _, msg ->
+                    itemsIndexed(messages, key = { index, msg -> "${msg.id}_$index" }) { index, msg ->
                         val isMe = msg.role == "user"
-                        Box(
-                            modifier = Modifier.fillMaxWidth(),
-                            contentAlignment = if (isMe) Alignment.CenterEnd else Alignment.CenterStart
-                        ) {
-                            Column(horizontalAlignment = if (isMe) Alignment.End else Alignment.Start) {
-                                Surface(
-                                    color = if (isMe) ViberPurple else Color.White,
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier
-                                        .padding(4.dp)
-                                        .widthIn(max = 320.dp)
-                                        .combinedClickable(
-                                            onClick = {},
-                                            onLongClick = { selectedMessageForMenu = msg }
-                                        )
-                                ) {
-                                    Column {
-                                        if (msg.imageUrl != null) {
-                                            AsyncImage(
-                                                model = msg.imageUrl,
-                                                contentDescription = "Gemini image",
-                                                contentScale = ContentScale.Fit,
-                                                modifier = Modifier
-                                                    .padding(6.dp)
-                                                    .fillMaxWidth()
-                                                    .heightIn(min = 160.dp, max = 360.dp)
-                                                    .clip(RoundedCornerShape(8.dp))
-                                                    .background(ViberLightPurple)
-                                                    .clickable { fullImageUrl = msg.imageUrl }
-                                            )
-                                            TextButton(
-                                                onClick = { requestSave(msg.imageUrl) },
-                                                enabled = !isSavingImage,
-                                                colors = ButtonDefaults.textButtonColors(contentColor = ViberPurple),
-                                                modifier = Modifier.padding(horizontal = 2.dp)
-                                            ) {
-                                                Icon(Icons.Default.SaveAlt, contentDescription = null, modifier = Modifier.size(18.dp))
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Text(gs("gemini_save"), fontSize = 13.sp)
+                        Column {
+                            if (index == 0 || !isSameDay(messages[index - 1].timestamp, msg.timestamp)) {
+                                DateChip(dayLabel(msg.timestamp, lang))
+                            }
+                            Box {
+                                Column {
+                                    KishkaBubble(
+                                        isMe = isMe,
+                                        time = formatMessageTime(msg.timestamp),
+                                        onLongClick = { menuMessage = msg }
+                                    ) {
+                                        val mediaUrl = msg.imageUrl
+                                        if (mediaUrl != null) {
+                                            MessageMedia(
+                                                url = mediaUrl,
+                                                type = msg.fileType ?: "image",
+                                                thumbUrl = msg.thumbUrl
+                                            ) { viewerMessage = msg }
+                                            if (!isMe) {
+                                                TextButton(
+                                                    onClick = { saver.save(mediaUrl) },
+                                                    enabled = !saver.saving,
+                                                    colors = ButtonDefaults.textButtonColors(contentColor = ViberPurple),
+                                                    modifier = Modifier.padding(horizontal = 2.dp)
+                                                ) {
+                                                    Icon(Icons.Default.SaveAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text(ChatStrings.get("save", lang), fontSize = 13.sp)
+                                                }
                                             }
                                         }
                                         if (msg.text.isNotBlank()) {
                                             Text(
                                                 text = if (isMe) AnnotatedString(msg.text) else formatGeminiText(msg.text),
                                                 color = if (isMe) Color.White else Color.Black,
-                                                modifier = Modifier.padding(10.dp)
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                             )
                                         }
                                     }
-                                }
-                                if (!isMe && msg.model != null) {
-                                    Text(
-                                        labelOf(msg.model) ?: "",
-                                        fontSize = 10.sp,
-                                        color = Color.Gray,
-                                        modifier = Modifier.padding(start = 8.dp, bottom = 2.dp)
-                                    )
-                                }
-                            }
-
-                            DropdownMenu(
-                                expanded = selectedMessageForMenu?.id == msg.id && selectedMessageForMenu?.timestamp == msg.timestamp,
-                                onDismissRequest = { selectedMessageForMenu = null }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text(Strings.get("copy", lang)) },
-                                    onClick = {
-                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                        val toCopy = msg.text.ifBlank { msg.imageUrl ?: "" }
-                                        clipboard.setPrimaryClip(ClipData.newPlainText("Copied Text", toCopy))
-                                        Toast.makeText(context, Strings.get("message_copied", lang), Toast.LENGTH_SHORT).show()
-                                        selectedMessageForMenu = null
+                                    if (!isMe && msg.model != null) {
+                                        Text(
+                                            labelOf(msg.model) ?: "",
+                                            fontSize = 10.sp,
+                                            color = Color.Gray,
+                                            modifier = Modifier.padding(start = 10.dp, bottom = 2.dp)
+                                        )
                                     }
-                                )
-                                if (msg.imageUrl != null) {
-                                    DropdownMenuItem(
-                                        text = { Text(gs("gemini_save_to_gallery")) },
-                                        onClick = {
-                                            selectedMessageForMenu = null
-                                            requestSave(msg.imageUrl)
-                                        }
-                                    )
+                                }
+
+                                DropdownMenu(
+                                    expanded = menuMessage?.id == msg.id && menuMessage?.timestamp == msg.timestamp,
+                                    onDismissRequest = { menuMessage = null }
+                                ) {
+                                    if (msg.text.isNotBlank()) {
+                                        DropdownMenuItem(
+                                            text = { Text(Strings.get("copy", lang)) },
+                                            onClick = {
+                                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                                clipboard.setPrimaryClip(ClipData.newPlainText("Copied Text", msg.text))
+                                                Toast.makeText(context, Strings.get("message_copied", lang), Toast.LENGTH_SHORT).show()
+                                                menuMessage = null
+                                            }
+                                        )
+                                    }
+                                    val mediaUrl = msg.imageUrl
+                                    if (mediaUrl != null) {
+                                        DropdownMenuItem(
+                                            text = { Text(ChatStrings.get("save_to_gallery", lang)) },
+                                            onClick = {
+                                                menuMessage = null
+                                                saver.save(mediaUrl)
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
 
-                    if (isSending) {
+                    if (session.isSending) {
                         item {
-                            Box(
-                                modifier = Modifier.fillMaxWidth(),
-                                contentAlignment = Alignment.CenterStart
-                            ) {
+                            Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)) {
                                 Surface(
                                     color = Color.White,
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.padding(4.dp)
+                                    shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 5.dp, bottomEnd = 18.dp),
+                                    shadowElevation = 1.dp
                                 ) {
-                                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                                    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             CircularProgressIndicator(
                                                 color = ViberPurple,
@@ -491,20 +369,21 @@ fun GeminiTab(
                                                 modifier = Modifier.size(16.dp)
                                             )
                                             Spacer(modifier = Modifier.width(10.dp))
+                                            val progress = session.uploadProgress
                                             Text(
-                                                "${gs(if (selectedModel.isImage) "gemini_generating_label" else "gemini_thinking_label")}… " +
-                                                    formatElapsed(elapsedSeconds, gs("sec_short"), gs("min_short")),
+                                                if (progress != null) {
+                                                    "${gs("gemini_upload_label")}… ${(progress * 100).toInt()}%"
+                                                } else {
+                                                    "${gs(if (selectedModel.isImage) "gemini_generating_label" else "gemini_thinking_label")}… " +
+                                                        formatElapsed(elapsedSeconds, gs("sec_short"), gs("min_short"))
+                                                },
                                                 color = Color.Gray,
                                                 fontSize = 14.sp
                                             )
                                         }
-                                        if (stopArmed) {
+                                        if (session.stopArmed) {
                                             Spacer(modifier = Modifier.height(6.dp))
-                                            Text(
-                                                gs("gemini_stop_hint"),
-                                                color = Color(0xFFD93025),
-                                                fontSize = 12.sp
-                                            )
+                                            Text(gs("gemini_stop_hint"), color = Color(0xFFD93025), fontSize = 12.sp)
                                         }
                                     }
                                 }
@@ -514,65 +393,47 @@ fun GeminiTab(
                 }
             }
 
-            // ---------- Рядок вводу: [модель] [поле] [відправити / стоп] ----------
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                GeminiModelPill(
-                    selected = selectedModel,
-                    models = models,
-                    enabled = !isSending,
-                    expanded = showModelPopup,
+            // ---------- Обраний файл ----------
+            val pending = session.pendingMedia
+            if (pending != null) {
+                PendingMediaChip(
+                    media = pending,
+                    progress = session.uploadProgress,
                     lang = lang,
-                    onExpandedChange = { showModelPopup = it },
-                    onSelect = { m ->
-                        selectedModelId = m.id
-                        gemini.setSelectedModel(currentEmail, m.id)
-                        showModelPopup = false
+                    onRemove = {
+                        if (!session.isSending) session.pendingMedia = null
                     }
                 )
-                Spacer(modifier = Modifier.width(6.dp))
-                OutlinedTextField(
-                    value = textInput,
-                    onValueChange = { textInput = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = {
-                        Text(if (selectedModel.isImage) gs("gemini_image_hint") else Strings.get("type_message", lang))
-                    },
-                    maxLines = 4
-                )
-                if (isSending) {
-                    // Квадратик "стоп": натиснути 2 рази
-                    IconButton(onClick = stopAction) {
-                        Box(
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(if (stopArmed) Color(0xFFD93025) else ViberLightPurple),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(14.dp)
-                                    .clip(RoundedCornerShape(3.dp))
-                                    .background(if (stopArmed) Color.White else ViberPurple)
-                            )
-                        }
-                    }
-                } else {
-                    IconButton(
-                        onClick = sendAction,
-                        enabled = textInput.isNotBlank()
-                    ) {
-                        Icon(
-                            Icons.Default.Send,
-                            contentDescription = null,
-                            tint = if (textInput.isNotBlank()) ViberPurple else Color.LightGray
-                        )
-                    }
-                }
             }
+
+            // ---------- Рядок вводу: [модель] [скріпка + поле] [відправити / стоп] ----------
+            KishkaInputBar(
+                value = session.draft,
+                onValueChange = { session.draft = it },
+                placeholder = if (selectedModel.isImage) gs("gemini_image_hint") else Strings.get("type_message", lang),
+                canSend = session.draft.isNotBlank() || session.pendingMedia != null,
+                busy = session.isSending,
+                stopArmed = session.stopArmed,
+                onSend = { session.send(displayName) },
+                onStop = { session.onStopTap() },
+                onAttach = {
+                    mediaPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                },
+                leading = {
+                    GeminiModelPill(
+                        selected = selectedModel,
+                        models = models,
+                        enabled = !session.isSending,
+                        expanded = showModelPopup,
+                        lang = lang,
+                        onExpandedChange = { showModelPopup = it },
+                        onSelect = { m ->
+                            session.selectModel(m.id)
+                            showModelPopup = false
+                        }
+                    )
+                }
+            )
         }
     }
 
@@ -580,20 +441,15 @@ fun GeminiTab(
     if (showClearDialog) {
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
+            shape = RoundedCornerShape(22.dp),
+            containerColor = Color.White,
             title = { Text(Strings.get("gemini_clear", lang)) },
             text = { Text(Strings.get("gemini_clear_confirm", lang)) },
             confirmButton = {
                 Button(
                     onClick = {
                         showClearDialog = false
-                        gemini.clearMemory(currentEmail) { success ->
-                            if (success) {
-                                messages = emptyList()
-                                Toast.makeText(context, Strings.get("gemini_cleared", lang), Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(context, Strings.get("gemini_error", lang), Toast.LENGTH_LONG).show()
-                            }
-                        }
+                        session.clearMemory()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
                 ) {
@@ -608,92 +464,18 @@ fun GeminiTab(
         )
     }
 
-    // ---------- Зображення на весь екран зі збереженням ----------
-    val fullUrl = fullImageUrl
-    if (fullUrl != null) {
-        Dialog(onDismissRequest = { fullImageUrl = null }) {
-            Surface(
-                shape = RoundedCornerShape(22.dp),
-                color = Color.White,
-                shadowElevation = 8.dp
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    AsyncImage(
-                        model = fullUrl,
-                        contentDescription = "Gemini image",
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 200.dp, max = 480.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(ViberLightPurple)
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        TextButton(
-                            onClick = { fullImageUrl = null },
-                            colors = ButtonDefaults.textButtonColors(contentColor = Color.Gray)
-                        ) {
-                            Text(gs("gemini_close"))
-                        }
-                        Button(
-                            onClick = { requestSave(fullUrl) },
-                            enabled = !isSavingImage,
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = ViberPurple)
-                        ) {
-                            Icon(Icons.Default.SaveAlt, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(gs("gemini_save"))
-                        }
-                    }
-                }
-            }
-        }
+    // ---------- Перегляд фото / відео з кнопкою збереження ----------
+    val viewing = viewerMessage
+    if (viewing != null && viewing.imageUrl != null) {
+        MediaViewerDialog(
+            url = viewing.imageUrl,
+            type = viewing.fileType ?: "image",
+            saver = saver,
+            onDismiss = { viewerMessage = null }
+        )
     }
 
-    // ---------- Вікно "Збережено" (квадрат із згладженими кутами + кнопка OK) ----------
-    if (showSavedDialog) {
-        Dialog(onDismissRequest = { showSavedDialog = false }) {
-            Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = Color.White,
-                shadowElevation = 8.dp
-            ) {
-                Column(
-                    modifier = Modifier.padding(24.dp).widthIn(min = 240.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Box(
-                        modifier = Modifier.size(56.dp).clip(CircleShape).background(ViberLightPurple),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Default.CheckCircle,
-                            contentDescription = null,
-                            tint = ViberPurple,
-                            modifier = Modifier.size(36.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(14.dp))
-                    Text(gs("gemini_saved"), fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.Black)
-                    Spacer(modifier = Modifier.height(20.dp))
-                    Button(
-                        onClick = { showSavedDialog = false },
-                        modifier = Modifier.fillMaxWidth().height(46.dp),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = ViberPurple)
-                    ) {
-                        Text(gs("gemini_ok"), fontWeight = FontWeight.SemiBold)
-                    }
-                }
-            }
-        }
-    }
+    GallerySavedDialog(saver)
 }
 
 private fun formatElapsed(seconds: Int, secLabel: String, minLabel: String): String {
