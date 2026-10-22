@@ -715,7 +715,11 @@ fun checkPermissionsGranted(context: Context): Boolean {
     val notif = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
     } else true
-    return mic && notif
+    // Третій дозвіл — фото і відео. Якщо користувач уже бачив запит (навіть відмовив), більше не блокуємо вхід:
+    // вибір фото працює через системний вибір і без дозволу.
+    val media = hasMediaPermission(context) ||
+        context.getSharedPreferences("kishka_permissions", Context.MODE_PRIVATE).getBoolean("media_asked", false)
+    return mic && notif && media
 }
 
 @Composable
@@ -729,6 +733,10 @@ fun PermissionsScreen(lang: String, onPermissionsGranted: () -> Unit) {
             } else true
         )
     }
+    var mediaGranted by remember { mutableStateOf(hasMediaPermission(context)) }
+    var mediaAsked by remember {
+        mutableStateOf(context.getSharedPreferences("kishka_permissions", Context.MODE_PRIVATE).getBoolean("media_asked", false))
+    }
 
     val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         micGranted = granted
@@ -737,6 +745,14 @@ fun PermissionsScreen(lang: String, onPermissionsGranted: () -> Unit) {
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         notifGranted = granted
     }
+
+    val mediaLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
+        mediaGranted = hasMediaPermission(context)
+        mediaAsked = true
+        context.getSharedPreferences("kishka_permissions", Context.MODE_PRIVATE).edit().putBoolean("media_asked", true).apply()
+    }
+
+    val canContinue = micGranted && notifGranted && (mediaGranted || mediaAsked)
 
     Column(
         modifier = Modifier
@@ -770,19 +786,29 @@ fun PermissionsScreen(lang: String, onPermissionsGranted: () -> Unit) {
             ) {
                 Text(if (notifGranted) "Сповіщення дозволено ✓" else Strings.get("grant_notif", lang))
             }
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(12.dp))
         }
+
+        // Третій дозвіл: фото і відео
+        Button(
+            onClick = { mediaLauncher.launch(mediaPermissionsToRequest()) },
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = if (mediaGranted) Color(0xFF2E7D32) else ViberPurple)
+        ) {
+            Text(if (mediaGranted) ChatStrings.get("media_granted", lang) else ChatStrings.get("grant_media", lang))
+        }
+        Spacer(modifier = Modifier.height(24.dp))
 
         OutlinedButton(
             onClick = {
-                if (micGranted && notifGranted) {
+                if (canContinue) {
                     onPermissionsGranted()
                 } else {
-                    Toast.makeText(context, "Будь ласка, надайте обидва дозволи!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, ChatStrings.get("grant_all_three", lang), Toast.LENGTH_SHORT).show()
                 }
             },
             modifier = Modifier.fillMaxWidth().height(48.dp),
-            enabled = micGranted && notifGranted
+            enabled = canContinue
         ) {
             Text(Strings.get("continue_app", lang))
         }
@@ -887,8 +913,9 @@ fun ChatsTab(
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp, vertical = 4.dp)
                             .clickable { onUserSelected(user) },
-                        shape = RoundedCornerShape(16.dp),
-                        color = Color.White
+                        shape = RoundedCornerShape(18.dp),
+                        color = Color.White,
+                        shadowElevation = 1.dp
                     ) {
                         Row(
                             modifier = Modifier.padding(12.dp),
@@ -897,12 +924,17 @@ fun ChatsTab(
                             AsyncImage(
                                 model = if (user.avatarUrl.isNullOrEmpty()) DEFAULT_AVATAR_URL else user.avatarUrl,
                                 contentDescription = "Avatar",
-                                modifier = Modifier.size(52.dp).clip(CircleShape)
+                                modifier = Modifier.size(56.dp).clip(CircleShape)
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(user.name.ifEmpty { user.email }, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                Text(user.email, color = Color.Gray, fontSize = 13.sp)
+                                if (isUserTyping(user.email)) {
+                                    // Біля аватарки: "пише" з анімацією
+                                    TypingIndicator(text = ChatStrings.get("typing", lang), fontSize = 13.sp)
+                                } else {
+                                    Text(user.email, color = Color.Gray, fontSize = 13.sp)
+                                }
                             }
                         }
                     }
@@ -1261,155 +1293,6 @@ fun AuthScreen(
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
-@Composable
-fun ChatScreen(
-    manager: KishkaManager,
-    currentEmail: String,
-    targetUser: User,
-    lang: String,
-    onBack: () -> Unit,
-    onStartCall: (String) -> Unit
-) {
-    var messages by remember { mutableStateOf(listOf<Message>()) }
-    var textInput by remember { mutableStateOf("") }
-    var selectedMessageForMenu by remember { mutableStateOf<Message?>(null) }
-    val listState = rememberLazyListState()
-    val context = LocalContext.current
-
-    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { manager.sendFileMessage(currentEmail, targetUser.email, it, "file") }
-    }
-
-    DisposableEffect(targetUser.email) {
-        manager.connectAndListenForMessages(currentEmail, targetUser.email) { updatedList ->
-            messages = updatedList
-        }
-        onDispose {
-            manager.leaveChatRoom()
-        }
-    }
-
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
-        }
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    IconButton(onClick = {
-                        manager.leaveChatRoom()
-                        onBack()
-                    }) {
-                        Icon(Icons.Default.Close, contentDescription = null)
-                    }
-                },
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        AsyncImage(
-                            model = if (targetUser.avatarUrl.isNullOrEmpty()) DEFAULT_AVATAR_URL else targetUser.avatarUrl,
-                            contentDescription = "Avatar",
-                            modifier = Modifier.size(36.dp).clip(CircleShape)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(targetUser.name.ifEmpty { targetUser.email }, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                            Text(targetUser.email, fontSize = 11.sp, color = Color.Gray)
-                        }
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { onStartCall(targetUser.email) }) {
-                        Icon(Icons.Default.Call, contentDescription = null, tint = ViberPurple)
-                    }
-                }
-            )
-        }
-    ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.weight(1f).padding(8.dp)
-            ) {
-                items(messages) { msg ->
-                    val isMe = msg.senderEmail == currentEmail
-                    Box(
-                        modifier = Modifier.fillMaxWidth(),
-                        contentAlignment = if (isMe) Alignment.CenterEnd else Alignment.CenterStart
-                    ) {
-                        Surface(
-                            color = if (isMe) ViberPurple else Color.White,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .padding(4.dp)
-                                .combinedClickable(
-                                    onClick = {},
-                                    onLongClick = { selectedMessageForMenu = msg }
-                                )
-                        ) {
-                            Text(
-                                text = msg.text,
-                                color = if (isMe) Color.White else Color.Black,
-                                modifier = Modifier.padding(10.dp)
-                            )
-                        }
-
-                        DropdownMenu(
-                            expanded = selectedMessageForMenu?.id == msg.id,
-                            onDismissRequest = { selectedMessageForMenu = null }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text(Strings.get("copy", lang)) },
-                                onClick = {
-                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                    val clip = ClipData.newPlainText("Copied Text", msg.text)
-                                    clipboard.setPrimaryClip(clip)
-                                    Toast.makeText(context, Strings.get("message_copied", lang), Toast.LENGTH_SHORT).show()
-                                    selectedMessageForMenu = null
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(Strings.get("delete", lang), color = Color.Red) },
-                                onClick = {
-                                    manager.deleteMessage(currentEmail, targetUser.email, msg.id)
-                                    selectedMessageForMenu = null
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = { filePicker.launch("*/*") }) {
-                    Icon(Icons.Default.Mic, contentDescription = null, tint = ViberPurple)
-                }
-                OutlinedTextField(
-                    value = textInput,
-                    onValueChange = { textInput = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text(Strings.get("type_message", lang)) },
-                    singleLine = true
-                )
-                IconButton(
-                    onClick = {
-                        if (textInput.isNotEmpty()) {
-                            manager.sendMessage(currentEmail, targetUser.email, textInput)
-                            textInput = ""
-                        }
-                    }
-                ) {
-                    Icon(Icons.Default.Send, contentDescription = null, tint = ViberPurple)
-                }
-            }
-        }
-    }
-}
 
 @Composable
 fun IncomingCallScreen(
