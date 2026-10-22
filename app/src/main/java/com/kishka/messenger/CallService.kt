@@ -16,8 +16,10 @@ import android.media.RingtoneManager
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
 import android.os.Build
+import android.net.wifi.WifiManager
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.Process
 import androidx.core.app.NotificationCompat
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -28,10 +30,14 @@ class CallService : Service() {
     private lateinit var audioManager: AudioManager
     private lateinit var manager: KishkaManager
     private var wakeLock: PowerManager.WakeLock? = null
+    private var cpuWakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
     private var ringtone: Ringtone? = null
     
+    @Volatile
     private var isMuted = false
     private var isSpeakerOn = true
+    @Volatile
     private var isCallActive = false
 
     private var targetEmail: String = ""
@@ -48,6 +54,9 @@ class CallService : Service() {
     private var acousticEchoCanceler: AcousticEchoCanceler? = null
     private var noiseSuppressor: NoiseSuppressor? = null
 
+    @Volatile
+    private var captureRate = 0
+
     companion object {
         const val CHANNEL_ID = "KishkaCallChannel"
         const val NOTIFICATION_ID = 1001
@@ -62,7 +71,11 @@ class CallService : Service() {
         const val EXTRA_TARGET_PHONE = "EXTRA_TARGET_PHONE"
         const val EXTRA_MY_EMAIL = "EXTRA_MY_EMAIL"
 
-        private const val SAMPLE_RATE = 16000 
+        // HD-голос: пробуємо 24 кГц, якщо телефон не підтримує — 16 кГц. Пакети по 40 мс.
+        private val CAPTURE_RATES = intArrayOf(24000, 16000)
+        private const val FRAME_MS = 40
+        private const val PREBUFFER_FRAMES = 3      // 120 мс буфера від мережевих "ривків"
+        private const val MAX_BACKLOG_FRAMES = 10   // якщо назбиралося більше 400 мс — наздоганяємо
         private const val CHANNEL_CONFIG_IN = AudioFormat.CHANNEL_IN_MONO
         private const val CHANNEL_CONFIG_OUT = AudioFormat.CHANNEL_OUT_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
@@ -89,6 +102,7 @@ class CallService : Service() {
                 startForegroundCall("Триває розмова: $name", targetEmail)
                 enableHighQualityAudio()
                 acquireProximityWakeLock()
+                acquireNetworkLocks()
                 startAudioStreaming()
             }
             ACTION_INCOMING -> {
@@ -169,64 +183,62 @@ class CallService : Service() {
         }
     }
 
-    private fun createAudioRecord(minBuf: Int): AudioRecord? {
+    @SuppressLint("MissingPermission")
+    private fun createAudioRecord(): AudioRecord? {
         val sources = intArrayOf(
             MediaRecorder.AudioSource.VOICE_COMMUNICATION,
             MediaRecorder.AudioSource.MIC
         )
-        for (source in sources) {
-            try {
-                val recorder = AudioRecord(
-                    source,
-                    SAMPLE_RATE,
-                    CHANNEL_CONFIG_IN,
-                    AUDIO_FORMAT,
-                    maxOf(minBuf * 2, 2048)
-                )
-                if (recorder.state == AudioRecord.STATE_INITIALIZED) {
-                    try {
-                        if (AcousticEchoCanceler.isAvailable()) {
-                            acousticEchoCanceler = AcousticEchoCanceler.create(recorder.audioSessionId)
-                            acousticEchoCanceler?.enabled = true
+        for (rate in CAPTURE_RATES) {
+            val minBuf = AudioRecord.getMinBufferSize(rate, CHANNEL_CONFIG_IN, AUDIO_FORMAT)
+            if (minBuf <= 0) continue
+            val frameBytes = rate * FRAME_MS / 1000 * 2
+            for (source in sources) {
+                try {
+                    val recorder = AudioRecord(
+                        source,
+                        rate,
+                        CHANNEL_CONFIG_IN,
+                        AUDIO_FORMAT,
+                        maxOf(minBuf * 2, frameBytes * 4)
+                    )
+                    if (recorder.state == AudioRecord.STATE_INITIALIZED) {
+                        try {
+                            if (AcousticEchoCanceler.isAvailable()) {
+                                acousticEchoCanceler = AcousticEchoCanceler.create(recorder.audioSessionId)
+                                acousticEchoCanceler?.enabled = true
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
 
-                    try {
-                        if (NoiseSuppressor.isAvailable()) {
-                            noiseSuppressor = NoiseSuppressor.create(recorder.audioSessionId)
-                            noiseSuppressor?.enabled = true
+                        try {
+                            if (NoiseSuppressor.isAvailable()) {
+                                noiseSuppressor = NoiseSuppressor.create(recorder.audioSessionId)
+                                noiseSuppressor?.enabled = true
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
 
-                    return recorder
-                } else {
-                    recorder.release()
+                        captureRate = rate
+                        return recorder
+                    } else {
+                        recorder.release()
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
             }
         }
         return null
     }
 
-    @SuppressLint("MissingPermission")
-    private fun startAudioStreaming() {
-        if (isCallActive) stopAudioStreaming()
-        isCallActive = true
-        audioQueue.clear()
-
-        val minRecBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_IN, AUDIO_FORMAT)
-        val minTrackBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG_OUT, AUDIO_FORMAT)
-        val frameSize = 960
-
-        try {
-            audioRecord = createAudioRecord(minRecBuf)
-
-            audioTrack = AudioTrack.Builder()
+    private fun createAudioTrack(rate: Int): AudioTrack? {
+        return try {
+            val minBuf = AudioTrack.getMinBufferSize(rate, CHANNEL_CONFIG_OUT, AUDIO_FORMAT)
+            val frameBytes = rate * FRAME_MS / 1000 * 2
+            val builder = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -236,64 +248,160 @@ class CallService : Service() {
                 .setAudioFormat(
                     AudioFormat.Builder()
                         .setEncoding(AUDIO_FORMAT)
-                        .setSampleRate(SAMPLE_RATE)
+                        .setSampleRate(rate)
                         .setChannelMask(CHANNEL_CONFIG_OUT)
                         .build()
                 )
-                .setBufferSizeInBytes(maxOf(minTrackBuf * 2, 4096))
+                .setBufferSizeInBytes(maxOf(minBuf, frameBytes * 3))
                 .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+            }
+            builder.build()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
 
-            audioTrack?.play()
+    @SuppressLint("MissingPermission")
+    private fun startAudioStreaming() {
+        if (isCallActive) stopAudioStreaming()
+        isCallActive = true
+        audioQueue.clear()
+
+        try {
+            audioRecord = createAudioRecord()
             audioRecord?.startRecording()
 
             if (myEmail.isNotEmpty()) {
                 manager.listenForVoiceChunks(myEmail) { chunk ->
                     if (isCallActive) {
-                        if (audioQueue.size > 2) {
-                            audioQueue.poll()
-                        }
                         audioQueue.offer(chunk)
                     }
                 }
             }
 
-            playbackThread = thread(start = true) {
-                while (isCallActive) {
-                    try {
-                        val chunk = audioQueue.poll(5, TimeUnit.MILLISECONDS)
-                        if (chunk != null && isCallActive) {
-                            audioTrack?.write(chunk, 0, chunk.size)
-                        }
-                    } catch (e: Exception) {
-                        break
-                    }
-                }
-            }
-
-            recordingThread = thread(start = true) {
-                val buffer = ByteArray(frameSize)
-
-                while (isCallActive) {
-                    val rec = audioRecord
-                    if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) {
-                        try { Thread.sleep(20) } catch (e: Exception) { break }
-                        continue
-                    }
-
-                    val read = rec.read(buffer, 0, frameSize)
-                    if (read > 0) {
-                        if (!isMuted && targetEmail.isNotEmpty()) {
-                            val chunkToSend = if (read == frameSize) buffer else buffer.copyOf(read)
-                            manager.sendVoiceChunk(targetEmail, chunkToSend)
-                        }
-                    } else {
-                        try { Thread.sleep(5) } catch (e: Exception) { break }
-                    }
-                }
-            }
+            playbackThread = thread(start = true, name = "KishkaVoicePlayback") { runPlayback() }
+            recordingThread = thread(start = true, name = "KishkaVoiceCapture") { runCapture() }
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+    }
+
+    /** Мікрофон -> ADPCM-пакети по 40 мс -> сервер. */
+    private fun runCapture() {
+        try {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        val rec = audioRecord ?: return
+        val rate = captureRate
+        if (rate <= 0) return
+
+        val rateCode = VoiceCodec.rateToCode(rate)
+        val samplesPerFrame = rate * FRAME_MS / 1000
+        val pcm = ShortArray(samplesPerFrame)
+        val encoderState = VoiceCodec.EncoderState()
+        var sequence = 0
+
+        while (isCallActive) {
+            var read = 0
+            while (read < samplesPerFrame && isCallActive) {
+                val n = rec.read(pcm, read, samplesPerFrame - read)
+                if (n > 0) {
+                    read += n
+                } else {
+                    try {
+                        Thread.sleep(if (n < 0) 10L else 2L)
+                    } catch (e: InterruptedException) {
+                        return
+                    }
+                    if (n < 0) break
+                }
+            }
+            if (read < samplesPerFrame) continue
+
+            if (!isMuted && targetEmail.isNotEmpty()) {
+                val packet = VoiceCodec.encodePacket(rateCode, sequence and 0xFFFF, pcm, samplesPerFrame, encoderState)
+                sequence++
+                manager.sendVoiceChunk(targetEmail, packet)
+            }
+        }
+    }
+
+    /** Мережа -> буфер від "ривків" -> декодування -> динамік. */
+    private fun runPlayback() {
+        try {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        var track: AudioTrack? = null
+        var trackRate = 0
+        var buffering = true
+
+        try {
+            while (isCallActive) {
+                if (buffering) {
+                    if (audioQueue.size >= PREBUFFER_FRAMES) {
+                        buffering = false
+                    } else {
+                        Thread.sleep(8)
+                        continue
+                    }
+                }
+
+                val polled = audioQueue.poll(FRAME_MS * 3L, TimeUnit.MILLISECONDS)
+                if (polled == null) {
+                    // Дані не встигли дійти: накопичуємо буфер заново, щоб не було "рубання"
+                    buffering = true
+                    continue
+                }
+                var packet: ByteArray = polled
+
+                // Після мережевого "залпу" пропускаємо застарілі пакети, щоб не наростала затримка
+                if (audioQueue.size > MAX_BACKLOG_FRAMES) {
+                    while (audioQueue.size > PREBUFFER_FRAMES) {
+                        val newer = audioQueue.poll() ?: break
+                        packet = newer
+                    }
+                }
+
+                val rate = VoiceCodec.packetSampleRate(packet)
+                if (rate == 0) continue
+
+                if (track == null || trackRate != rate) {
+                    try {
+                        track?.stop()
+                        track?.release()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                    track = createAudioTrack(rate)
+                    trackRate = rate
+                    audioTrack = track
+                    track?.play()
+                }
+
+                val pcm = VoiceCodec.decodePacket(packet) ?: continue
+                track?.write(pcm, 0, pcm.size)
+            }
+        } catch (e: InterruptedException) {
+            // Дзвінок завершено
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            try {
+                track?.stop()
+                track?.release()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            audioTrack = null
         }
     }
 
@@ -321,7 +429,7 @@ class CallService : Service() {
 
         try {
             playbackThread?.interrupt()
-            playbackThread?.join(100)
+            playbackThread?.join(300)
             playbackThread = null
         } catch (e: Exception) {
             e.printStackTrace()
@@ -329,7 +437,7 @@ class CallService : Service() {
 
         try {
             recordingThread?.interrupt()
-            recordingThread?.join(100)
+            recordingThread?.join(300)
             recordingThread = null
         } catch (e: Exception) {
             e.printStackTrace()
@@ -343,13 +451,50 @@ class CallService : Service() {
             e.printStackTrace()
         }
 
+        captureRate = 0
+    }
+
+    /** CPU і Wi-Fi не "засинають" під час розмови: це прибирає ривки звуку при вимкненому екрані. */
+    private fun acquireNetworkLocks() {
         try {
-            audioTrack?.stop()
-            audioTrack?.release()
-            audioTrack = null
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            cpuWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "KishkaMessenger::CallCpu")
+            cpuWakeLock?.setReferenceCounted(false)
+            cpuWakeLock?.acquire(2 * 60 * 60 * 1000L)
         } catch (e: Exception) {
             e.printStackTrace()
         }
+
+        try {
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            @Suppress("DEPRECATION")
+            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+            } else {
+                WifiManager.WIFI_MODE_FULL_HIGH_PERF
+            }
+            wifiLock = wm.createWifiLock(mode, "KishkaMessenger::CallWifi")
+            wifiLock?.setReferenceCounted(false)
+            wifiLock?.acquire()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun releaseNetworkLocks() {
+        try {
+            if (cpuWakeLock?.isHeld == true) cpuWakeLock?.release()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        cpuWakeLock = null
+
+        try {
+            if (wifiLock?.isHeld == true) wifiLock?.release()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        wifiLock = null
     }
 
     private fun startForegroundCall(title: String, phone: String) {
@@ -478,6 +623,7 @@ class CallService : Service() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        releaseNetworkLocks()
 
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
