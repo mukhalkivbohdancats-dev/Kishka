@@ -21,8 +21,10 @@ data class GeminiMessage(
     val role: String = "user", // "user" або "model"
     val text: String = "",
     val timestamp: Long = System.currentTimeMillis(),
-    val imageUrl: String? = null, // повне посилання на згенероване зображення (якщо є)
-    val model: String? = null     // яка модель відповіла
+    val imageUrl: String? = null, // повне посилання на зображення/відео (згенероване Gemini або надіслане користувачем)
+    val model: String? = null,    // яка модель відповіла
+    val fileType: String? = null, // "image" або "video" для вкладень користувача
+    val thumbUrl: String? = null  // мініатюра відео
 )
 
 data class GeminiResult(
@@ -179,6 +181,8 @@ class GeminiManager(context: Context) {
                     put("timestamp", m.timestamp)
                     put("imageUrl", m.imageUrl ?: JSONObject.NULL)
                     put("model", m.model ?: JSONObject.NULL)
+                    put("fileType", m.fileType ?: JSONObject.NULL)
+                    put("thumbUrl", m.thumbUrl ?: JSONObject.NULL)
                 })
             }
             prefs.edit().putString(cacheKey(email), arr.toString()).apply()
@@ -199,7 +203,9 @@ class GeminiManager(context: Context) {
             text = if (obj.isNull("text")) "" else obj.optString("text", ""),
             timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
             imageUrl = absoluteUrl(if (obj.isNull("imageUrl")) null else obj.optString("imageUrl", "")),
-            model = if (obj.isNull("model")) null else obj.optString("model", "").ifEmpty { null }
+            model = if (obj.isNull("model")) null else obj.optString("model", "").ifEmpty { null },
+            fileType = if (obj.isNull("fileType")) null else obj.optString("fileType", "").ifEmpty { null },
+            thumbUrl = absoluteUrl(if (obj.isNull("thumbUrl")) null else obj.optString("thumbUrl", ""))
         )
     }
 
@@ -242,6 +248,7 @@ class GeminiManager(context: Context) {
         displayName: String,
         text: String,
         modelId: String,
+        attachment: UploadedMedia?,
         onResult: (GeminiResult) -> Unit
     ): GeminiCall {
         ensureConnected()
@@ -252,6 +259,14 @@ class GeminiManager(context: Context) {
             put("name", displayName)
             put("text", text)
             put("model", modelId)
+            if (attachment != null) {
+                put("attachment", JSONObject().apply {
+                    put("url", KishkaManager.relativeUrl(attachment.url) ?: attachment.url)
+                    put("type", attachment.type)
+                    val thumb = KishkaManager.relativeUrl(attachment.thumbUrl)
+                    if (!thumb.isNullOrEmpty()) put("thumbUrl", thumb)
+                })
+            }
         }
 
         val done = AtomicBoolean(false)
@@ -259,24 +274,7 @@ class GeminiManager(context: Context) {
         socket.emit("gemini_send", json, io.socket.client.Ack { args ->
             if (!done.compareAndSet(false, true)) return@Ack // вже зупинено користувачем
 
-            var result = GeminiResult(false, null, "Gemini недоступний")
-            try {
-                val obj = args.firstOrNull() as? JSONObject
-                if (obj != null) {
-                    if (obj.optBoolean("success", false)) {
-                        val reply = parseMessage(obj.getJSONObject("reply")).copy(role = "model")
-                        result = GeminiResult(true, reply, null)
-                    } else {
-                        result = GeminiResult(
-                            false, null,
-                            obj.optString("error", "Gemini недоступний"),
-                            obj.optBoolean("cancelled", false)
-                        )
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+            val result = parseResult(args.firstOrNull() as? JSONObject)
             mainHandler.post { onResult(result) }
         })
 
@@ -287,6 +285,65 @@ class GeminiManager(context: Context) {
                 mainHandler.post { onResult(GeminiResult(false, null, null, true)) }
             }
         }
+    }
+
+    private fun parseResult(obj: JSONObject?): GeminiResult {
+        var result = GeminiResult(false, null, "Gemini недоступний")
+        try {
+            if (obj != null) {
+                result = if (obj.optBoolean("success", false)) {
+                    val reply = parseMessage(obj.getJSONObject("reply")).copy(role = "model")
+                    GeminiResult(true, reply, null)
+                } else {
+                    GeminiResult(
+                        false, null,
+                        obj.optString("error", "Gemini недоступний"),
+                        obj.optBoolean("cancelled", false)
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return result
+    }
+
+    private var doneListener: io.socket.emitter.Emitter.Listener? = null
+
+    /**
+     * Сервер надсилає подію gemini_done, коли Gemini закінчив відповідати. Вона доходить навіть тоді,
+     * коли звʼязок перепідключився і звичайна відповідь (ack) загубилась.
+     */
+    fun listenDone(onDone: (GeminiResult) -> Unit) {
+        stopListeningDone()
+        val listener = io.socket.emitter.Emitter.Listener { args ->
+            val result = parseResult(args.firstOrNull() as? JSONObject)
+            mainHandler.post { onDone(result) }
+        }
+        doneListener = listener
+        socket.on("gemini_done", listener)
+    }
+
+    fun stopListeningDone() {
+        doneListener?.let { socket.off("gemini_done", it) }
+        doneListener = null
+    }
+
+    /** Чи Gemini зараз відповідає на запит цього користувача (відновлення стану після перезапуску). */
+    fun getStatus(email: String, onResult: (busy: Boolean, startedAt: Long) -> Unit) {
+        ensureConnected()
+        socket.emit("gemini_get_status", email.trim().lowercase(), io.socket.client.Ack { args ->
+            val obj = args.firstOrNull() as? JSONObject
+            val busy = obj?.optBoolean("busy", false) ?: false
+            val startedAt = obj?.optLong("startedAt", 0L) ?: 0L
+            mainHandler.post { onResult(busy, startedAt) }
+        })
+    }
+
+    /** Зупиняє на сервері запит, що виконується (якщо локального GeminiCall вже немає). */
+    fun cancelRemote(email: String) {
+        ensureConnected()
+        socket.emit("gemini_cancel", email.trim().lowercase(), io.socket.client.Ack { })
     }
 
     // ---------- Очищення памʼяті ----------
@@ -305,63 +362,5 @@ class GeminiManager(context: Context) {
 
     fun saveCache(email: String, list: List<GeminiMessage>) {
         cacheHistory(email.trim().lowercase(), list)
-    }
-
-    // ---------- Збереження зображення в галерею ----------
-    // Android 10+ (API 29+): без додаткових дозволів, у Pictures/Kishka.
-    // Android 7–9: потрібен дозвіл WRITE_EXTERNAL_STORAGE (його запитує вкладка Gemini).
-
-    fun saveImageToGallery(url: String, onResult: (Boolean) -> Unit) {
-        Thread {
-            var ok = false
-            try {
-                val conn = URL(url).openConnection() as HttpURLConnection
-                conn.connectTimeout = 30000
-                conn.readTimeout = 120000
-                val mime = (conn.contentType ?: "image/png").substringBefore(';').trim()
-                val bytes = conn.inputStream.use { it.readBytes() }
-                conn.disconnect()
-
-                val ext = when {
-                    mime.contains("jpeg") || mime.contains("jpg") -> "jpg"
-                    mime.contains("webp") -> "webp"
-                    mime.contains("gif") -> "gif"
-                    else -> "png"
-                }
-                val name = "Kishka_Gemini_${System.currentTimeMillis()}.$ext"
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val values = ContentValues().apply {
-                        put(MediaStore.Images.Media.DISPLAY_NAME, name)
-                        put(MediaStore.Images.Media.MIME_TYPE, mime)
-                        put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Kishka")
-                        put(MediaStore.Images.Media.IS_PENDING, 1)
-                    }
-                    val resolver = appContext.contentResolver
-                    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-                    if (uri != null) {
-                        val stream = resolver.openOutputStream(uri)
-                        if (stream != null) {
-                            stream.use { it.write(bytes) }
-                            values.clear()
-                            values.put(MediaStore.Images.Media.IS_PENDING, 0)
-                            resolver.update(uri, values, null, null)
-                            ok = true
-                        }
-                    }
-                } else {
-                    @Suppress("DEPRECATION")
-                    val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "Kishka")
-                    dir.mkdirs()
-                    val file = File(dir, name)
-                    file.writeBytes(bytes)
-                    MediaScannerConnection.scanFile(appContext, arrayOf(file.absolutePath), arrayOf(mime), null)
-                    ok = true
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-            mainHandler.post { onResult(ok) }
-        }.start()
     }
 }
