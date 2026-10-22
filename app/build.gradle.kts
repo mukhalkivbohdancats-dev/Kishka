@@ -87,11 +87,12 @@ dependencies {
     // XML-бібліотека Google Material Components
     implementation("com.google.android.material:material:1.11.0")
 
-    // Firebase (Auth, Firestore, Storage)
+    // Firebase (Auth, Firestore, Storage, Cloud Messaging для push-сповіщень)
     implementation(platform("com.google.firebase:firebase-bom:33.1.0"))
     implementation("com.google.firebase:firebase-auth-ktx")
     implementation("com.google.firebase:firebase-firestore-ktx")
     implementation("com.google.firebase:firebase-storage-ktx")
+    implementation("com.google.firebase:firebase-messaging-ktx")
 
     // Socket.IO Client для зв'язку з Node.js
     implementation("io.socket:socket.io-client:2.1.0") {
