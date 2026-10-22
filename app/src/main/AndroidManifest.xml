@@ -5,10 +5,18 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Збереження зображень Gemini в галерею (потрібно лише на Android 9 і старіше) -->
+    <!-- Збереження фото та відео в галерею (потрібно лише на Android 9 і старіше) -->
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
+
+    <!-- Третій дозвіл: фото і відео (для надсилання контактам та аналізу в Gemini) -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
 
     <!-- Дозволи для дзвінків, мікрофона та блокування екрана -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -42,6 +50,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Push-сповіщення про повідомлення, коли застосунок закритий (Firebase Cloud Messaging) -->
+        <service
+            android:name=".KishkaFirebaseService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
 
         <!-- Сервіс для активних викликів -->
         <service
