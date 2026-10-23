@@ -59,6 +59,7 @@ db.serialize(() => {
     db.run("ALTER TABLE messages ADD COLUMN file_url TEXT", () => {});
     db.run("ALTER TABLE messages ADD COLUMN file_type TEXT", () => {});
     db.run("ALTER TABLE messages ADD COLUMN thumb_url TEXT", () => {});
+    db.run("ALTER TABLE messages ADD COLUMN file_name TEXT", () => {});
 
     // Токени push-сповіщень (FCM) для доставки повідомлень, коли застосунок закритий
     db.run(`CREATE TABLE IF NOT EXISTS push_tokens (
@@ -74,8 +75,11 @@ db.serialize(() => {
         email TEXT,
         mime TEXT NOT NULL,
         size INTEGER NOT NULL,
-        created INTEGER NOT NULL
+        created INTEGER NOT NULL,
+        name TEXT
     )`);
+    // Для баз, створених раніше без колонки name (помилку "duplicate column" ігноруємо)
+    db.run("ALTER TABLE media_files ADD COLUMN name TEXT", () => {});
 });
 
 // ===================== ФАЙЛИ: фото та відео =====================
@@ -83,17 +87,24 @@ const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, 'uploads');
 try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch (e) { console.error('UPLOAD_DIR:', e.message); }
 const MAX_UPLOAD_BYTES = (parseInt(process.env.MAX_UPLOAD_MB || '250', 10) || 250) * 1024 * 1024;
 
+function cleanFileName(raw) {
+    let name = String(raw || '').replace(/[\\/\u0000-\u001f\u007f<>:"|?*]/g, '_').trim();
+    if (name.length > 150) name = name.slice(0, 150);
+    return name || null;
+}
+
 // Завантаження: POST /upload?mime=image/jpeg&name=photo.jpg  (тіло запиту = байти файлу)
 app.post('/upload', (req, res) => {
     const mime = String(req.query.mime || req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
-    if (!/^(image|video)\/[a-z0-9.+-]+$/.test(mime)) {
+    if (!/^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+*-]*$/.test(mime)) {
         req.resume();
-        return res.status(415).json({ success: false, error: 'Підтримуються лише фото та відео' });
+        return res.status(415).json({ success: false, error: 'Unsupported file type' });
     }
+    const fileName = cleanFileName(req.query.name);
     const declared = parseInt(req.headers['content-length'] || '0', 10);
     if (declared > MAX_UPLOAD_BYTES) {
         req.resume();
-        return res.status(413).json({ success: false, error: 'Файл завеликий' });
+        return res.status(413).json({ success: false, error: 'File too large' });
     }
 
     const id = crypto.randomBytes(16).toString('hex');
@@ -113,21 +124,21 @@ app.post('/upload', (req, res) => {
 
     req.on('data', (chunk) => {
         size += chunk.length;
-        if (size > MAX_UPLOAD_BYTES) fail(413, 'Файл завеликий');
+        if (size > MAX_UPLOAD_BYTES) fail(413, 'File too large');
     });
     req.on('close', () => {
-        if (!req.complete) fail(499, 'Завантаження перервано');
+        if (!req.complete) fail(499, 'Upload interrupted');
     });
-    out.on('error', () => fail(500, 'Помилка запису файлу'));
+    out.on('error', () => fail(500, 'File write error'));
     out.on('finish', () => {
         if (failed) return;
         const email = String(req.headers['x-kishka-email'] || '').trim().toLowerCase() || null;
         db.run(
-            "INSERT INTO media_files (id, email, mime, size, created) VALUES (?, ?, ?, ?, ?)",
-            [id, email, mime, size, Date.now()],
+            "INSERT INTO media_files (id, email, mime, size, created, name) VALUES (?, ?, ?, ?, ?, ?)",
+            [id, email, mime, size, Date.now(), fileName],
             (err) => {
-                if (err) return fail(500, 'Помилка бази даних');
-                res.json({ success: true, id, url: '/media/' + id, mime, size });
+                if (err) return fail(500, 'Database error');
+                res.json({ success: true, id, url: '/media/' + id, mime, size, name: fileName });
             }
         );
     });
@@ -137,9 +148,14 @@ app.post('/upload', (req, res) => {
 // Віддача файлів (підтримує Range, тому відео можна гортати)
 app.get('/media/:id', (req, res) => {
     const id = String(req.params.id || '').replace(/[^a-zA-Z0-9_-]/g, '');
-    db.get("SELECT mime FROM media_files WHERE id = ?", [id], (err, row) => {
+    db.get("SELECT mime, name FROM media_files WHERE id = ?", [id], (err, row) => {
         if (err || !row) return res.status(404).send('Not found');
         res.set('Content-Type', row.mime);
+        res.set('X-Content-Type-Options', 'nosniff');
+        if (!/^(image|video)\//.test(row.mime)) {
+            // Документи та інші файли завжди завантажуються, а не відкриваються в браузері
+            res.set('Content-Disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(row.name || 'file'));
+        }
         res.set('Cache-Control', 'public, max-age=31536000, immutable');
         res.sendFile(path.join(UPLOAD_DIR, id), (sendErr) => {
             if (sendErr && !res.headersSent) res.status(404).end();
@@ -283,8 +299,9 @@ function sendPushToUser(email, data) {
 
 function mediaPreviewText(text, fileType) {
     if (text) return text;
-    if (fileType === 'video') return '🎬 Відео';
-    if (fileType === 'image') return '📷 Фото';
+    if (fileType === 'video') return '🎬';
+    if (fileType === 'image') return '📷';
+    if (fileType === 'file') return '📎';
     return '';
 }
 
@@ -351,7 +368,7 @@ io.on('connection', (socket) => {
         }
 
         if (!cleanTarget || !cleanTarget.includes('@') || cleanMy === cleanTarget) {
-            return safeCallback({ success: false, message: "Некоректна адреса або спроба додати самі себе!" });
+            return safeCallback({ success: false, code: 'invalid', message: "Invalid address or adding yourself" });
         }
 
         db.get("SELECT email, name, avatar_url as avatarUrl FROM users WHERE email = ?", [cleanTarget], (err, targetUser) => {
@@ -365,7 +382,7 @@ io.on('connection', (socket) => {
                     io.to(cleanMy).emit('contact_updated');
                     io.to(cleanTarget).emit('contact_updated');
 
-                    safeCallback({ success: true, user: userObj, message: "Контакт успішно додано!" });
+                    safeCallback({ success: true, user: userObj, message: "Contact added" });
                 });
             };
 
@@ -407,7 +424,7 @@ io.on('connection', (socket) => {
         socket.join(chatId);
 
         db.all(
-            "SELECT id, chat_id as chatId, sender_email as senderEmail, receiver_email as receiverEmail, text, timestamp, file_url as fileUrl, file_type as fileType, thumb_url as thumbUrl FROM messages WHERE chat_id = ? ORDER BY timestamp ASC",
+            "SELECT id, chat_id as chatId, sender_email as senderEmail, receiver_email as receiverEmail, text, timestamp, file_url as fileUrl, file_type as fileType, thumb_url as thumbUrl, file_name as fileName FROM messages WHERE chat_id = ? ORDER BY timestamp ASC",
             [chatId],
             (err, rows) => {
                 if (!err) socket.emit('load_history', rows || []);
@@ -420,24 +437,25 @@ io.on('connection', (socket) => {
     });
 
     socket.on('send_message', (data) => {
-        const { id, chatId, senderEmail, receiverEmail, text, timestamp, fileUrl, fileType, thumbUrl } = data || {};
+        const { id, chatId, senderEmail, receiverEmail, text, timestamp, fileUrl, fileType, thumbUrl, fileName } = data || {};
         const safeText = typeof text === 'string' ? text : '';
         const safeFileUrl = (typeof fileUrl === 'string' && /^\/media\/[a-zA-Z0-9_-]+$/.test(fileUrl)) ? fileUrl : null;
         const safeThumbUrl = (typeof thumbUrl === 'string' && /^\/media\/[a-zA-Z0-9_-]+$/.test(thumbUrl)) ? thumbUrl : null;
-        const safeFileType = safeFileUrl ? (fileType === 'video' ? 'video' : 'image') : null;
+        const safeFileType = safeFileUrl ? (fileType === 'video' ? 'video' : (fileType === 'file' ? 'file' : 'image')) : null;
+        const safeFileName = safeFileUrl ? cleanFileName(fileName) : null;
 
         if (!chatId || (!safeText && !safeFileUrl)) return;
         const msgId = id || Date.now().toString();
         const msgTimestamp = timestamp || Date.now();
 
         db.run(
-            "INSERT INTO messages (id, chat_id, sender_email, receiver_email, text, timestamp, file_url, file_type, thumb_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [msgId, chatId, senderEmail, receiverEmail, safeText, msgTimestamp, safeFileUrl, safeFileType, safeThumbUrl],
+            "INSERT INTO messages (id, chat_id, sender_email, receiver_email, text, timestamp, file_url, file_type, thumb_url, file_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [msgId, chatId, senderEmail, receiverEmail, safeText, msgTimestamp, safeFileUrl, safeFileType, safeThumbUrl, safeFileName],
             (err) => {
                 if (err) return;
                 const newMessage = {
                     id: msgId, chatId, senderEmail, receiverEmail, text: safeText, timestamp: msgTimestamp,
-                    fileUrl: safeFileUrl, fileType: safeFileType, thumbUrl: safeThumbUrl
+                    fileUrl: safeFileUrl, fileType: safeFileType, thumbUrl: safeThumbUrl, fileName: safeFileName
                 };
 
                 io.to(chatId).emit('receive_message', newMessage);
@@ -481,12 +499,15 @@ io.on('connection', (socket) => {
                 if (err) return;
                 io.to(chatId).emit('message_deleted', messageId);
                 // Видаляємо і самі файли з диска
+                // Файл видаляємо лише якщо на нього більше не посилається жодне повідомлення (його могли переслати)
                 [row.file_url, row.thumb_url].forEach((u) => {
                     const m = typeof u === 'string' ? u.match(/^\/media\/([a-zA-Z0-9_-]+)$/) : null;
-                    if (m) {
+                    if (!m) return;
+                    db.get("SELECT COUNT(*) AS n FROM messages WHERE file_url = ? OR thumb_url = ?", [u, u], (cErr, cRow) => {
+                        if (cErr || (cRow && cRow.n > 0)) return;
                         db.run("DELETE FROM media_files WHERE id = ?", [m[1]], () => {});
                         fs.unlink(path.join(UPLOAD_DIR, m[1]), () => {});
-                    }
+                    });
                 });
             });
         });
@@ -1191,32 +1212,64 @@ async function callGeminiImageResilient(prompt, modelId, job, inputImage) {
     throw lastErr;
 }
 
-function geminiErrorText(err, picked) {
+const GEMINI_ERRORS = {
+    stopped:       { uk: 'Запит зупинено', ru: 'Запрос остановлен', en: 'Request stopped' },
+    attach_missing:{ uk: 'Файл вкладення не знайдено на сервері (сервер міг перезапуститися). Надішліть його ще раз', ru: 'Файл вложения не найден на сервере (сервер мог перезапуститься). Отправьте его ещё раз', en: 'The attachment was not found on the server (it may have restarted). Please send it again' },
+    attach_bad:    { uk: 'Gemini аналізує лише фото та відео', ru: 'Gemini анализирует только фото и видео', en: 'Gemini can only analyse photos and videos' },
+    file_failed:   { uk: 'Gemini не зміг обробити цей файл. Спробуйте інший формат або коротше відео', ru: 'Gemini не смог обработать этот файл. Попробуйте другой формат или более короткое видео', en: 'Gemini could not process this file. Try another format or a shorter video' },
+    video_to_image:{ uk: 'Моделі створення зображень не приймають відео. Оберіть текстову модель для аналізу відео', ru: 'Модели создания изображений не принимают видео. Выберите текстовую модель для анализа видео', en: 'Image models do not accept video. Choose a text model to analyse a video' },
+    attach_big:    { uk: 'Фото завелике для редагування моделлю зображень (максимум 15 МБ)', ru: 'Фото слишком большое для редактирования моделью изображений (максимум 15 МБ)', en: 'The photo is too large for the image model (15 MB max)' },
+    no_key:        { uk: 'На сервері не налаштований GEMINI_API_KEY', ru: 'На сервере не настроен GEMINI_API_KEY', en: 'GEMINI_API_KEY is not configured on the server' },
+    paid:          { uk: '%s платна: ваш ключ Google не має до неї доступу (потрібен платний тариф Gemini API)', ru: '%s платная: у вашего ключа Google нет к ней доступа (нужен платный тариф Gemini API)', en: '%s is a paid model: your Google key has no access (a paid Gemini API plan is required)' },
+    forbidden:     { uk: 'Немає доступу до моделі %s з вашим ключем Google', ru: 'Нет доступа к модели %s с вашим ключом Google', en: 'No access to %s with your Google key' },
+    not_found:     { uk: 'Модель %s недоступна для вашого ключа Google', ru: 'Модель %s недоступна для вашего ключа Google', en: 'Model %s is not available for your Google key' },
+    image_quota:   { uk: 'Генерація зображень моделлю %s недоступна на вашому ключі (ліміт або платний тариф)', ru: 'Генерация изображений моделью %s недоступна на вашем ключе (лимит или платный тариф)', en: 'Image generation with %s is not available on your key (quota or paid plan)' },
+    quota:         { uk: 'Перевищено ліміт запитів до Gemini. Зачекайте хвилину і спробуйте ще раз', ru: 'Превышен лимит запросов к Gemini. Подождите минуту и попробуйте ещё раз', en: 'Gemini request limit exceeded. Wait a minute and try again' },
+    overloaded:    { uk: 'Gemini зараз перевантажений. Спробуйте ще раз за хвилину', ru: 'Gemini сейчас перегружен. Попробуйте ещё раз через минуту', en: 'Gemini is overloaded right now. Try again in a minute' },
+    empty:         { uk: 'Gemini не зміг відповісти на це повідомлення', ru: 'Gemini не смог ответить на это сообщение', en: 'Gemini could not answer this message' },
+    empty_image:   { uk: 'Gemini не повернув зображення (можливо, запит заблоковано фільтром безпеки). Спробуйте інший опис', ru: 'Gemini не вернул изображение (возможно, запрос заблокирован фильтром безопасности). Попробуйте другое описание', en: 'Gemini returned no image (the request may have been blocked by a safety filter). Try another description' },
+    bad_response:  { uk: 'Некоректна відповідь від Gemini', ru: 'Некорректный ответ от Gemini', en: 'Invalid response from Gemini' },
+    generic:       { uk: 'Помилка Gemini: %s', ru: 'Ошибка Gemini: %s', en: 'Gemini error: %s' },
+    unknown:       { uk: 'невідома', ru: 'неизвестная', en: 'unknown' },
+    empty_msg:     { uk: 'Порожнє повідомлення', ru: 'Пустое сообщение', en: 'Empty message' },
+    too_long:      { uk: 'Повідомлення занадто довге', ru: 'Сообщение слишком длинное', en: 'The message is too long' },
+    busy:          { uk: 'Gemini ще відповідає на попереднє повідомлення', ru: 'Gemini ещё отвечает на предыдущее сообщение', en: 'Gemini is still answering the previous message' }
+};
+
+function geminiT(key, lang, arg) {
+    const entry = GEMINI_ERRORS[key] || GEMINI_ERRORS.generic;
+    const text = entry[lang] || entry.uk;
+    return arg === undefined ? text : text.replace('%s', arg);
+}
+
+function geminiLang(value) {
+    return value === 'ru' || value === 'en' ? value : 'uk';
+}
+
+function geminiErrorText(err, picked, lang) {
+    lang = geminiLang(lang);
     const m = err && err.message ? err.message : '';
     const s = err && err.status;
-    const name = picked ? picked.label : 'Ця модель';
+    const name = picked ? picked.label : (lang === 'en' ? 'This model' : (lang === 'ru' ? 'Эта модель' : 'Ця модель'));
 
-    if (m === 'CANCELLED') return 'Запит зупинено';
-    if (m === 'ATTACH_MISSING') return 'Файл вкладення не знайдено на сервері (сервер міг перезапуститися). Надішліть його ще раз';
-    if (m === 'FILE_FAILED') return 'Gemini не зміг обробити цей файл. Спробуйте інший формат або коротше відео';
-    if (m === 'VIDEO_TO_IMAGE_MODEL') return 'Моделі створення зображень не приймають відео. Оберіть текстову модель для аналізу відео';
-    if (m === 'ATTACH_TOO_BIG') return 'Фото завелике для редагування моделлю зображень (максимум 15 МБ)';
-    if (m === 'NO_KEY') return 'На сервері не налаштований GEMINI_API_KEY';
-    if ((s === 403 || s === 429) && picked && picked.paid) {
-        return `${name} платна: ваш ключ Google не має до неї доступу (потрібен платний тариф Gemini API)`;
-    }
-    if (s === 403) return `Немає доступу до моделі ${name} з вашим ключем Google`;
-    if (s === 404) return `Модель ${name} недоступна для вашого ключа Google`;
+    if (m === 'CANCELLED') return geminiT('stopped', lang);
+    if (m === 'ATTACH_MISSING') return geminiT('attach_missing', lang);
+    if (m === 'ATTACH_BAD') return geminiT('attach_bad', lang);
+    if (m === 'FILE_FAILED') return geminiT('file_failed', lang);
+    if (m === 'VIDEO_TO_IMAGE_MODEL') return geminiT('video_to_image', lang);
+    if (m === 'ATTACH_TOO_BIG') return geminiT('attach_big', lang);
+    if (m === 'NO_KEY') return geminiT('no_key', lang);
+    if ((s === 403 || s === 429) && picked && picked.paid) return geminiT('paid', lang, name);
+    if (s === 403) return geminiT('forbidden', lang, name);
+    if (s === 404) return geminiT('not_found', lang, name);
     if (s === 429) {
-        return picked && picked.type === 'image'
-            ? `Генерація зображень моделлю ${name} недоступна на вашому ключі (ліміт або платний тариф)`
-            : 'Перевищено ліміт запитів до Gemini. Зачекайте хвилину і спробуйте ще раз';
+        return picked && picked.type === 'image' ? geminiT('image_quota', lang, name) : geminiT('quota', lang);
     }
-    if (s === 500 || s === 502 || s === 503 || s === 504) return 'Gemini зараз перевантажений. Спробуйте ще раз за хвилину';
-    if (m === 'EMPTY') return 'Gemini не зміг відповісти на це повідомлення';
-    if (m === 'EMPTY_IMAGE') return 'Gemini не повернув зображення (можливо, запит заблоковано фільтром безпеки). Спробуйте інший опис';
-    if (m === 'BAD_RESPONSE') return 'Некоректна відповідь від Gemini';
-    return 'Помилка Gemini: ' + (m || 'невідома');
+    if (s === 500 || s === 502 || s === 503 || s === 504) return geminiT('overloaded', lang);
+    if (m === 'EMPTY') return geminiT('empty', lang);
+    if (m === 'EMPTY_IMAGE') return geminiT('empty_image', lang);
+    if (m === 'BAD_RESPONSE') return geminiT('bad_response', lang);
+    return geminiT('generic', lang, m || geminiT('unknown', lang));
 }
 
 function geminiCleanEmail(email) {
@@ -1285,7 +1338,8 @@ io.on('connection', (socket) => {
     // Нове повідомлення до Gemini (текст, фото/відео для аналізу або генерація зображення залежно від моделі)
     socket.on('gemini_send', async (data, callback) => {
         const ackCb = typeof callback === 'function' ? callback : () => {};
-        const { email, name, text, model, attachment } = data || {};
+        const { email, name, text, model, attachment, lang: rawLang } = data || {};
+        const lang = geminiLang(rawLang);
         const cleanEmail = geminiCleanEmail(email);
         const cleanText = (typeof text === 'string' ? text : '').trim();
 
@@ -1294,9 +1348,9 @@ io.on('connection', (socket) => {
         const attachThumb = attachment && typeof attachment.thumbUrl === 'string' && /^\/media\/[a-zA-Z0-9_-]+$/.test(attachment.thumbUrl)
             ? attachment.thumbUrl : null;
 
-        if (!cleanEmail || (!cleanText && !attachUrl)) return ackCb({ success: false, error: 'Порожнє повідомлення' });
-        if (cleanText.length > GEMINI_MAX_TEXT) return ackCb({ success: false, error: 'Повідомлення занадто довге' });
-        if (geminiJobs.has(cleanEmail)) return ackCb({ success: false, error: 'Gemini ще відповідає на попереднє повідомлення' });
+        if (!cleanEmail || (!cleanText && !attachUrl)) return ackCb({ success: false, error: geminiT('empty_msg', lang) });
+        if (cleanText.length > GEMINI_MAX_TEXT) return ackCb({ success: false, error: geminiT('too_long', lang) });
+        if (geminiJobs.has(cleanEmail)) return ackCb({ success: false, error: geminiT('busy', lang) });
 
         socket.join(cleanEmail);
         const job = geminiMakeJob();
@@ -1322,6 +1376,7 @@ io.on('connection', (socket) => {
             if (attachUrl) {
                 mediaRecord = await geminiGetMediaRecord(attachUrl);
                 if (!mediaRecord) throw new Error('ATTACH_MISSING');
+                if (!/^(image|video)\//.test(mediaRecord.mime || '')) throw new Error('ATTACH_BAD');
                 if (isImage && attachType === 'video') throw new Error('VIDEO_TO_IMAGE_MODEL');
             }
 
@@ -1438,9 +1493,9 @@ io.on('connection', (socket) => {
             // Відкочуємо повідомлення користувача, щоб памʼять не мала "висячих" питань без відповіді
             try { await geminiDbRun("DELETE FROM gemini_messages WHERE id = ?", [userMsgId]); } catch (e) {}
             if (cancelled) {
-                ackCb({ success: false, cancelled: true, error: geminiErrorText(err, picked) });
+                ackCb({ success: false, cancelled: true, error: geminiErrorText(err, picked, lang) });
             } else {
-                finish({ success: false, cancelled: false, error: geminiErrorText(err, picked) });
+                finish({ success: false, cancelled: false, error: geminiErrorText(err, picked, lang) });
             }
         } finally {
             if (geminiJobs.get(cleanEmail) === job) geminiJobs.delete(cleanEmail);
