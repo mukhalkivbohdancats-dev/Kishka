@@ -16,7 +16,9 @@ data class Message(
     val text: String = "",
     val timestamp: Long = System.currentTimeMillis(),
     val fileUrl: String? = null,
-    val fileType: String? = null
+    val fileType: String? = null, // "image", "video" або "file"
+    val thumbUrl: String? = null, // мініатюра відео
+    val fileName: String? = null  // назва файлу (для fileType = "file")
 )
 
 data class CallLogItem(
