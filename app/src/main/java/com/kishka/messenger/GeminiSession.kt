@@ -139,7 +139,7 @@ class GeminiSession(context: Context, val email: String) {
         draft = ""
         pendingMedia = null
 
-        call = manager.sendMessage(email, displayName, text, selectedModel.id, uploaded) { result ->
+        call = manager.sendMessage(email, displayName, text, selectedModel.id, uploaded, lang) { result ->
             handleResult(result, localId, text, media)
         }
     }
