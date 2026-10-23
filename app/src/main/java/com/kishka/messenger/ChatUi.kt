@@ -111,6 +111,17 @@ object ChatStrings {
             "delete_for_me" to "Видалити в мене",
             "cancel" to "Скасувати",
             "attach_media" to "Фото або відео",
+            "attach_choose" to "Що надіслати?",
+            "attach_file" to "Файл або документ",
+            "file_label" to "Файл",
+            "download" to "Завантажити",
+            "download_started" to "Завантаження розпочато",
+            "download_failed" to "Не вдалося завантажити файл",
+            "forward" to "Переслати",
+            "forward_title" to "Переслати повідомлення",
+            "forward_sent" to "Переслано",
+            "forward_none" to "Немає контактів, кому можна переслати",
+            "send_to" to "Кому надіслати",
             "sending_media" to "Надсилання...",
             "upload_failed" to "Не вдалося завантажити файл. Перевірте інтернет і спробуйте ще раз",
             "media_bad" to "Оберіть фото або відео",
@@ -139,6 +150,17 @@ object ChatStrings {
             "delete_for_me" to "Удалить у меня",
             "cancel" to "Отмена",
             "attach_media" to "Фото или видео",
+            "attach_choose" to "Что отправить?",
+            "attach_file" to "Файл или документ",
+            "file_label" to "Файл",
+            "download" to "Скачать",
+            "download_started" to "Загрузка началась",
+            "download_failed" to "Не удалось скачать файл",
+            "forward" to "Переслать",
+            "forward_title" to "Переслать сообщение",
+            "forward_sent" to "Переслано",
+            "forward_none" to "Нет контактов, которым можно переслать",
+            "send_to" to "Кому отправить",
             "sending_media" to "Отправка...",
             "upload_failed" to "Не удалось загрузить файл. Проверьте интернет и попробуйте ещё раз",
             "media_bad" to "Выберите фото или видео",
@@ -167,6 +189,17 @@ object ChatStrings {
             "delete_for_me" to "Delete for me",
             "cancel" to "Cancel",
             "attach_media" to "Photo or video",
+            "attach_choose" to "What do you want to send?",
+            "attach_file" to "File or document",
+            "file_label" to "File",
+            "download" to "Download",
+            "download_started" to "Download started",
+            "download_failed" to "Could not download the file",
+            "forward" to "Forward",
+            "forward_title" to "Forward message",
+            "forward_sent" to "Forwarded",
+            "forward_none" to "No contacts to forward to",
+            "send_to" to "Send to",
             "sending_media" to "Sending...",
             "upload_failed" to "Could not upload the file. Check your connection and try again",
             "media_bad" to "Choose a photo or a video",
@@ -441,6 +474,49 @@ fun MessageMedia(url: String, type: String?, thumbUrl: String?, onOpen: () -> Un
     }
 }
 
+/** Картка файлу (документ) у бульбашці: значок, назва і кнопка завантаження. */
+@Composable
+fun MessageFile(name: String?, isMe: Boolean, lang: String, onDownload: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .padding(4.dp)
+            .widthIn(min = 200.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (isMe) Color.White.copy(alpha = 0.16f) else ViberLightPurple)
+            .clickable { onDownload() }
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier.size(42.dp).clip(CircleShape).background(if (isMe) Color.White else ViberPurple),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Default.AttachFile,
+                contentDescription = null,
+                tint = if (isMe) ViberPurple else Color.White,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f, fill = false)) {
+            Text(
+                name ?: ChatStrings.get("file_label", lang),
+                color = if (isMe) Color.White else Color.Black,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                ChatStrings.get("download", lang),
+                color = if (isMe) Color.White.copy(alpha = 0.8f) else ViberPurple,
+                fontSize = 12.sp
+            )
+        }
+    }
+}
+
 // ======================== ЗБЕРЕЖЕННЯ В ГАЛЕРЕЮ ========================
 
 class GallerySaverState(private val context: Context) {
@@ -622,7 +698,9 @@ fun PendingMediaChip(
                     modifier = Modifier.size(56.dp).clip(RoundedCornerShape(12.dp)).background(ViberLightPurple),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (media.type == "video") {
+                    if (media.type == "file") {
+                        Icon(Icons.Default.AttachFile, contentDescription = null, tint = ViberPurple, modifier = Modifier.size(28.dp))
+                    } else if (media.type == "video") {
                         val bitmap = videoThumb
                         if (bitmap != null) {
                             Image(
@@ -651,8 +729,15 @@ fun PendingMediaChip(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    val label = ChatStrings.get(if (media.type == "video") "video" else "photo", lang)
-                    val size = MediaUtils.formatSize(media.size)
+                    val label = ChatStrings.get(
+                        when (media.type) {
+                            "video" -> "video"
+                            "file" -> "file_label"
+                            else -> "photo"
+                        },
+                        lang
+                    )
+                    val size = MediaUtils.formatSize(media.size, lang)
                     Text(
                         if (progress != null) "${ChatStrings.get("sending_media", lang)} ${(progress * 100).toInt()}%"
                         else if (size.isNotEmpty()) "$label • $size" else label,
