@@ -1,4 +1,4 @@
-package com.kishka.messenger
+    package com.kishka.messenger
 
 import android.Manifest
 import android.app.KeyguardManager
@@ -66,7 +66,7 @@ const val DEFAULT_AVATAR_URL = "https://raw.githubusercontent.com/mukhalkivbohda
 object Strings {
     private val dictionary = mapOf(
         "uk" to mapOf(
-            "no_internet" to "No internet connection",
+            "no_internet" to "Немає підключення до інтернету",
             "select_lang" to "Мова інтерфейсу",
             "chats" to "Чати",
             "calls" to "Дзвінки",
@@ -120,7 +120,7 @@ object Strings {
             "gemini_error" to "Gemini зараз недоступний. Спробуйте пізніше."
         ),
         "ru" to mapOf(
-            "no_internet" to "No internet connection",
+            "no_internet" to "Нет подключения к интернету",
             "select_lang" to "Язык интерфейса",
             "chats" to "Чаты",
             "calls" to "Звонки",
@@ -329,6 +329,7 @@ fun KishkaApp() {
 
             // Запускаємо глобальний слухач для отримання повідомлень у фоні
             manager.startGlobalMessageListener(currentUserEmail)
+            KishkaConnectionService.start(context)
 
             manager.listenForCallEvents(
                 myEmail = currentUserEmail,
@@ -348,7 +349,7 @@ fun KishkaApp() {
                 onCallAnswered = {
                     val intent = Intent(context, CallService::class.java).apply {
                         action = CallService.ACTION_START_CALL
-                        putExtra(CallService.EXTRA_TARGET_NAME, activeCallTargetPhone ?: "Співрозмовник")
+                        putExtra(CallService.EXTRA_TARGET_NAME, activeCallTargetPhone ?: AppText.tr(context, "call_partner"))
                         putExtra(CallService.EXTRA_TARGET_PHONE, activeCallTargetPhone ?: "")
                         putExtra(CallService.EXTRA_MY_EMAIL, currentUserEmail)
                     }
@@ -371,7 +372,7 @@ fun KishkaApp() {
                     incomingCallFrom = null
                 },
                 onCallBusy = {
-                    Toast.makeText(context, "Лінія зайнята або абонент розмовляє", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, AppText.tr(context, "line_busy"), Toast.LENGTH_LONG).show()
                     val intent = Intent(context, CallService::class.java).apply { action = CallService.ACTION_END_CALL }
                     context.startService(intent)
                     activeCallTargetPhone = null
@@ -564,6 +565,7 @@ fun KishkaApp() {
                                 if (!newAvatarUrl.isNullOrEmpty()) avatarUrl = newAvatarUrl
                             },
                             onLogout = {
+                                KishkaConnectionService.stop(context)
                                 auth.signOut()
                                 currentUserEmail = ""
                                 currentDisplayName = ""
@@ -587,7 +589,7 @@ fun KishkaApp() {
                                 modifier = Modifier.fillMaxSize().background(Color.White),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text("Оберіть чат для початку спілкування", color = Color.Gray)
+                                Text(AppText.get("choose_chat", currentLanguage), color = Color.Gray)
                             }
                         }
                     }
@@ -623,6 +625,7 @@ fun KishkaApp() {
                                 if (!newAvatarUrl.isNullOrEmpty()) avatarUrl = newAvatarUrl
                             },
                             onLogout = {
+                                KishkaConnectionService.stop(context)
                                 auth.signOut()
                                 currentUserEmail = ""
                                 currentDisplayName = ""
@@ -773,7 +776,7 @@ fun PermissionsScreen(lang: String, onPermissionsGranted: () -> Unit) {
             modifier = Modifier.fillMaxWidth().height(48.dp),
             colors = ButtonDefaults.buttonColors(containerColor = if (micGranted) Color(0xFF2E7D32) else ViberPurple)
         ) {
-            Text(if (micGranted) "Мікрофон дозволено ✓" else Strings.get("grant_mic", lang))
+            Text(if (micGranted) AppText.get("mic_granted", lang) else Strings.get("grant_mic", lang))
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -784,7 +787,7 @@ fun PermissionsScreen(lang: String, onPermissionsGranted: () -> Unit) {
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = if (notifGranted) Color(0xFF2E7D32) else ViberPurple)
             ) {
-                Text(if (notifGranted) "Сповіщення дозволено ✓" else Strings.get("grant_notif", lang))
+                Text(if (notifGranted) AppText.get("notif_granted", lang) else Strings.get("grant_notif", lang))
             }
             Spacer(modifier = Modifier.height(12.dp))
         }
@@ -1064,9 +1067,9 @@ fun AccountTab(
                         isLoading = false
                         if (success) {
                             onProfileUpdated(nameInput, newUrl)
-                            Toast.makeText(context, "Оновлено успішно!", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, AppText.get("profile_updated", currentLang), Toast.LENGTH_SHORT).show()
                         } else {
-                            Toast.makeText(context, "Помилка збереження", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, AppText.get("save_error", currentLang), Toast.LENGTH_SHORT).show()
                         }
                     }
                 },
@@ -1078,6 +1081,35 @@ fun AccountTab(
                     CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
                 } else {
                     Text(Strings.get("save_changes", currentLang), fontSize = 16.sp)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Фоновий режим: повідомлення приходять, навіть коли застосунок закрито (без Firebase)
+            var backgroundEnabled by remember { mutableStateOf(KishkaConnectionService.isEnabled(context)) }
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color.White,
+                shadowElevation = 1.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(AppText.get("bg_title", currentLang), fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                        Text(AppText.get("bg_desc", currentLang), color = Color.Gray, fontSize = 12.sp)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Switch(
+                        checked = backgroundEnabled,
+                        onCheckedChange = { enabled ->
+                            backgroundEnabled = enabled
+                            KishkaConnectionService.setEnabled(context, enabled)
+                        }
+                    )
                 }
             }
 
@@ -1118,7 +1150,7 @@ fun CallsTab(
                 modifier = Modifier.fillMaxSize().padding(padding),
                 contentAlignment = Alignment.Center
             ) {
-                Text("Історія порожня", color = Color.Gray)
+                Text(AppText.get("history_empty", lang), color = Color.Gray)
             }
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
@@ -1246,10 +1278,10 @@ fun AuthScreen(
                             AuthManager.registerUser(email, password, displayName) { success, msg ->
                                 isLoading = false
                                 if (success) {
-                                    infoMessage = msg ?: "Лист підтвердження надіслано!"
+                                    infoMessage = msg ?: AppText.tr(context, "confirm_sent")
                                     isRegisterMode = false
                                 } else {
-                                    Toast.makeText(context, msg ?: "Помилка", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, msg ?: AppText.tr(context, "error_generic"), Toast.LENGTH_LONG).show()
                                 }
                             }
                         } else {
@@ -1258,12 +1290,12 @@ fun AuthScreen(
                                 if (success) {
                                     onLoginSuccess(email, displayName)
                                 } else {
-                                    Toast.makeText(context, msg ?: "Помилка входу", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, msg ?: AppText.tr(context, "login_error"), Toast.LENGTH_LONG).show()
                                 }
                             }
                         }
                     } else {
-                        Toast.makeText(context, "Перевірте пошту та пароль (мін. 6 символів)", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, AppText.tr(context, "check_credentials"), Toast.LENGTH_SHORT).show()
                     }
                 },
                 modifier = Modifier.fillMaxWidth().height(50.dp),
@@ -1439,6 +1471,7 @@ fun ActiveCallBanner(
     onExpandCall: () -> Unit,
     onEndCall: () -> Unit
 ) {
+    val context = LocalContext.current
     Surface(
         color = Color(0xFF2E7D32),
         modifier = Modifier.fillMaxWidth().clickable { onExpandCall() }
@@ -1452,8 +1485,8 @@ fun ActiveCallBanner(
                 Icon(Icons.Default.Call, contentDescription = null, tint = Color.White)
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
-                    Text("Дзвінок: $targetPhone", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Text("Натисніть для повернення", color = Color.White.copy(alpha = 0.8f), fontSize = 11.sp)
+                    Text(AppText.tr(context, "call_in_progress", targetPhone), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text(AppText.tr(context, "tap_to_return"), color = Color.White.copy(alpha = 0.8f), fontSize = 11.sp)
                 }
             }
             IconButton(onClick = onEndCall, modifier = Modifier.size(36.dp)) {
