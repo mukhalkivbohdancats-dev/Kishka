@@ -10,6 +10,11 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
+    <!-- Фонова служба повідомлень -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <!-- Третій дозвіл: фото і відео (для надсилання контактам та аналізу в Gemini) -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
@@ -51,14 +56,21 @@
             </intent-filter>
         </activity>
 
-        <!-- Push-сповіщення про повідомлення, коли застосунок закритий (Firebase Cloud Messaging) -->
+        <!-- Фонова служба: повідомлення приходять, коли застосунок закрито (без Firebase Cloud Messaging) -->
         <service
-            android:name=".KishkaFirebaseService"
-            android:exported="false">
+            android:name=".KishkaConnectionService"
+            android:exported="false"
+            android:foregroundServiceType="remoteMessaging" />
+
+        <!-- Після перезавантаження телефону запускає фонову службу -->
+        <receiver
+            android:name=".KishkaBootReceiver"
+            android:exported="true">
             <intent-filter>
-                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
-        </service>
+        </receiver>
 
         <!-- Сервіс для активних викликів -->
         <service
