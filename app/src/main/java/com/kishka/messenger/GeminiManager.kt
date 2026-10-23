@@ -249,6 +249,7 @@ class GeminiManager(context: Context) {
         text: String,
         modelId: String,
         attachment: UploadedMedia?,
+        lang: String,
         onResult: (GeminiResult) -> Unit
     ): GeminiCall {
         ensureConnected()
@@ -259,6 +260,7 @@ class GeminiManager(context: Context) {
             put("name", displayName)
             put("text", text)
             put("model", modelId)
+            put("lang", lang)
             if (attachment != null) {
                 put("attachment", JSONObject().apply {
                     put("url", KishkaManager.relativeUrl(attachment.url) ?: attachment.url)
@@ -288,7 +290,7 @@ class GeminiManager(context: Context) {
     }
 
     private fun parseResult(obj: JSONObject?): GeminiResult {
-        var result = GeminiResult(false, null, "Gemini недоступний")
+        var result = GeminiResult(false, null, null)
         try {
             if (obj != null) {
                 result = if (obj.optBoolean("success", false)) {
@@ -297,7 +299,7 @@ class GeminiManager(context: Context) {
                 } else {
                     GeminiResult(
                         false, null,
-                        obj.optString("error", "Gemini недоступний"),
+                        obj.optString("error", "").ifEmpty { null },
                         obj.optBoolean("cancelled", false)
                     )
                 }
