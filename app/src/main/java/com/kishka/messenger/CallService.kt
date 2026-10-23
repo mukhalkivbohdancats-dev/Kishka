@@ -92,21 +92,21 @@ class CallService : Service() {
         when (intent?.action) {
             ACTION_START_CALL -> {
                 stopRingtone()
-                val name = intent.getStringExtra(EXTRA_TARGET_NAME) ?: "Співрозмовник"
+                val name = intent.getStringExtra(EXTRA_TARGET_NAME) ?: AppText.tr(this, "call_partner")
                 targetEmail = intent.getStringExtra(EXTRA_TARGET_PHONE)?.trim()?.lowercase() ?: ""
                 myEmail = intent.getStringExtra(EXTRA_MY_EMAIL)?.trim()?.lowercase() ?: ""
                 
                 isMuted = false
                 audioManager.isMicrophoneMute = false
                 
-                startForegroundCall("Триває розмова: $name", targetEmail)
+                startForegroundCall(AppText.tr(this, "call_ongoing", name), targetEmail)
                 enableHighQualityAudio()
                 acquireProximityWakeLock()
                 acquireNetworkLocks()
                 startAudioStreaming()
             }
             ACTION_INCOMING -> {
-                val caller = intent.getStringExtra(EXTRA_TARGET_NAME) ?: "Невідомий"
+                val caller = intent.getStringExtra(EXTRA_TARGET_NAME) ?: AppText.tr(this, "call_unknown")
                 myEmail = intent.getStringExtra(EXTRA_MY_EMAIL)?.trim()?.lowercase() ?: ""
                 startRingtone()
                 startIncomingCallNotification(caller)
@@ -532,8 +532,8 @@ class CallService : Service() {
         )
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Вхідний виклик Kishka")
-            .setContentText("Дзвонить: $callerName")
+            .setContentTitle(AppText.tr(this, "call_incoming_title"))
+            .setContentText(AppText.tr(this, "call_incoming_from", callerName))
             .setSmallIcon(android.R.drawable.ic_menu_call)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
@@ -541,8 +541,8 @@ class CallService : Service() {
             .setAutoCancel(false)
             .setContentIntent(fullScreenPendingIntent)
             .setFullScreenIntent(fullScreenPendingIntent, true)
-            .addAction(android.R.drawable.ic_menu_call, "Прийняти", answerPendingIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Відхилити", endCallPendingIntent)
+            .addAction(android.R.drawable.ic_menu_call, AppText.tr(this, "call_accept"), answerPendingIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, AppText.tr(this, "call_decline"), endCallPendingIntent)
             .build()
 
         startForeground(NOTIFICATION_ID, notification)
@@ -565,13 +565,13 @@ class CallService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(name)
-            .setContentText("Дзвінок Kishka Messenger ($phone)...")
+            .setContentText(AppText.tr(this, "call_progress", phone))
             .setSmallIcon(android.R.drawable.ic_menu_call)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_CALL)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Завершити", endCallPendingIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, AppText.tr(this, "call_end"), endCallPendingIntent)
             .build()
     }
 
@@ -579,10 +579,10 @@ class CallService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Дзвінки Kishka Messenger",
+                AppText.tr(this, "call_channel"),
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Фонова служба голосових дзвінків"
+                description = AppText.tr(this@CallService, "call_channel_desc")
                 setSound(null, null)
             }
             val manager = getSystemService(NotificationManager::class.java)
