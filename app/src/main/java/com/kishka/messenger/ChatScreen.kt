@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -80,6 +82,8 @@ fun ChatScreen(
     var pendingMedia by remember { mutableStateOf<PendingMedia?>(null) }
     var uploadProgress by remember { mutableStateOf<Float?>(null) }
     var uploadHandle by remember { mutableStateOf<UploadHandle?>(null) }
+    var showAttachDialog by remember { mutableStateOf(false) }
+    var forwardTarget by remember { mutableStateOf<Message?>(null) }
 
     val listState = rememberLazyListState()
     val context = LocalContext.current
@@ -91,6 +95,18 @@ fun ChatScreen(
     val mediaPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
             val media = MediaUtils.describe(context, uri)
+            when {
+                media == null -> Toast.makeText(context, cs("media_bad"), Toast.LENGTH_LONG).show()
+                media.size > MediaUtils.MAX_FILE_BYTES -> Toast.makeText(context, cs("media_too_big"), Toast.LENGTH_LONG).show()
+                else -> pendingMedia = media
+            }
+        }
+    }
+
+    // Будь-який файл (документ, архів тощо)
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val media = MediaUtils.describeFile(context, uri)
             when {
                 media == null -> Toast.makeText(context, cs("media_bad"), Toast.LENGTH_LONG).show()
                 media.size > MediaUtils.MAX_FILE_BYTES -> Toast.makeText(context, cs("media_too_big"), Toast.LENGTH_LONG).show()
@@ -155,7 +171,7 @@ fun ChatScreen(
             uploadHandle = null
             uploadProgress = null
             if (uploaded != null) {
-                manager.sendMessage(currentEmail, targetUser.email, text, uploaded.url, uploaded.type, uploaded.thumbUrl)
+                manager.sendMessage(currentEmail, targetUser.email, text, uploaded.url, uploaded.type, uploaded.thumbUrl, uploaded.name)
                 pendingMedia = null
                 textInput = ""
             } else {
@@ -226,8 +242,19 @@ fun ChatScreen(
                             ) {
                                 val fileUrl = msg.fileUrl
                                 if (fileUrl != null) {
-                                    MessageMedia(url = fileUrl, type = msg.fileType, thumbUrl = msg.thumbUrl) {
-                                        viewerMessage = msg
+                                    if (msg.fileType == "file") {
+                                        MessageFile(name = msg.fileName, isMe = isMe, lang = lang) {
+                                            val started = MediaUtils.downloadFile(context, fileUrl, msg.fileName)
+                                            Toast.makeText(
+                                                context,
+                                                cs(if (started) "download_started" else "download_failed"),
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    } else {
+                                        MessageMedia(url = fileUrl, type = msg.fileType, thumbUrl = msg.thumbUrl) {
+                                            viewerMessage = msg
+                                        }
                                     }
                                 }
                                 if (msg.text.isNotEmpty()) {
@@ -256,7 +283,7 @@ fun ChatScreen(
                                     )
                                 }
                                 val fileUrl = msg.fileUrl
-                                if (fileUrl != null) {
+                                if (fileUrl != null && msg.fileType != "file") {
                                     DropdownMenuItem(
                                         text = { Text(cs("save_to_gallery")) },
                                         onClick = {
@@ -265,6 +292,27 @@ fun ChatScreen(
                                         }
                                     )
                                 }
+                                if (fileUrl != null && msg.fileType == "file") {
+                                    DropdownMenuItem(
+                                        text = { Text(cs("download")) },
+                                        onClick = {
+                                            menuMessage = null
+                                            val started = MediaUtils.downloadFile(context, fileUrl, msg.fileName)
+                                            Toast.makeText(
+                                                context,
+                                                cs(if (started) "download_started" else "download_failed"),
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    )
+                                }
+                                DropdownMenuItem(
+                                    text = { Text(cs("forward")) },
+                                    onClick = {
+                                        forwardTarget = msg
+                                        menuMessage = null
+                                    }
+                                )
                                 DropdownMenuItem(
                                     text = { Text(Strings.get("delete", lang), color = Color.Red) },
                                     onClick = {
@@ -300,9 +348,7 @@ fun ChatScreen(
                 stopArmed = false,
                 onSend = { sendNow() },
                 onStop = { cancelUpload() },
-                onAttach = {
-                    mediaPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
-                }
+                onAttach = { showAttachDialog = true }
             )
         }
     }
@@ -351,6 +397,97 @@ fun ChatScreen(
                 }
             },
             confirmButton = {}
+        )
+    }
+
+    // ---------- Що надіслати: фото/відео або файл ----------
+    if (showAttachDialog) {
+        AlertDialog(
+            onDismissRequest = { showAttachDialog = false },
+            shape = RoundedCornerShape(22.dp),
+            containerColor = Color.White,
+            title = { Text(cs("attach_choose"), fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    OutlinedButton(
+                        onClick = {
+                            showAttachDialog = false
+                            mediaPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                        },
+                        modifier = Modifier.fillMaxWidth().height(52.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Text("📷  " + cs("attach_media"), color = ViberPurple, fontWeight = FontWeight.SemiBold)
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            showAttachDialog = false
+                            filePicker.launch(arrayOf("*/*"))
+                        },
+                        modifier = Modifier.fillMaxWidth().height(52.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Text("📎  " + cs("attach_file"), color = ViberPurple, fontWeight = FontWeight.SemiBold)
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    TextButton(onClick = { showAttachDialog = false }, modifier = Modifier.fillMaxWidth()) {
+                        Text(cs("cancel"), color = Color.Gray)
+                    }
+                }
+            },
+            confirmButton = {}
+        )
+    }
+
+    // ---------- Переслати повідомлення іншому контакту ----------
+    val forwarding = forwardTarget
+    if (forwarding != null) {
+        val contacts = remember(currentEmail) {
+            manager.cachedContacts(currentEmail).filter { it.email.trim().lowercase() != myEmail }
+        }
+        AlertDialog(
+            onDismissRequest = { forwardTarget = null },
+            shape = RoundedCornerShape(22.dp),
+            containerColor = Color.White,
+            title = { Text(cs("forward_title"), fontWeight = FontWeight.Bold) },
+            text = {
+                if (contacts.isEmpty()) {
+                    Text(cs("forward_none"), color = Color.Gray)
+                } else {
+                    LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                        itemsIndexed(contacts) { _, contact ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .clickable {
+                                        manager.sendMessage(
+                                            currentEmail, contact.email, forwarding.text,
+                                            forwarding.fileUrl, forwarding.fileType, forwarding.thumbUrl, forwarding.fileName
+                                        )
+                                        forwardTarget = null
+                                        Toast.makeText(context, cs("forward_sent"), Toast.LENGTH_SHORT).show()
+                                    }
+                                    .padding(vertical = 8.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                AsyncImage(
+                                    model = if (contact.avatarUrl.isNullOrEmpty()) DEFAULT_AVATAR_URL else contact.avatarUrl,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(40.dp).clip(CircleShape)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(contact.name.ifEmpty { contact.email }, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { forwardTarget = null }) { Text(cs("cancel")) }
+            }
         )
     }
 
