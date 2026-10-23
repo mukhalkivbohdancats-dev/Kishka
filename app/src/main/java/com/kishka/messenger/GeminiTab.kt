@@ -623,7 +623,7 @@ private fun GeminiModelRow(model: GeminiModel, selected: Boolean, lang: String, 
                 color = if (selected) ViberPurple else Color.Black
             )
             if (model.note.isNotBlank()) {
-                Text(model.note, fontSize = 11.sp, color = Color.Gray)
+                Text(AppText.modelNote(model.id, lang, model.note), fontSize = 11.sp, color = Color.Gray)
             }
             if (model.paid || model.isImage) {
                 Spacer(modifier = Modifier.height(3.dp))
