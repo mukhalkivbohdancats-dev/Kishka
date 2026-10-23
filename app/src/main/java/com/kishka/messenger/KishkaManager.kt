@@ -19,8 +19,6 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.core.app.NotificationCompat
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.UserProfileChangeRequest
-import com.google.firebase.messaging.FirebaseMessaging
-import com.google.firebase.storage.FirebaseStorage
 import io.socket.client.IO
 import io.socket.client.Socket
 import org.json.JSONArray
@@ -34,16 +32,16 @@ object TypingState {
 
 class KishkaManager(private val context: Context) {
 
-    private val storage = FirebaseStorage.getInstance()
     private val auth = FirebaseAuth.getInstance()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val prefs: SharedPreferences = context.getSharedPreferences("kishka_cache_prefs", Context.MODE_PRIVATE)
 
-    private var currentActiveChatId: String? = null
-    private var currentChatCallback: ((List<Message>) -> Unit)? = null
-    private var currentChatMessagesList: MutableList<Message>? = null
-
     companion object {
+        // Стан відкритого чату спільний для всіх екземплярів менеджера: фонова служба і екран бачать одне й те саме
+        @Volatile private var currentActiveChatId: String? = null
+        @Volatile private var currentChatCallback: ((List<Message>) -> Unit)? = null
+        @Volatile private var currentChatMessagesList: MutableList<Message>? = null
+
         const val SERVER_URL = "https://kishka.onrender.com"
         const val DEFAULT_AVATAR_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/ic_launcher.png"
         const val MSG_CHANNEL_ID = "KishkaMessageChannel"
@@ -124,10 +122,10 @@ class KishkaManager(private val context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 MSG_CHANNEL_ID,
-                "Повідомлення Kishka",
+                AppText.tr(context, "msg_channel"),
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Сповіщення про нові повідомлення"
+                description = AppText.tr(context, "msg_channel_desc")
             }
             val manager = context.getSystemService(NotificationManager::class.java)
             manager?.createNotificationChannel(channel)
@@ -225,6 +223,7 @@ class KishkaManager(private val context: Context) {
                     if (m.fileUrl != null) put("fileUrl", m.fileUrl)
                     if (m.fileType != null) put("fileType", m.fileType)
                     if (m.thumbUrl != null) put("thumbUrl", m.thumbUrl)
+                    if (m.fileName != null) put("fileName", m.fileName)
                 }
                 jsonArray.put(obj)
             }
@@ -263,7 +262,8 @@ class KishkaManager(private val context: Context) {
             timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
             fileUrl = absoluteUrl(optNullable("fileUrl")),
             fileType = optNullable("fileType"),
-            thumbUrl = absoluteUrl(optNullable("thumbUrl"))
+            thumbUrl = absoluteUrl(optNullable("thumbUrl")),
+            fileName = optNullable("fileName")
         )
     }
 
@@ -321,12 +321,12 @@ class KishkaManager(private val context: Context) {
         val cleanMyEmail = myEmail.trim().lowercase()
 
         if (cleanTargetEmail.isEmpty() || !cleanTargetEmail.contains("@")) {
-            onResult(false, null, "Некоректний формат пошти!")
+            onResult(false, null, AppText.tr(context, "bad_email"))
             return
         }
 
         if (cleanTargetEmail == cleanMyEmail) {
-            onResult(false, null, "Ви не можете додати самі себе!")
+            onResult(false, null, AppText.tr(context, "cant_add_self"))
             return
         }
 
@@ -342,7 +342,7 @@ class KishkaManager(private val context: Context) {
                 if (args.isNotEmpty() && args[0] is JSONObject) {
                     val res = args[0] as JSONObject
                     val success = res.optBoolean("success", false)
-                    val message = res.optString("message", "Помилка")
+                    val message = if (res.optString("code", "") == "invalid") AppText.tr(context, "bad_email") else AppText.tr(context, "error_generic")
 
                     if (success) {
                         val userObj = res.optJSONObject("user")
@@ -359,7 +359,7 @@ class KishkaManager(private val context: Context) {
                         onResult(false, null, message)
                     }
                 } else {
-                    onResult(false, null, "Сервер прокидається. Спробуйте ще раз.")
+                    onResult(false, null, AppText.tr(context, "server_waking"))
                 }
             }
         })
@@ -415,7 +415,6 @@ class KishkaManager(private val context: Context) {
 
         identifiedEmail = cleanEmail
         sendIdentify()
-        registerPushToken()
 
         if (!isGlobalListenerInitialized) {
             isGlobalListenerInitialized = true
@@ -454,8 +453,9 @@ class KishkaManager(private val context: Context) {
                         if (msgChatId != currentActiveChatId) {
                             val preview = when {
                                 msgText.isNotEmpty() -> msgText
-                                parsed.fileType == "video" -> "🎬 Відео"
-                                parsed.fileType == "image" -> "📷 Фото"
+                                parsed.fileType == "video" -> AppText.tr(context, "label_video")
+                                parsed.fileType == "image" -> AppText.tr(context, "label_photo")
+                                parsed.fileType == "file" -> AppText.tr(context, "label_file")
                                 else -> ""
                             }
                             showBackgroundMessageNotification(msgSender, preview)
@@ -546,7 +546,7 @@ class KishkaManager(private val context: Context) {
         )
 
         val notification = NotificationCompat.Builder(context, MSG_CHANNEL_ID)
-            .setContentTitle("Нове повідомлення від $sender")
+            .setContentTitle(AppText.tr(context, "msg_new_from", sender))
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_dialog_email)
             .setAutoCancel(true)
@@ -564,7 +564,8 @@ class KishkaManager(private val context: Context) {
         text: String,
         fileUrl: String? = null,
         fileType: String? = null,
-        thumbUrl: String? = null
+        thumbUrl: String? = null,
+        fileName: String? = null
     ) {
         val relFile = relativeUrl(fileUrl)
         if (text.isBlank() && relFile.isNullOrEmpty()) return
@@ -583,6 +584,7 @@ class KishkaManager(private val context: Context) {
                 put("fileType", fileType ?: "image")
                 val relThumb = relativeUrl(thumbUrl)
                 if (!relThumb.isNullOrEmpty()) put("thumbUrl", relThumb)
+                if (!fileName.isNullOrEmpty()) put("fileName", fileName)
             }
         }
 
@@ -641,30 +643,17 @@ class KishkaManager(private val context: Context) {
         }
     }
 
-    /** Отримує токен FCM та передає його серверу (для повідомлень, коли застосунок закритий). */
-    fun registerPushToken() {
-        try {
-            FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
-                if (!token.isNullOrEmpty()) {
-                    pushToken = token
-                    sendIdentify()
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
-
     fun sendFileMessage(senderEmail: String, receiverEmail: String, fileUri: Uri, fileType: String) {
-        val fileId = UUID.randomUUID().toString()
-        val ref = storage.reference.child("chat_files/$fileId")
-
-        ref.putFile(fileUri).addOnSuccessListener {
-            ref.downloadUrl.addOnSuccessListener { downloadUri ->
-                sendMessage(senderEmail, receiverEmail, "Файл: $fileType ($downloadUri)")
+        val media = MediaUtils.describe(context, fileUri) ?: return
+        MediaUtils.upload(context, media, senderEmail, {}) { uploaded ->
+            if (uploaded != null) {
+                sendMessage(senderEmail, receiverEmail, "", uploaded.url, uploaded.type, uploaded.thumbUrl, uploaded.name)
             }
         }
     }
+
+    /** Контакти з локального кешу (для вибору, кому переслати повідомлення). */
+    fun cachedContacts(myEmail: String): List<User> = getCachedContacts(myEmail.trim().lowercase())
 
     fun updateUserProfile(
         email: String,
@@ -676,10 +665,17 @@ class KishkaManager(private val context: Context) {
         val currentUser = auth.currentUser
 
         if (avatarUri != null) {
-            val photoRef = storage.reference.child("avatars/$cleanEmail.jpg")
-            photoRef.putFile(avatarUri).addOnSuccessListener {
-                photoRef.downloadUrl.addOnSuccessListener { downloadUrl ->
-                    val avatarUrlStr = downloadUrl.toString()
+            // Аватар завантажується на ваш сервер (Firebase Storage більше не використовується)
+            val media = MediaUtils.describe(context, avatarUri)
+            if (media == null || media.type != "image") {
+                onComplete(false, null)
+                return
+            }
+            MediaUtils.upload(context, media, cleanEmail, {}) { uploaded ->
+                if (uploaded == null) {
+                    onComplete(false, null)
+                } else {
+                    val avatarUrlStr = absoluteUrl(uploaded.url) ?: uploaded.url
                     val profileUpdates = UserProfileChangeRequest.Builder()
                         .setDisplayName(newName)
                         .setPhotoUri(Uri.parse(avatarUrlStr))
@@ -694,8 +690,8 @@ class KishkaManager(private val context: Context) {
                         prefs.edit().putString("profile_name_$cleanEmail", newName).putString("profile_avatar_$cleanEmail", avatarUrlStr).apply()
                         onComplete(true, avatarUrlStr)
                     }
-                }.addOnFailureListener { onComplete(false, null) }
-            }.addOnFailureListener { onComplete(false, null) }
+                }
+            }
         } else {
             val profileUpdates = UserProfileChangeRequest.Builder()
                 .setDisplayName(newName)
