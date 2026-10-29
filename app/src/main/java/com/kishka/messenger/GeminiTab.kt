@@ -3,7 +3,6 @@ package com.kishka.messenger
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -186,9 +185,9 @@ fun GeminiTab(
         if (uri != null) {
             val media = MediaUtils.describe(context, uri)
             when {
-                media == null -> Toast.makeText(context, ChatStrings.get("media_bad", lang), Toast.LENGTH_LONG).show()
+                media == null -> Notice.show(ChatStrings.get("media_bad", lang))
                 media.size > MediaUtils.MAX_FILE_BYTES ->
-                    Toast.makeText(context, ChatStrings.get("media_too_big", lang), Toast.LENGTH_LONG).show()
+                    Notice.show(ChatStrings.get("media_too_big", lang))
                 else -> session.pendingMedia = media
             }
         }
@@ -333,7 +332,7 @@ fun GeminiTab(
                                             onClick = {
                                                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                                                 clipboard.setPrimaryClip(ClipData.newPlainText("Copied Text", msg.text))
-                                                Toast.makeText(context, Strings.get("message_copied", lang), Toast.LENGTH_SHORT).show()
+                                                Notice.show(Strings.get("message_copied", lang))
                                                 menuMessage = null
                                             }
                                         )
@@ -478,7 +477,7 @@ fun GeminiTab(
     GallerySavedDialog(saver)
 }
 
-private fun formatElapsed(seconds: Int, secLabel: String, minLabel: String): String {
+internal fun formatElapsed(seconds: Int, secLabel: String, minLabel: String): String {
     return if (seconds < 60) {
         "$seconds $secLabel"
     } else {
@@ -681,7 +680,7 @@ fun GeminiAvatar(size: Dp) {
 }
 
 /** Легке форматування відповіді Gemini: **жирний**, `код`, ```блоки```, списки та заголовки. */
-private fun formatGeminiText(raw: String): AnnotatedString {
+internal fun formatGeminiText(raw: String): AnnotatedString {
     val lines = raw.replace("\r\n", "\n").split("\n")
     val headerRegex = Regex("^#{1,6}\\s+(.*)$")
     val bulletRegex = Regex("^(\\s*)[*\\-]\\s+(.*)$")
