@@ -13,6 +13,12 @@ object AuthManager {
     private const val PREFS_NAME = "kishka_prefs"
     private const val KEY_LANG = "saved_language"
 
+    /** Код останньої помилки входу ("unverified", "no_account", "wrong", "other") — для підказок в інтерфейсі. */
+    @Volatile var lastErrorCode: String = ""
+
+    private fun t(key: String, lang: String): String = AppText.get(key, lang)
+    private fun t(key: String, lang: String, arg: String): String = String.format(AppText.get(key, lang), arg)
+
     private fun getPrefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
@@ -29,6 +35,7 @@ object AuthManager {
         email: String,
         pass: String,
         displayName: String,
+        lang: String = "uk",
         onResult: (Boolean, String?) -> Unit
     ) {
         val cleanEmail = email.trim().lowercase()
@@ -49,26 +56,26 @@ object AuthManager {
                                 if (sendTask.isSuccessful) {
                                     onResult(
                                         true,
-                                        "На пошту $cleanEmail надіслано лист для підтвердження. Перевірте пошту!"
+                                        t("auth_confirm_sent", lang, cleanEmail)
                                     )
                                 } else {
                                     onResult(
                                         false,
-                                        sendTask.exception?.localizedMessage ?: "Не вдалося надіслати лист підтвердження"
+                                        sendTask.exception?.localizedMessage ?: t("auth_send_failed", lang)
                                     )
                                 }
                             }
                     } ?: run {
                         auth.signOut()
-                        onResult(false, "Помилка створення користувача")
+                        onResult(false, t("auth_create_failed", lang))
                     }
                 } else {
                     val ex = task.exception
                     val msg = ex?.localizedMessage ?: ""
                     if (msg.contains("already in use", ignoreCase = true)) {
-                        onResult(false, "Акаунт із такою поштою вже існує!")
+                        onResult(false, t("auth_exists", lang))
                     } else {
-                        onResult(false, "Помилка реєстрації. Перевірте пошту та пароль (мін. 6 символів).")
+                        onResult(false, t("auth_reg_failed", lang))
                     }
                 }
             }
@@ -77,18 +84,21 @@ object AuthManager {
     fun loginUser(
         email: String,
         pass: String,
+        lang: String = "uk",
         onResult: (Boolean, String?) -> Unit
     ) {
+        lastErrorCode = ""
         val cleanEmail = email.trim().lowercase()
         auth.signInWithEmailAndPassword(cleanEmail, pass)
             .addOnCompleteListener { task ->
                 if (task.isSuccessful) {
                     val user = auth.currentUser
                     if (user != null && user.isEmailVerified) {
-                        onResult(true, "Успішний вхід")
+                        onResult(true, t("auth_login_ok", lang))
                     } else {
                         auth.signOut()
-                        onResult(false, "Пошта не підтверджена! Перевірте скриньку $cleanEmail")
+                        lastErrorCode = "unverified"
+                        onResult(false, t("auth_unverified", lang, cleanEmail))
                     }
                 } else {
                     val ex = task.exception
@@ -97,13 +107,16 @@ object AuthManager {
                     if (ex is FirebaseAuthInvalidUserException || 
                         msg.contains("user-not-found", ignoreCase = true) || 
                         msg.contains("no user record", ignoreCase = true)) {
-                        onResult(false, "Такого акаунта не існує! Спочатку зареєструйтеся.")
+                        lastErrorCode = "no_account"
+                        onResult(false, t("auth_no_account", lang))
                     } else if (ex is FirebaseAuthInvalidCredentialsException || 
                                msg.contains("wrong-password", ignoreCase = true) || 
                                msg.contains("INVALID_LOGIN_CREDENTIALS", ignoreCase = true)) {
-                        onResult(false, "Невірний пароль або пошта. Перевірте дані!")
+                        lastErrorCode = "wrong"
+                        onResult(false, t("auth_wrong", lang))
                     } else {
-                        onResult(false, "Не вдалося увійти. Перевірте введені дані.")
+                        lastErrorCode = "other"
+                        onResult(false, t("auth_login_failed", lang))
                     }
                 }
             }
@@ -112,6 +125,7 @@ object AuthManager {
     fun resendVerificationEmail(
         email: String,
         pass: String,
+        lang: String = "uk",
         onResult: (Boolean, String?) -> Unit
     ) {
         val cleanEmail = email.trim().lowercase()
@@ -123,16 +137,16 @@ object AuthManager {
                         ?.addOnCompleteListener { sendTask ->
                             auth.signOut()
                             if (sendTask.isSuccessful) {
-                                onResult(true, "Повторний лист верифікації надіслано на $cleanEmail")
+                                onResult(true, t("auth_resend_ok", lang, cleanEmail))
                             } else {
-                                onResult(false, sendTask.exception?.localizedMessage ?: "Помилка відправки листа")
+                                onResult(false, sendTask.exception?.localizedMessage ?: t("auth_resend_failed", lang))
                             }
                         } ?: run {
                             auth.signOut()
-                            onResult(false, "Користувача не знайдено")
+                            onResult(false, t("auth_user_missing", lang))
                         }
                 } else {
-                    onResult(false, task.exception?.localizedMessage ?: "Не вдалося увійти для повторної відправки")
+                    onResult(false, task.exception?.localizedMessage ?: t("auth_resend_login_failed", lang))
                 }
             }
     }
