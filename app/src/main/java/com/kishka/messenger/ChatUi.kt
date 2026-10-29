@@ -7,7 +7,6 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.widget.MediaController
-import android.widget.Toast
 import android.widget.VideoView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -136,8 +135,28 @@ object ChatStrings {
             "photo" to "Фото",
             "video" to "Відео",
             "grant_media" to "Дозволити фото і відео",
-            "media_granted" to "Фото і відео дозволено ✓",
-            "grant_all_three" to "Будь ласка, надайте всі три дозволи!"
+            "media_granted" to "Фото і відео дозволено",
+            "grant_all_three" to "Будь ласка, надайте всі три дозволи!",
+            "open_html" to "Відкрити в переглядачі",
+            "install_apk" to "Встановити застосунок",
+            "html_title" to "Перегляд HTML",
+            "html_scripts_on" to "Скрипти: увімкнено",
+            "html_scripts_off" to "Скрипти: вимкнено",
+            "html_enable_scripts" to "Увімкнути скрипти",
+            "html_disable_scripts" to "Вимкнути скрипти",
+            "html_loading" to "Завантаження...",
+            "html_failed" to "Не вдалося відкрити файл",
+            "html_too_big" to "Файл завеликий для перегляду (макс. 5 МБ). Завантажте його.",
+            "html_warning" to "Скрипти вимкнені для безпеки. Вмикайте їх лише для файлів від людей, яким довіряєте.",
+            "apk_title" to "Встановлення застосунку",
+            "apk_warning" to "Встановлюйте застосунки лише з надійних джерел. Файл буде передано системному встановлювачу Android.",
+            "apk_install" to "Встановити",
+            "apk_cancel" to "Скасувати",
+            "apk_downloading" to "Завантаження...",
+            "apk_failed" to "Не вдалося завантажити або відкрити файл",
+            "apk_allow" to "Дозвольте Kishka встановлювати застосунки в налаштуваннях, потім поверніться і натисніть «Встановити» ще раз.",
+            "close" to "Закрити",
+            "open_settings" to "Відкрити налаштування"
         ),
         "ru" to mapOf(
             "typing" to "печатает",
@@ -175,8 +194,28 @@ object ChatStrings {
             "photo" to "Фото",
             "video" to "Видео",
             "grant_media" to "Разрешить фото и видео",
-            "media_granted" to "Фото и видео разрешено ✓",
-            "grant_all_three" to "Пожалуйста, дайте все три разрешения!"
+            "media_granted" to "Фото и видео разрешено",
+            "grant_all_three" to "Пожалуйста, дайте все три разрешения!",
+            "open_html" to "Открыть в просмотрщике",
+            "install_apk" to "Установить приложение",
+            "html_title" to "Просмотр HTML",
+            "html_scripts_on" to "Скрипты: включены",
+            "html_scripts_off" to "Скрипты: выключены",
+            "html_enable_scripts" to "Включить скрипты",
+            "html_disable_scripts" to "Выключить скрипты",
+            "html_loading" to "Загрузка...",
+            "html_failed" to "Не удалось открыть файл",
+            "html_too_big" to "Файл слишком большой для просмотра (макс. 5 МБ). Скачайте его.",
+            "html_warning" to "Скрипты отключены для безопасности. Включайте их только для файлов от людей, которым доверяете.",
+            "apk_title" to "Установка приложения",
+            "apk_warning" to "Устанавливайте приложения только из надёжных источников. Файл будет передан системному установщику Android.",
+            "apk_install" to "Установить",
+            "apk_cancel" to "Отмена",
+            "apk_downloading" to "Загрузка...",
+            "apk_failed" to "Не удалось загрузить или открыть файл",
+            "apk_allow" to "Разрешите Kishka устанавливать приложения в настройках, затем вернитесь и нажмите «Установить» ещё раз.",
+            "close" to "Закрыть",
+            "open_settings" to "Открыть настройки"
         ),
         "en" to mapOf(
             "typing" to "typing",
@@ -214,8 +253,28 @@ object ChatStrings {
             "photo" to "Photo",
             "video" to "Video",
             "grant_media" to "Allow photos and videos",
-            "media_granted" to "Photos and videos allowed ✓",
-            "grant_all_three" to "Please grant all three permissions!"
+            "media_granted" to "Photos and videos allowed",
+            "grant_all_three" to "Please grant all three permissions!",
+            "open_html" to "Open in viewer",
+            "install_apk" to "Install app",
+            "html_title" to "HTML viewer",
+            "html_scripts_on" to "Scripts: on",
+            "html_scripts_off" to "Scripts: off",
+            "html_enable_scripts" to "Enable scripts",
+            "html_disable_scripts" to "Disable scripts",
+            "html_loading" to "Loading...",
+            "html_failed" to "Could not open the file",
+            "html_too_big" to "The file is too large to preview (max 5 MB). Download it instead.",
+            "html_warning" to "Scripts are off for safety. Turn them on only for files from people you trust.",
+            "apk_title" to "App installation",
+            "apk_warning" to "Install apps only from trusted sources. The file will be handed to the Android system installer.",
+            "apk_install" to "Install",
+            "apk_cancel" to "Cancel",
+            "apk_downloading" to "Downloading...",
+            "apk_failed" to "Could not download or open the file",
+            "apk_allow" to "Allow Kishka to install apps in settings, then come back and tap Install again.",
+            "close" to "Close",
+            "open_settings" to "Open settings"
         )
     )
 
@@ -524,28 +583,31 @@ class GallerySaverState(private val context: Context) {
     var saving by mutableStateOf(false)
     var lang: String = "uk"
     internal var pendingUrl: String? = null
+    internal var pendingWatermark: Boolean = false
     internal var launchPermission: (() -> Unit)? = null
 
-    fun save(url: String) {
+    /** watermark = true: на зображення накладається логотип (для картинок AI Preview). */
+    fun save(url: String, watermark: Boolean = false) {
         if (saving) return
         val needsPermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
         if (needsPermission && launchPermission != null) {
             pendingUrl = url
+            pendingWatermark = watermark
             launchPermission?.invoke()
         } else {
-            doSave(url)
+            doSave(url, watermark)
         }
     }
 
-    internal fun doSave(url: String) {
+    internal fun doSave(url: String, watermark: Boolean = false) {
         saving = true
-        MediaUtils.saveToGallery(context, url) { ok ->
+        MediaUtils.saveToGallery(context, url, watermark) { ok ->
             saving = false
             if (ok) {
                 showSaved = true
             } else {
-                Toast.makeText(context, ChatStrings.get("save_failed", lang), Toast.LENGTH_LONG).show()
+                Notice.show(ChatStrings.get("save_failed", lang))
             }
         }
     }
@@ -560,9 +622,9 @@ fun rememberGallerySaver(lang: String): GallerySaverState {
         val url = state.pendingUrl
         state.pendingUrl = null
         if (granted && url != null) {
-            state.doSave(url)
+            state.doSave(url, state.pendingWatermark)
         } else {
-            Toast.makeText(context, ChatStrings.get("permission_denied", state.lang), Toast.LENGTH_LONG).show()
+            Notice.show(ChatStrings.get("permission_denied", state.lang))
         }
     }
     state.launchPermission = { launcher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE) }
@@ -608,6 +670,7 @@ fun MediaViewerDialog(
     url: String,
     type: String?,
     saver: GallerySaverState,
+    watermark: Boolean = false,
     onDismiss: () -> Unit
 ) {
     Dialog(
@@ -639,6 +702,10 @@ fun MediaViewerDialog(
                     },
                     modifier = Modifier.align(Alignment.Center).fillMaxWidth()
                 )
+            } else if (watermark) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    WatermarkedImage(url = url, modifier = Modifier.fillMaxSize())
+                }
             } else {
                 AsyncImage(
                     model = url,
@@ -650,7 +717,7 @@ fun MediaViewerDialog(
 
             Row(modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)) {
                 IconButton(
-                    onClick = { saver.save(url) },
+                    onClick = { saver.save(url, watermark) },
                     enabled = !saver.saving,
                     modifier = Modifier.clip(CircleShape).background(Color.Black.copy(alpha = 0.45f))
                 ) {
