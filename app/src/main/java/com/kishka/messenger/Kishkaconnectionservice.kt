@@ -22,15 +22,17 @@ import com.google.firebase.auth.FirebaseAuth
  * Фонова служба: тримає зʼєднання з сервером, коли застосунок згорнуто або закрито, щоб нові повідомлення
  * приходили у вигляді сповіщень. Не використовує Firebase Cloud Messaging (Firebase потрібен лише для реєстрації).
  *
- * Вмикається/вимикається перемикачем «Працювати у фоні» в налаштуваннях акаунта.
+ * Фоновий режим завжди активний (окремого перемикача в налаштуваннях акаунта більше немає).
+ * Служба також слухає вхідні дзвінки, тому дзвінок приходить, навіть коли застосунок закрито.
  */
 class KishkaConnectionService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val email = FirebaseAuth.getInstance().currentUser?.email?.trim()?.lowercase()
-        if (email.isNullOrEmpty() || !isEnabled(this)) {
+        val user = FirebaseAuth.getInstance().currentUser
+        val email = if (user != null && user.isEmailVerified) user.email?.trim()?.lowercase() else null
+        if (email.isNullOrEmpty()) {
             stopSelf()
             return START_NOT_STICKY
         }
@@ -52,6 +54,7 @@ class KishkaConnectionService : Service() {
         // Підключаємося до сервера та вмикаємо глобальний слухач повідомлень (показує сповіщення)
         try {
             KishkaManager(applicationContext).startGlobalMessageListener(email)
+            CallCoordinator.init(applicationContext, email)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -95,24 +98,18 @@ class KishkaConnectionService : Service() {
         private const val CHANNEL_ID = "KishkaBackgroundChannel"
         private const val NOTIFICATION_ID = 4711
         private const val PREFS = "kishka_service_prefs"
-        private const val KEY_ENABLED = "background_enabled"
 
-        /** За замовчуванням фоновий режим увімкнено. */
-        fun isEnabled(context: Context): Boolean =
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_ENABLED, true)
+        /** Фоновий режим завжди увімкнений. */
+        @Suppress("UNUSED_PARAMETER")
+        fun isEnabled(context: Context): Boolean = true
 
+        /** Лишається для сумісності: фоновий режим вимкнути не можна. */
+        @Suppress("UNUSED_PARAMETER")
         fun setEnabled(context: Context, enabled: Boolean) {
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, enabled).apply()
-            if (enabled) {
-                start(context)
-                requestBatteryExemption(context)
-            } else {
-                stop(context)
-            }
+            start(context)
         }
 
         fun start(context: Context) {
-            if (!isEnabled(context)) return
             try {
                 ContextCompat.startForegroundService(context, Intent(context, KishkaConnectionService::class.java))
             } catch (e: Exception) {
@@ -129,9 +126,12 @@ class KishkaConnectionService : Service() {
             }
         }
 
-        /** Просить дозволити роботу без обмежень батареї — так службу не вимикають агресивні оболонки. */
+        /** Просить дозволити роботу без обмежень батареї (один раз) — так службу не вимикають агресивні оболонки. */
         fun requestBatteryExemption(context: Context) {
             try {
+                val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                if (prefs.getBoolean("battery_asked", false)) return
+                prefs.edit().putBoolean("battery_asked", true).apply()
                 val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
                 if (!pm.isIgnoringBatteryOptimizations(context.packageName)) {
                     val intent = Intent(
