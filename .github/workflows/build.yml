@@ -59,7 +59,7 @@ jobs:
             cp app/build/outputs/apk/debug/app-debug.apk apk/KishkaMessenger_V5.0.apk
             git config --global user.name "github-actions[bot]"
             git config --global user.email "github-actions[bot]@users.noreply.github.com"
-            git add app/keystore.jks apk/KishkaMessenger_V5.0apk
+            git add app/keystore.jks apk/KishkaMessenger_V5.0.apk
             git diff --staged --quiet || (git commit -m "Auto-build: update KishkaMessenger_V5.0.apk and keystore [skip ci]" && git push)
           else
             echo "❌ Помилка: APK не знайдено після кроку збірки!"
