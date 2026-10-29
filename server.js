@@ -1,7 +1,6 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const sqlite3 = require('sqlite3').verbose();
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -14,7 +13,9 @@ const io = new Server(server, {
         origin: "*",
         methods: ["GET", "POST"]
     },
-    maxHttpBufferSize: 1e7
+    maxHttpBufferSize: 1e7,
+    pingInterval: 20000,
+    pingTimeout: 30000
 });
 
 // Додано кореневий маршрут для підтримання активності (keep-alive) на Render
@@ -22,16 +23,177 @@ app.get('/', (req, res) => {
     res.send('Kishka Messenger Server is active and running!');
 });
 
+// Для моніторингу (UptimeRobot тощо): показує, чи база постійна
+app.get('/health', (req, res) => {
+    res.json({ ok: true, time: Date.now(), database: USE_PG ? 'postgres' : 'sqlite' });
+});
+
 const busyUsers = new Set();
 const userSockets = new Map();
 
-const db = new sqlite3.Database('./chat.db', (err) => {
-    if (err) {
-        console.error('Помилка бази даних:', err.message);
-    } else {
-        console.log('Успішно підключено до бази SQLite (chat.db).');
+// =====================================================================
+// ===== БАЗА ДАНИХ =====
+// DATABASE_URL (Neon / будь-який Postgres) задано -> дані зберігаються НАЗАВЖДИ (рекомендовано для Render Free).
+// DATABASE_URL не задано -> локальний SQLite (на Render Free диск тимчасовий: дані зникають при перезапуску!).
+// =====================================================================
+const DATABASE_URL = process.env.DATABASE_URL || '';
+const USE_PG = /^postgres(ql)?:\/\//i.test(DATABASE_URL);
+
+// Таблиці та їхні первинні ключі (для INSERT OR REPLACE у Postgres)
+const PG_PRIMARY_KEYS = {
+    push_tokens: ['email', 'token'],
+    gemini_media: ['media_id'],
+    media_blobs: ['id']
+};
+
+function pgTranslate(sql) {
+    let s = String(sql).trim();
+    let orIgnore = false;
+    let orReplace = false;
+    s = s.replace(/^INSERT\s+OR\s+IGNORE\s+INTO/i, () => { orIgnore = true; return 'INSERT INTO'; });
+    s = s.replace(/^INSERT\s+OR\s+REPLACE\s+INTO/i, () => { orReplace = true; return 'INSERT INTO'; });
+    if (/^ALTER\s+TABLE/i.test(s)) s = s.replace(/ADD\s+COLUMN\s+/i, 'ADD COLUMN IF NOT EXISTS ');
+    if (/^CREATE\s+TABLE/i.test(s)) {
+        s = s.replace(/\bINTEGER\b/g, 'BIGINT').replace(/\bBLOB\b/g, 'BYTEA');
     }
-});
+    if (/^ALTER\s+TABLE/i.test(s)) {
+        s = s.replace(/\bINTEGER\b/g, 'BIGINT').replace(/\bBLOB\b/g, 'BYTEA');
+    }
+    if (orIgnore) {
+        s += ' ON CONFLICT DO NOTHING';
+    } else if (orReplace) {
+        const m = s.match(/^INSERT\s+INTO\s+([a-z_][a-z0-9_]*)\s*\(([^)]*)\)/i);
+        if (m) {
+            const table = m[1].toLowerCase();
+            const cols = m[2].split(',').map(c => c.trim());
+            const pk = PG_PRIMARY_KEYS[table] || [cols[0]];
+            const rest = cols.filter(c => !pk.includes(c));
+            s += ' ON CONFLICT (' + pk.join(', ') + ') DO ' +
+                (rest.length ? 'UPDATE SET ' + rest.map(c => c + ' = EXCLUDED.' + c).join(', ') : 'NOTHING');
+        }
+    }
+    let i = 0;
+    s = s.replace(/\?/g, () => '$' + (++i));
+    return s;
+}
+
+function createPgDatabase() {
+    const { Pool, types } = require('pg');
+    types.setTypeParser(20, (v) => parseInt(v, 10));   // BIGINT -> число (а не рядок)
+    types.setTypeParser(1700, (v) => parseFloat(v));
+
+    const pool = new Pool({
+        connectionString: DATABASE_URL,
+        ssl: /sslmode=disable/i.test(DATABASE_URL) ? false : { rejectUnauthorized: false },
+        max: 6,
+        idleTimeoutMillis: 20000,
+        connectionTimeoutMillis: 30000
+    });
+    // Neon зупиняє "сплячу" базу: розрив зʼєднання не повинен валити сервер
+    pool.on('error', (e) => console.error('Postgres (idle):', e.message));
+
+    let queue = Promise.resolve();
+    let serial = false;
+
+    async function query(sql, params) {
+        const text = pgTranslate(sql);
+        let lastErr = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+                return await pool.query(text, params || []);
+            } catch (e) {
+                lastErr = e;
+                const transient = /terminated|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|timeout|Connection/i.test(e.message || '');
+                if (!transient) break;
+                await new Promise(r => setTimeout(r, 700 * (attempt + 1)));
+            }
+        }
+        throw lastErr;
+    }
+
+    function schedule(task) {
+        if (serial) {
+            queue = queue.then(task, task);
+            return queue;
+        }
+        return queue.then(task, task);
+    }
+
+    function safeCall(cb, ctx, err, arg) {
+        if (typeof cb !== 'function') {
+            if (err) console.error('DB:', err.message);
+            return;
+        }
+        try {
+            cb.call(ctx, err, arg);
+        } catch (e) {
+            console.error('DB callback:', e && e.message);
+        }
+    }
+
+    const api = {
+        serialize(fn) {
+            serial = true;
+            try { fn(); } finally { serial = false; }
+        },
+        run(sql, params, cb) {
+            if (typeof params === 'function') { cb = params; params = []; }
+            schedule(() => query(sql, params).then(
+                (r) => safeCall(cb, { changes: r.rowCount || 0, lastID: 0 }, null),
+                (e) => safeCall(cb, {}, e)
+            ));
+        },
+        get(sql, params, cb) {
+            if (typeof params === 'function') { cb = params; params = []; }
+            schedule(() => query(sql, params).then(
+                (r) => safeCall(cb, null, null, r.rows[0]),
+                (e) => safeCall(cb, null, e)
+            ));
+        },
+        all(sql, params, cb) {
+            if (typeof params === 'function') { cb = params; params = []; }
+            schedule(() => query(sql, params).then(
+                (r) => safeCall(cb, null, null, r.rows),
+                (e) => safeCall(cb, null, e)
+            ));
+        },
+        prepare(sql) {
+            const pending = [];
+            return {
+                run(...args) {
+                    let cb = null;
+                    if (typeof args[args.length - 1] === 'function') cb = args.pop();
+                    pending.push(new Promise((resolve) => {
+                        api.run(sql, args, function (err) { if (cb) cb(err); resolve(); });
+                    }));
+                },
+                finalize(cb) {
+                    Promise.all(pending).then(() => { if (typeof cb === 'function') cb(); });
+                }
+            };
+        }
+    };
+
+    // Перевірка зʼєднання при старті
+    query('SELECT 1').then(
+        () => console.log('Успішно підключено до Postgres (дані зберігаються постійно).'),
+        (e) => console.error('ПОМИЛКА підключення до Postgres:', e.message)
+    );
+    return api;
+}
+
+function createSqliteDatabase() {
+    const sqlite3 = require('sqlite3').verbose();
+    const file = process.env.SQLITE_PATH || './chat.db';
+    const instance = new sqlite3.Database(file, (err) => {
+        if (err) console.error('Помилка бази даних:', err.message);
+        else console.log('Підключено до SQLite (' + file + ').');
+    });
+    console.warn('УВАГА: DATABASE_URL не задано. На Render Free диск тимчасовий: акаунти, контакти й історія ЗНИКНУТЬ при перезапуску. Підключіть Postgres (див. інструкцію).');
+    return instance;
+}
+
+const db = USE_PG ? createPgDatabase() : createSqliteDatabase();
 
 db.serialize(() => {
     db.run(`CREATE TABLE IF NOT EXISTS users (
@@ -69,6 +231,26 @@ db.serialize(() => {
         PRIMARY KEY (email, token)
     )`);
 
+    // Ярлики видалених повідомлень: щоб видалення дійшло і до пристрою, який був офлайн
+    db.run(`CREATE TABLE IF NOT EXISTS deleted_messages (
+        id TEXT PRIMARY KEY,
+        chat_id TEXT NOT NULL,
+        sender_email TEXT,
+        receiver_email TEXT,
+        deleted_at INTEGER NOT NULL
+    )`);
+    db.run("CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages (sender_email, timestamp)", () => {});
+    db.run("CREATE INDEX IF NOT EXISTS idx_messages_receiver ON messages (receiver_email, timestamp)", () => {});
+    db.run("CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages (chat_id, timestamp)", () => {});
+    db.run("CREATE INDEX IF NOT EXISTS idx_deleted_sender ON deleted_messages (sender_email, deleted_at)", () => {});
+    db.run("CREATE INDEX IF NOT EXISTS idx_deleted_receiver ON deleted_messages (receiver_email, deleted_at)", () => {});
+
+    // Копії невеликих файлів у базі (на Render Free диск тимчасовий — файли відновлюються звідси)
+    db.run(`CREATE TABLE IF NOT EXISTS media_blobs (
+        id TEXT PRIMARY KEY,
+        data BLOB NOT NULL
+    )`);
+
     // Файли (фото/відео), завантажені користувачами
     db.run(`CREATE TABLE IF NOT EXISTS media_files (
         id TEXT PRIMARY KEY,
@@ -86,6 +268,23 @@ db.serialize(() => {
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, 'uploads');
 try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch (e) { console.error('UPLOAD_DIR:', e.message); }
 const MAX_UPLOAD_BYTES = (parseInt(process.env.MAX_UPLOAD_MB || '250', 10) || 250) * 1024 * 1024;
+// Файли до цього розміру додатково зберігаються в базі Postgres (переживають перезапуск Render)
+const DB_MEDIA_MAX_BYTES = (parseInt(process.env.DB_MEDIA_MAX_MB || '12', 10) || 12) * 1024 * 1024;
+
+// Гарантує, що файл є на диску: якщо диск було очищено — відновлює його з бази
+function ensureMediaOnDisk(id, cb) {
+    const filePath = path.join(UPLOAD_DIR, id);
+    if (fs.existsSync(filePath)) return cb(true);
+    if (!USE_PG) return cb(false);
+    db.get("SELECT data FROM media_blobs WHERE id = ?", [id], (err, row) => {
+        if (err || !row || !row.data) return cb(false);
+        fs.writeFile(filePath, row.data, (wErr) => cb(!wErr));
+    });
+}
+
+function ensureMediaOnDiskAsync(id) {
+    return new Promise((resolve) => ensureMediaOnDisk(id, resolve));
+}
 
 function cleanFileName(raw) {
     let name = String(raw || '').replace(/[\\/\u0000-\u001f\u007f<>:"|?*]/g, '_').trim();
@@ -138,7 +337,15 @@ app.post('/upload', (req, res) => {
             [id, email, mime, size, Date.now(), fileName],
             (err) => {
                 if (err) return fail(500, 'Database error');
-                res.json({ success: true, id, url: '/media/' + id, mime, size, name: fileName });
+                const respond = () => res.json({ success: true, id, url: '/media/' + id, mime, size, name: fileName });
+                if (USE_PG && size > 0 && size <= DB_MEDIA_MAX_BYTES) {
+                    fs.readFile(filePath, (rErr, buf) => {
+                        if (rErr) return respond();
+                        db.run("INSERT INTO media_blobs (id, data) VALUES (?, ?)", [id, buf], () => respond());
+                    });
+                } else {
+                    respond();
+                }
             }
         );
     });
@@ -157,8 +364,11 @@ app.get('/media/:id', (req, res) => {
             res.set('Content-Disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(row.name || 'file'));
         }
         res.set('Cache-Control', 'public, max-age=31536000, immutable');
-        res.sendFile(path.join(UPLOAD_DIR, id), (sendErr) => {
-            if (sendErr && !res.headersSent) res.status(404).end();
+        ensureMediaOnDisk(id, (ok) => {
+            if (!ok) return res.status(404).send('Not found');
+            res.sendFile(path.join(UPLOAD_DIR, id), (sendErr) => {
+                if (sendErr && !res.headersSent) res.status(404).end();
+            });
         });
     });
 });
@@ -297,11 +507,15 @@ function sendPushToUser(email, data) {
     });
 }
 
+function geminiCleanEmailEarly(email) {
+    return (typeof email === 'string' ? email : '').trim().toLowerCase();
+}
+
 function mediaPreviewText(text, fileType) {
     if (text) return text;
-    if (fileType === 'video') return '🎬';
-    if (fileType === 'image') return '📷';
-    if (fileType === 'file') return '📎';
+    if (fileType === 'video') return 'Video';
+    if (fileType === 'image') return 'Photo';
+    if (fileType === 'file') return 'File';
     return '';
 }
 
@@ -309,6 +523,37 @@ function mediaPreviewText(text, fileType) {
 const activeCalls = new Map();   // email -> email співрозмовника
 const callGrace = new Map();     // email -> timer
 const CALL_GRACE_MS = 12000;
+const ringTimers = new Map();    // "caller|receiver" -> timer (дзвінок без відповіді завершується сам)
+const RING_TIMEOUT_MS = 60000;
+
+function clearRingTimer(a, b) {
+    [a + '|' + b, b + '|' + a].forEach((key) => {
+        const t = ringTimers.get(key);
+        if (t) { clearTimeout(t); ringTimers.delete(key); }
+    });
+}
+
+// Повністю очищає стан дзвінка двох користувачів
+function finishCall(a, b) {
+    [a, b].forEach((e) => {
+        if (!e) return;
+        busyUsers.delete(e);
+        activeCalls.delete(e);
+        const g = callGrace.get(e);
+        if (g) { clearTimeout(g); callGrace.delete(e); }
+    });
+    if (a && b) clearRingTimer(a, b);
+}
+
+function userIsOnline(email) {
+    const room = io.sockets.adapter.rooms.get(email);
+    return !!(room && room.size > 0);
+}
+
+// Захист від "завислих" станів: зайнятий, але дзвінка немає
+setInterval(() => {
+    busyUsers.forEach((e) => { if (!activeCalls.has(e)) busyUsers.delete(e); });
+}, 5 * 60 * 1000);
 
 io.on('connection', (socket) => {
     console.log('Клієнт підключився:', socket.id);
@@ -342,7 +587,7 @@ io.on('connection', (socket) => {
         userSockets.set(cleanEmail, socket.id);
         socket.join(cleanEmail);
         
-        db.get("SELECT email, name, avatar_url as avatarUrl FROM users WHERE email = ?", [cleanEmail], (err, row) => {
+        db.get("SELECT email, name, avatar_url as \"avatarUrl\" FROM users WHERE email = ?", [cleanEmail], (err, row) => {
             if (err) return safeCallback(null);
             if (row) {
                 safeCallback(row);
@@ -355,6 +600,7 @@ io.on('connection', (socket) => {
         });
     });
 
+    // Додати контакт можна лише того, хто вже зареєстрований у Kishka (хоча б раз входив у застосунок)
     socket.on('add_contact', (data, callback) => {
         const safeCallback = typeof callback === 'function' ? callback : () => {};
         const { myEmail, targetEmail } = data || {};
@@ -367,54 +613,80 @@ io.on('connection', (socket) => {
             socket.join(cleanMy);
         }
 
-        if (!cleanTarget || !cleanTarget.includes('@') || cleanMy === cleanTarget) {
+        if (!cleanMy || !cleanTarget || !cleanTarget.includes('@') || cleanMy === cleanTarget) {
             return safeCallback({ success: false, code: 'invalid', message: "Invalid address or adding yourself" });
         }
 
-        db.get("SELECT email, name, avatar_url as avatarUrl FROM users WHERE email = ?", [cleanTarget], (err, targetUser) => {
-            let finalUser = targetUser;
-
-            const processAddContact = (userObj) => {
-                const stmt = db.prepare("INSERT OR IGNORE INTO contacts (owner_email, contact_email) VALUES (?, ?)");
-                stmt.run(cleanMy, cleanTarget);
-                stmt.run(cleanTarget, cleanMy);
-                stmt.finalize(() => {
-                    io.to(cleanMy).emit('contact_updated');
-                    io.to(cleanTarget).emit('contact_updated');
-
-                    safeCallback({ success: true, user: userObj, message: "Contact added" });
-                });
-            };
-
-            if (!finalUser) {
-                const defaultName = cleanTarget.split('@')[0];
-                db.run("INSERT OR IGNORE INTO users (email, name, avatar_url) VALUES (?, ?, NULL)", [cleanTarget, defaultName], () => {
-                    finalUser = { email: cleanTarget, name: defaultName, avatarUrl: null };
-                    processAddContact(finalUser);
-                });
-            } else {
-                processAddContact(finalUser);
+        db.get("SELECT email, name, avatar_url AS \"avatarUrl\" FROM users WHERE email = ?", [cleanTarget], (err, targetUser) => {
+            if (err) return safeCallback({ success: false, code: 'error', message: "Database error" });
+            if (!targetUser) {
+                return safeCallback({ success: false, code: 'not_found', message: "User is not registered in Kishka" });
             }
+
+            const stmt = db.prepare("INSERT OR IGNORE INTO contacts (owner_email, contact_email) VALUES (?, ?)");
+            stmt.run(cleanMy, cleanTarget);
+            stmt.run(cleanTarget, cleanMy);
+            stmt.finalize(() => {
+                io.to(cleanMy).emit('contact_updated');
+                io.to(cleanTarget).emit('contact_updated');
+                safeCallback({ success: true, user: targetUser, message: "Contact added" });
+            });
+        });
+    });
+
+    // Пристрій надсилає свої збережені контакти: якщо сервер "забув" їх (перезапуск), вони відновлюються.
+    // Додаються лише користувачі, які зареєстровані в Kishka.
+    socket.on('sync_contacts', (data, callback) => {
+        const safeCallback = typeof callback === 'function' ? callback : () => {};
+        const { myEmail, contacts } = data || {};
+        const cleanMy = (typeof myEmail === 'string' ? myEmail : '').trim().toLowerCase();
+        if (!cleanMy || !Array.isArray(contacts)) return safeCallback({ success: false });
+
+        socket.userEmail = cleanMy;
+        userSockets.set(cleanMy, socket.id);
+        socket.join(cleanMy);
+
+        const wanted = Array.from(new Set(
+            contacts.map((c) => (typeof c === 'string' ? c : '').trim().toLowerCase())
+                .filter((c) => c && c.includes('@') && c !== cleanMy)
+        )).slice(0, 500);
+
+        if (wanted.length === 0) return safeCallback({ success: true, added: 0 });
+
+        const placeholders = wanted.map(() => '?').join(',');
+        db.all("SELECT email FROM users WHERE email IN (" + placeholders + ")", wanted, (err, rows) => {
+            if (err || !rows || rows.length === 0) return safeCallback({ success: true, added: 0 });
+            const existing = rows.map((r) => r.email);
+            const stmt = db.prepare("INSERT OR IGNORE INTO contacts (owner_email, contact_email) VALUES (?, ?)");
+            existing.forEach((email) => {
+                stmt.run(cleanMy, email);
+                stmt.run(email, cleanMy);
+            });
+            stmt.finalize(() => {
+                existing.forEach((email) => io.to(email).emit('contact_updated'));
+                safeCallback({ success: true, added: existing.length });
+            });
         });
     });
 
     socket.on('get_contacts', (myEmail, callback) => {
         const safeCallback = typeof callback === 'function' ? callback : () => {};
-        if (!myEmail || typeof myEmail !== 'string') return safeCallback([]);
+        if (!myEmail || typeof myEmail !== 'string') return safeCallback({ success: false, contacts: [] });
         const cleanEmail = myEmail.trim().toLowerCase();
         socket.userEmail = cleanEmail;
         userSockets.set(cleanEmail, socket.id);
         socket.join(cleanEmail);
 
         const query = `
-            SELECT u.email, u.name, u.avatar_url as avatarUrl 
+            SELECT u.email, u.name, u.avatar_url AS "avatarUrl"
             FROM contacts c
             JOIN users u ON c.contact_email = u.email
             WHERE c.owner_email = ?
         `;
         db.all(query, [cleanEmail], (err, rows) => {
-            if (err) safeCallback([]);
-            else safeCallback(rows || []);
+            // Помилка бази НЕ має виглядати як "контактів немає"
+            if (err) safeCallback({ success: false, contacts: [] });
+            else safeCallback({ success: true, contacts: rows || [] });
         });
     });
 
@@ -424,10 +696,48 @@ io.on('connection', (socket) => {
         socket.join(chatId);
 
         db.all(
-            "SELECT id, chat_id as chatId, sender_email as senderEmail, receiver_email as receiverEmail, text, timestamp, file_url as fileUrl, file_type as fileType, thumb_url as thumbUrl, file_name as fileName FROM messages WHERE chat_id = ? ORDER BY timestamp ASC",
+            "SELECT id, chat_id AS \"chatId\", sender_email AS \"senderEmail\", receiver_email AS \"receiverEmail\", text, timestamp, file_url AS \"fileUrl\", file_type AS \"fileType\", thumb_url AS \"thumbUrl\", file_name AS \"fileName\" FROM messages WHERE chat_id = ? ORDER BY timestamp ASC",
             [chatId],
             (err, rows) => {
                 if (!err) socket.emit('load_history', rows || []);
+            }
+        );
+        db.all("SELECT id FROM deleted_messages WHERE chat_id = ?", [chatId], (err, rows) => {
+            if (!err) socket.emit('load_deleted', { chatId, ids: (rows || []).map((r) => r.id) });
+        });
+    });
+
+    // Усі повідомлення користувача, що надійшли, поки він був офлайн (для всіх чатів, не лише відкритого)
+    socket.on('sync_messages', (data, callback) => {
+        const safeCallback = typeof callback === 'function' ? callback : () => {};
+        const email = geminiCleanEmailEarly(data && data.email);
+        const since = Math.max(0, Number(data && data.since) || 0);
+        if (!email) return safeCallback({ success: false, messages: [] });
+        socket.userEmail = email;
+        userSockets.set(email, socket.id);
+        socket.join(email);
+        db.all(
+            "SELECT id, chat_id AS \"chatId\", sender_email AS \"senderEmail\", receiver_email AS \"receiverEmail\", text, timestamp, file_url AS \"fileUrl\", file_type AS \"fileType\", thumb_url AS \"thumbUrl\", file_name AS \"fileName\" FROM messages WHERE (sender_email = ? OR receiver_email = ?) AND timestamp > ? ORDER BY timestamp ASC LIMIT 5000",
+            [email, email, since],
+            (err, rows) => {
+                if (err) return safeCallback({ success: false, messages: [] });
+                safeCallback({ success: true, messages: rows || [] });
+            }
+        );
+    });
+
+    // Які повідомлення були видалені на сервері (щоб видалити їх і на цьому пристрої)
+    socket.on('sync_deleted', (data, callback) => {
+        const safeCallback = typeof callback === 'function' ? callback : () => {};
+        const email = geminiCleanEmailEarly(data && data.email);
+        const since = Math.max(0, Number(data && data.since) || 0);
+        if (!email) return safeCallback({ success: false, deleted: [] });
+        db.all(
+            "SELECT id, chat_id AS \"chatId\", deleted_at AS \"deletedAt\" FROM deleted_messages WHERE (sender_email = ? OR receiver_email = ?) AND deleted_at > ? ORDER BY deleted_at ASC LIMIT 5000",
+            [email, email, since],
+            (err, rows) => {
+                if (err) return safeCallback({ success: false, deleted: [] });
+                safeCallback({ success: true, deleted: rows || [] });
             }
         );
     });
@@ -452,6 +762,9 @@ io.on('connection', (socket) => {
             "INSERT INTO messages (id, chat_id, sender_email, receiver_email, text, timestamp, file_url, file_type, thumb_url, file_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [msgId, chatId, senderEmail, receiverEmail, safeText, msgTimestamp, safeFileUrl, safeFileType, safeThumbUrl, safeFileName],
             (err) => {
+                // Підтвердження відправнику: повідомлення збережено (або вже було збережене раніше)
+                const duplicate = !!(err && /unique|constraint|duplicate/i.test(err.message || ''));
+                socket.emit('message_ack', { id: msgId, ok: !err || duplicate });
                 if (err) return;
                 const newMessage = {
                     id: msgId, chatId, senderEmail, receiverEmail, text: safeText, timestamp: msgTimestamp,
@@ -459,6 +772,9 @@ io.on('connection', (socket) => {
                 };
 
                 io.to(chatId).emit('receive_message', newMessage);
+                if (senderEmail) {
+                    io.to(String(senderEmail).trim().toLowerCase()).emit('receive_message', newMessage);
+                }
                 if (receiverEmail) {
                     io.to(receiverEmail.trim().toLowerCase()).emit('receive_message', newMessage);
 
@@ -485,20 +801,33 @@ io.on('connection', (socket) => {
         );
     });
 
-    // Видалення для всіх: дозволено лише автору повідомлення
+    // Видалення для всіх: дозволено ЛИШЕ автору повідомлення. Чужі повідомлення видалити неможливо.
     socket.on('delete_message', (data) => {
         const { messageId, chatId, requesterEmail } = data || {};
         if (!messageId || !chatId) return;
-        const requester = (typeof requesterEmail === 'string' ? requesterEmail : (socket.userEmail || '')).trim().toLowerCase();
+        const requester = (typeof requesterEmail === 'string' && requesterEmail ? requesterEmail : (socket.userEmail || '')).trim().toLowerCase();
+        if (!requester) return;
 
-        db.get("SELECT sender_email, file_url, thumb_url FROM messages WHERE id = ? AND chat_id = ?", [messageId, chatId], (selErr, row) => {
+        db.get("SELECT sender_email, receiver_email, file_url, thumb_url FROM messages WHERE id = ? AND chat_id = ?", [messageId, chatId], (selErr, row) => {
             if (selErr || !row) return;
-            if (requester && (row.sender_email || '').trim().toLowerCase() !== requester) return;
+            const author = (row.sender_email || '').trim().toLowerCase();
+            if (author !== requester) return;
+            const receiver = (row.receiver_email || '').trim().toLowerCase();
 
             db.run("DELETE FROM messages WHERE id = ?", [messageId], (err) => {
                 if (err) return;
-                io.to(chatId).emit('message_deleted', messageId);
-                // Видаляємо і самі файли з диска
+                db.run(
+                    "INSERT OR IGNORE INTO deleted_messages (id, chat_id, sender_email, receiver_email, deleted_at) VALUES (?, ?, ?, ?, ?)",
+                    [messageId, chatId, author, receiver, Date.now()],
+                    () => {}
+                );
+                // Сигнал на видалення отримують обидва учасники (і в чаті, і на інших пристроях)
+                const payload = { messageId, chatId };
+                let target = io.to(chatId);
+                if (author) target = target.to(author);
+                if (receiver) target = target.to(receiver);
+                target.emit('message_deleted', payload);
+
                 // Файл видаляємо лише якщо на нього більше не посилається жодне повідомлення (його могли переслати)
                 [row.file_url, row.thumb_url].forEach((u) => {
                     const m = typeof u === 'string' ? u.match(/^\/media\/([a-zA-Z0-9_-]+)$/) : null;
@@ -506,6 +835,7 @@ io.on('connection', (socket) => {
                     db.get("SELECT COUNT(*) AS n FROM messages WHERE file_url = ? OR thumb_url = ?", [u, u], (cErr, cRow) => {
                         if (cErr || (cRow && cRow.n > 0)) return;
                         db.run("DELETE FROM media_files WHERE id = ?", [m[1]], () => {});
+                        db.run("DELETE FROM media_blobs WHERE id = ?", [m[1]], () => {});
                         fs.unlink(path.join(UPLOAD_DIR, m[1]), () => {});
                     });
                 });
@@ -546,18 +876,22 @@ io.on('connection', (socket) => {
         const { callerEmail, receiverEmail } = data || {};
         if (!callerEmail || !receiverEmail) return;
 
-        const cleanCaller = callerEmail.trim().toLowerCase();
-        const cleanReceiver = receiverEmail.trim().toLowerCase();
+        const cleanCaller = String(callerEmail).trim().toLowerCase();
+        const cleanReceiver = String(receiverEmail).trim().toLowerCase();
+        if (!cleanCaller || !cleanReceiver || cleanCaller === cleanReceiver) return;
 
         socket.userEmail = cleanCaller;
         userSockets.set(cleanCaller, socket.id);
         socket.join(cleanCaller);
 
         if (busyUsers.has(cleanReceiver) || busyUsers.has(cleanCaller)) {
-            const callerSocketId = userSockets.get(cleanCaller);
-            if (callerSocketId) {
-                io.to(callerSocketId).emit(`call_busy_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
-            }
+            io.to(cleanCaller).emit(`call_busy_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
+            return;
+        }
+
+        // Абонент не в мережі: повідомляємо про це окремою подією (а не "лінія зайнята")
+        if (!userIsOnline(cleanReceiver)) {
+            io.to(cleanCaller).emit(`call_unavailable_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
             return;
         }
 
@@ -567,77 +901,65 @@ io.on('connection', (socket) => {
         activeCalls.set(cleanCaller, cleanReceiver);
         activeCalls.set(cleanReceiver, cleanCaller);
 
-        const receiverSocketId = userSockets.get(cleanReceiver);
-        if (receiverSocketId) {
-            io.to(receiverSocketId).emit(`incoming_call_${cleanReceiver}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
-        } else {
-            io.to(cleanReceiver).emit(`incoming_call_${cleanReceiver}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
-            
-            const callerSocketId = userSockets.get(cleanCaller);
-            if (callerSocketId) {
-                io.to(callerSocketId).emit(`call_busy_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
-            }
-            busyUsers.delete(cleanCaller);
-            busyUsers.delete(cleanReceiver);
-            activeCalls.delete(cleanCaller);
-            activeCalls.delete(cleanReceiver);
-        }
+        // Якщо ніхто не відповів за 60 секунд — дзвінок завершується на обох пристроях
+        clearRingTimer(cleanCaller, cleanReceiver);
+        ringTimers.set(cleanCaller + '|' + cleanReceiver, setTimeout(() => {
+            ringTimers.delete(cleanCaller + '|' + cleanReceiver);
+            finishCall(cleanCaller, cleanReceiver);
+            io.to(cleanCaller).emit(`call_ended_${cleanCaller}`, { reason: 'no_answer' });
+            io.to(cleanReceiver).emit(`call_ended_${cleanReceiver}`, { reason: 'no_answer' });
+        }, RING_TIMEOUT_MS));
+
+        db.get("SELECT name, avatar_url AS \"avatarUrl\" FROM users WHERE email = ?", [cleanCaller], (err, row) => {
+            io.to(cleanReceiver).emit(`incoming_call_${cleanReceiver}`, {
+                callerEmail: cleanCaller,
+                receiverEmail: cleanReceiver,
+                callerName: (row && row.name) ? row.name : cleanCaller.split('@')[0],
+                callerAvatar: (row && row.avatarUrl) ? row.avatarUrl : ''
+            });
+        });
     });
 
     socket.on('answer_call', (data) => {
         const { callerEmail, receiverEmail } = data || {};
-        if (!callerEmail) return;
-        const cleanCaller = callerEmail.trim().toLowerCase();
-        const cleanReceiver = (receiverEmail || '').trim().toLowerCase();
+        const cleanCaller = String(callerEmail || '').trim().toLowerCase();
+        const cleanReceiver = String(receiverEmail || '').trim().toLowerCase();
+        if (!cleanCaller || !cleanReceiver) return;
 
-        if (cleanCaller) busyUsers.add(cleanCaller);
-        if (cleanReceiver) busyUsers.add(cleanReceiver);
-        if (cleanCaller && cleanReceiver) {
-            activeCalls.set(cleanCaller, cleanReceiver);
-            activeCalls.set(cleanReceiver, cleanCaller);
+        // Дзвінок уже завершено (таймаут або скасування) — повідомляємо тому, хто відповів
+        if (activeCalls.get(cleanReceiver) !== cleanCaller) {
+            io.to(cleanReceiver).emit(`call_ended_${cleanReceiver}`, { reason: 'gone' });
+            return;
         }
 
-        const callerSocketId = userSockets.get(cleanCaller);
-        if (callerSocketId) {
-            io.to(callerSocketId).emit(`call_answered_${cleanCaller}`, { callerEmail, receiverEmail });
-        }
-        io.to(cleanCaller).emit(`call_answered_${cleanCaller}`, { callerEmail, receiverEmail });
+        clearRingTimer(cleanCaller, cleanReceiver);
+        busyUsers.add(cleanCaller);
+        busyUsers.add(cleanReceiver);
+        activeCalls.set(cleanCaller, cleanReceiver);
+        activeCalls.set(cleanReceiver, cleanCaller);
+
+        io.to(cleanCaller).emit(`call_answered_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
     });
 
     socket.on('reject_call', (data) => {
         const { callerEmail, receiverEmail } = data || {};
-        const cleanCaller = (callerEmail || '').trim().toLowerCase();
-        const cleanReceiver = (receiverEmail || '').trim().toLowerCase();
+        const cleanCaller = String(callerEmail || '').trim().toLowerCase();
+        const cleanReceiver = String(receiverEmail || '').trim().toLowerCase();
 
-        if (cleanCaller) { busyUsers.delete(cleanCaller); activeCalls.delete(cleanCaller); }
-        if (cleanReceiver) { busyUsers.delete(cleanReceiver); activeCalls.delete(cleanReceiver); }
-
-        const callerSocketId = userSockets.get(cleanCaller);
-        if (callerSocketId) {
-            io.to(callerSocketId).emit(`call_rejected_${cleanCaller}`, { callerEmail, receiverEmail });
-        }
-        io.to(cleanCaller).emit(`call_rejected_${cleanCaller}`, { callerEmail, receiverEmail });
+        finishCall(cleanCaller, cleanReceiver);
+        if (cleanCaller) io.to(cleanCaller).emit(`call_rejected_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
+        // Інші пристрої того, хто відхилив, теж припиняють дзвонити
+        if (cleanReceiver) io.to(cleanReceiver).emit(`call_ended_${cleanReceiver}`, { reason: 'rejected' });
     });
 
     socket.on('end_call', (data) => {
         const { callerEmail, receiverEmail } = data || {};
-        const cleanCaller = (callerEmail || '').trim().toLowerCase();
-        const cleanReceiver = (receiverEmail || '').trim().toLowerCase();
+        const cleanCaller = String(callerEmail || '').trim().toLowerCase();
+        const cleanReceiver = String(receiverEmail || '').trim().toLowerCase();
 
-        if (cleanCaller) {
-            busyUsers.delete(cleanCaller);
-            activeCalls.delete(cleanCaller);
-            const sId = userSockets.get(cleanCaller);
-            if (sId) io.to(sId).emit(`call_ended_${cleanCaller}`, {});
-            io.to(cleanCaller).emit(`call_ended_${cleanCaller}`, {});
-        }
-        if (cleanReceiver) {
-            busyUsers.delete(cleanReceiver);
-            activeCalls.delete(cleanReceiver);
-            const sId = userSockets.get(cleanReceiver);
-            if (sId) io.to(sId).emit(`call_ended_${cleanReceiver}`, {});
-            io.to(cleanReceiver).emit(`call_ended_${cleanReceiver}`, {});
-        }
+        finishCall(cleanCaller, cleanReceiver);
+        if (cleanCaller) io.to(cleanCaller).emit(`call_ended_${cleanCaller}`, {});
+        if (cleanReceiver) io.to(cleanReceiver).emit(`call_ended_${cleanReceiver}`, {});
     });
 
     socket.on('voice_chunk', (data) => {
@@ -661,11 +983,8 @@ io.on('connection', (socket) => {
             if (callGrace.has(email)) clearTimeout(callGrace.get(email));
             callGrace.set(email, setTimeout(() => {
                 callGrace.delete(email);
-                if (userSockets.has(email)) return;
-                activeCalls.delete(email);
-                activeCalls.delete(peer);
-                busyUsers.delete(email);
-                busyUsers.delete(peer);
+                if (userSockets.has(email) || userIsOnline(email)) return;
+                finishCall(email, peer);
                 io.to(peer).emit(`call_ended_${peer}`, {});
             }, CALL_GRACE_MS));
         } else if (socket.myCallEmails && !(email && activeCalls.has(email))) {
@@ -723,6 +1042,41 @@ const GEMINI_CATALOG = [
 ];
 // Не включені (це не чат-моделі): gemini-3.8-flash-tts (озвучка), gemini-3.5-transcribe (розпізнавання мови),
 // antigravity-preview-09-2026 та deep-research-preview-04-2026 (агенти з іншим API).
+
+// ---------- Поточна дата для Gemini (його власні знання застарілі, тому він має знати, який зараз рік) ----------
+function geminiNowText() {
+    try {
+        return new Date().toLocaleString('uk-UA', {
+            timeZone: process.env.GEMINI_TIMEZONE || 'Europe/Kyiv',
+            dateStyle: 'full',
+            timeStyle: 'short'
+        });
+    } catch (e) {
+        return new Date().toISOString();
+    }
+}
+
+function geminiCurrentYear() {
+    try {
+        return new Date().toLocaleString('en-US', { timeZone: process.env.GEMINI_TIMEZONE || 'Europe/Kyiv', year: 'numeric' });
+    } catch (e) {
+        return String(new Date().getUTCFullYear());
+    }
+}
+
+// У месенджері немає емодзі: прибираємо їх із відповідей моделі
+const EMOJI_REGEX = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{1F1E6}-\u{1F1FF}\u{FE0F}\u200D\u{20E3}]/gu;
+function stripEmoji(text) {
+    if (process.env.GEMINI_KEEP_EMOJI === '1') return String(text || '');
+    return String(text || '')
+        .replace(EMOJI_REGEX, '')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/[ \t]{2,}/g, ' ')
+        .trim();
+}
+
+const GEMINI_SEARCH_ENABLED = process.env.GEMINI_SEARCH !== '0';
+const geminiNoSearchModels = new Set();   // моделі, які не підтримують пошук Google
 
 function geminiParseList(raw) {
     return String(raw || '').split(/[,\n;]+/).map(s => s.trim()).filter(Boolean);
@@ -968,7 +1322,7 @@ async function geminiEnsureFile(mediaRecord, job) {
         return { uri: cached.file_uri, mime: cached.mime };
     }
     const filePath = path.join(UPLOAD_DIR, mediaRecord.id);
-    if (!fs.existsSync(filePath)) throw new Error('ATTACH_MISSING');
+    if (!(await ensureMediaOnDiskAsync(mediaRecord.id))) throw new Error('ATTACH_MISSING');
     const uploaded = await geminiUploadFile(filePath, mediaRecord.mime, 'kishka-' + mediaRecord.id.slice(0, 8), job);
     await geminiDbRun(
         "INSERT OR REPLACE INTO gemini_media (media_id, file_name, file_uri, mime, uploaded) VALUES (?, ?, ?, ?, ?)",
@@ -1051,7 +1405,8 @@ function geminiPickModel(catalog, requestedId) {
 }
 
 // ---------- Текстова відповідь ----------
-async function callGemini(contents, systemText, model, job) {
+async function callGemini(contents, systemText, model, job, opts) {
+    const options = opts || {};
     const body = { contents };
     if (model.noSystem) {
         // Gemma не підтримує systemInstruction: вшиваємо інструкцію в перше повідомлення
@@ -1063,7 +1418,22 @@ async function callGemini(contents, systemText, model, job) {
         body.systemInstruction = { parts: [{ text: systemText }] };
     }
 
-    const res = await geminiRequest('POST', `/v1beta/models/${encodeURIComponent(model.id)}:generateContent`, body, job);
+    const endpoint = `/v1beta/models/${encodeURIComponent(model.id)}:generateContent`;
+    const useSearch = GEMINI_SEARCH_ENABLED && !options.noSearch && !model.noSystem
+        && model.type !== 'image' && !geminiNoSearchModels.has(model.id);
+
+    let res;
+    if (useSearch) {
+        // Пошук Google: Gemini може шукати актуальну інформацію (ігри, тренди, новини) в інтернеті
+        res = await geminiRequest('POST', endpoint, Object.assign({}, body, { tools: [{ google_search: {} }] }), job);
+        const msg = (res.json && res.json.error && res.json.error.message) || '';
+        if (res.status === 400 && /tool|search|ground|function/i.test(msg)) {
+            geminiNoSearchModels.add(model.id);
+            res = await geminiRequest('POST', endpoint, body, job);
+        }
+    } else {
+        res = await geminiRequest('POST', endpoint, body, job);
+    }
     if (res.status !== 200) throw geminiApiError(res);
     if (!res.json) throw new Error('BAD_RESPONSE');
 
@@ -1233,6 +1603,7 @@ const GEMINI_ERRORS = {
     unknown:       { uk: 'невідома', ru: 'неизвестная', en: 'unknown' },
     empty_msg:     { uk: 'Порожнє повідомлення', ru: 'Пустое сообщение', en: 'Empty message' },
     too_long:      { uk: 'Повідомлення занадто довге', ru: 'Сообщение слишком длинное', en: 'The message is too long' },
+    preview_image_failed: { uk: 'Не вдалося створити зображення: безкоштовний сервіс зараз зайнятий. Спробуйте ще раз за хвилину', ru: 'Не удалось создать изображение: бесплатный сервис сейчас занят. Попробуйте ещё раз через минуту', en: 'Could not create the image: the free service is busy right now. Try again in a minute' },
     busy:          { uk: 'Gemini ще відповідає на попереднє повідомлення', ru: 'Gemini ещё отвечает на предыдущее сообщение', en: 'Gemini is still answering the previous message' }
 };
 
@@ -1301,12 +1672,12 @@ io.on('connection', (socket) => {
         if (!cleanEmail) return cb({ success: false, messages: [] });
         try {
             const rows = await geminiDbAll(
-                `SELECT id, role, text, timestamp, imageId, model, attachUrl, attachType, attachThumb FROM (
-                    SELECT id, role, text, timestamp, image_id AS imageId, model,
-                           attach_url AS attachUrl, attach_type AS attachType, attach_thumb AS attachThumb
+                `SELECT id, role, text, timestamp, "imageId", model, "attachUrl", "attachType", "attachThumb" FROM (
+                    SELECT id, role, text, timestamp, image_id AS "imageId", model,
+                           attach_url AS "attachUrl", attach_type AS "attachType", attach_thumb AS "attachThumb"
                     FROM gemini_messages
                     WHERE email = ? ORDER BY timestamp DESC LIMIT ?
-                 ) ORDER BY timestamp ASC`,
+                 ) AS recent ORDER BY timestamp ASC`,
                 [cleanEmail, GEMINI_HISTORY_LIMIT]
             );
             const messages = rows.map(r => ({
@@ -1392,7 +1763,7 @@ io.on('connection', (socket) => {
                 if (mediaRecord) {
                     if (mediaRecord.size > 15 * 1024 * 1024) throw new Error('ATTACH_TOO_BIG');
                     const filePath = path.join(UPLOAD_DIR, mediaRecord.id);
-                    if (!fs.existsSync(filePath)) throw new Error('ATTACH_MISSING');
+                    if (!(await ensureMediaOnDiskAsync(mediaRecord.id))) throw new Error('ATTACH_MISSING');
                     inputImage = { mime: mediaRecord.mime, data: fs.readFileSync(filePath).toString('base64') };
                 }
                 const prompt = cleanText || 'Покращ це зображення';
@@ -1413,8 +1784,8 @@ io.on('connection', (socket) => {
                 };
             } else {
                 const rows = await geminiDbAll(
-                    `SELECT role, text, image_id AS imageId, attach_url AS attachUrl, attach_type AS attachType
-                     FROM gemini_messages WHERE email = ? ORDER BY timestamp DESC, rowid DESC LIMIT ?`,
+                    `SELECT role, text, image_id AS "imageId", attach_url AS "attachUrl", attach_type AS "attachType"
+                     FROM gemini_messages WHERE email = ? ORDER BY timestamp DESC, id DESC LIMIT ?`,
                     [cleanEmail, GEMINI_CONTEXT_LIMIT]
                 );
                 rows.reverse();
@@ -1453,10 +1824,14 @@ io.on('connection', (socket) => {
 
                 const safeName = (typeof name === 'string' ? name : '').trim().slice(0, 60);
                 const systemText =
-                    'Ти — Gemini, штучний інтелект усередині месенджера Kishka. ' +
+                    'Ти — Gemini, штучний інтелект усередині месенджера Kishka (Кішка месенджер). ' +
                     'Відповідай тією мовою, якою пише користувач. Пиши чітко, доброзичливо і по суті. ' +
                     'Ти памʼятаєш попередні повідомлення цієї розмови з цим користувачем. ' +
-                    'Користувач може надсилати фото та відео: уважно аналізуй їх і відповідай на запитання про вміст.' +
+                    'Користувач може надсилати фото та відео: уважно аналізуй їх і відповідай на запитання про вміст. ' +
+                    `Зараз ${geminiNowText()}, рік — ${geminiCurrentYear()}. Твої внутрішні знання можуть бути застарілими, ` +
+                    'тому коли питають про актуальне (нові ігри, тренди, новини, ціни, релізи, події, версії програм, погоду, спорт) — ' +
+                    'ОБОВʼЯЗКОВО скористайся пошуком Google і спирайся на свіжі джерела, а не на памʼять. ' +
+                    'Ніколи не вважай, що зараз 2023 рік. Не використовуй емодзі та смайлики.' +
                     (safeName ? ` Користувача звати ${safeName}.` : '');
 
                 const result = await callGeminiResilient(contents, systemText, picked, catalog, job);
@@ -1464,7 +1839,7 @@ io.on('connection', (socket) => {
                 reply = {
                     id: `g_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
                     role: 'model',
-                    text: result.text,
+                    text: stripEmoji(result.text),
                     timestamp: Date.now(),
                     model: result.model,
                     imageId: null
@@ -1530,6 +1905,354 @@ io.on('connection', (socket) => {
     });
 });
 // ===================== КІНЕЦЬ БЛОКУ GEMINI =====================
+
+// =====================================================================
+// ===== AI PREVIEW: безкоштовна генерація зображень + чат із памʼяттю та пошуком =====
+// Зображення: Pollinations (безкоштовно, без ключа). Запасний варіант — безкоштовна модель Gemini (якщо є GEMINI_API_KEY).
+// Environment (необовʼязково):
+//   PREVIEW_IMAGE_PROVIDER     — pollinations (за замовчуванням) | gemini
+//   PREVIEW_GEMINI_IMAGE_MODEL — запасна модель зображень (за замовчуванням gemini-3.1-flash-lite-image)
+//   PREVIEW_TEXT_MODEL         — модель для відповідей (за замовчуванням як у Gemini-вкладці)
+// =====================================================================
+db.serialize(() => {
+    db.run(`CREATE TABLE IF NOT EXISTS preview_messages (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL,
+        role TEXT NOT NULL,
+        text TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        image_id TEXT,
+        model TEXT
+    )`);
+    db.run("CREATE INDEX IF NOT EXISTS idx_preview_email_time ON preview_messages (email, timestamp)", () => {});
+});
+
+const previewJobs = new Map(); // email -> job
+const PREVIEW_CONTEXT_LIMIT = 40;
+const PREVIEW_HISTORY_LIMIT = 300;
+
+const IMAGE_INTENT_REGEX = new RegExp(
+    '(намал[юі]|нарису[йй]|згенеру[йї]|сгенери[рр]у[йй]|створи[^.!?\\n]{0,20}(зображенн|картинк|малюн|фото|ілюстрац|постер|логотип|обої)|' +
+    'создай[^.!?\\n]{0,20}(изображени|картинк|рисун|фото|иллюстрац|постер|логотип|обои)|' +
+    'зроби[^.!?\\n]{0,20}(зображенн|картинк|малюн|ілюстрац|постер|логотип|обої)|' +
+    'сделай[^.!?\\n]{0,20}(изображени|картинк|рисун|иллюстрац|постер|логотип|обои)|' +
+    '\\bdraw\\b|\\bpaint\\b|\\billustrate\\b|' +
+    '(generate|create|make|render)[^.!?\\n]{0,25}(image|picture|photo|drawing|illustration|logo|wallpaper|poster|avatar|art))',
+    'i'
+);
+
+function previewWantsImage(text, mode) {
+    if (mode === 'image') return true;
+    if (mode === 'chat') return false;
+    return IMAGE_INTENT_REGEX.test(String(text || ''));
+}
+
+function previewImageSize(text) {
+    const t = String(text || '').toLowerCase();
+    if (/(горизонталь|горизонтальн|landscape|16:9|широк|панорам)/.test(t)) return { w: 1344, h: 768 };
+    if (/(вертикаль|portrait|9:16|для телефон|сторіс|stories|обої на телефон|обои на телефон)/.test(t)) return { w: 768, h: 1344 };
+    return { w: 1024, h: 1024 };
+}
+
+// Завантаження зображення за URL (з редіректами, з можливістю скасування)
+function previewHttpGet(urlStr, job, redirects) {
+    redirects = redirects || 0;
+    return new Promise((resolve, reject) => {
+        if (job && job.cancelled) return reject(new Error('CANCELLED'));
+        let u;
+        try { u = new URL(urlStr); } catch (e) { return reject(e); }
+        const req = https.get({
+            hostname: u.hostname,
+            path: u.pathname + u.search,
+            headers: { 'User-Agent': 'KishkaMessenger/3.0', 'Accept': 'image/*,*/*;q=0.5' }
+        }, (res) => {
+            if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirects < 3) {
+                res.resume();
+                if (job) job.reqs.delete(req);
+                let next;
+                try { next = new URL(res.headers.location, urlStr).toString(); } catch (e) { return reject(e); }
+                return resolve(previewHttpGet(next, job, redirects + 1));
+            }
+            const chunks = [];
+            let total = 0;
+            res.on('data', (c) => {
+                total += c.length;
+                if (total > 20 * 1024 * 1024) { req.destroy(new Error('TOO_BIG')); return; }
+                chunks.push(c);
+            });
+            res.on('end', () => {
+                if (job) job.reqs.delete(req);
+                resolve({
+                    status: res.statusCode,
+                    mime: String(res.headers['content-type'] || '').split(';')[0].trim().toLowerCase(),
+                    data: Buffer.concat(chunks)
+                });
+            });
+            res.on('error', (e) => { if (job) job.reqs.delete(req); reject(e); });
+        });
+        if (job) job.reqs.add(req);
+        req.setTimeout(240000, () => req.destroy(new Error('IMAGE_TIMEOUT')));
+        req.on('error', (e) => { if (job) job.reqs.delete(req); reject(e); });
+    });
+}
+
+async function previewPollinations(prompt, size, job) {
+    const seed = Math.floor(Math.random() * 1000000000);
+    const url = 'https://image.pollinations.ai/prompt/' + encodeURIComponent(prompt.slice(0, 900)) +
+        `?model=flux&width=${size.w}&height=${size.h}&seed=${seed}&nologo=true&private=true`;
+    let lastErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        geminiCheckCancelled(job);
+        try {
+            const r = await previewHttpGet(url, job);
+            if (r.status === 200 && /^image\//.test(r.mime) && r.data.length > 1000) {
+                return { mime: r.mime === 'image/jpg' ? 'image/jpeg' : r.mime, data: r.data };
+            }
+            lastErr = new Error('HTTP ' + r.status);
+            lastErr.status = r.status;
+        } catch (e) {
+            if (e.message === 'CANCELLED') throw e;
+            lastErr = e;
+        }
+        await geminiSleep(2500 * (attempt + 1));
+    }
+    throw lastErr || new Error('EMPTY_IMAGE');
+}
+
+async function previewGeminiImage(prompt, job) {
+    if (!process.env.GEMINI_API_KEY) throw new Error('NO_KEY');
+    const modelId = process.env.PREVIEW_GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-lite-image';
+    const img = await callGeminiImageResilient(prompt, modelId, job, null);
+    return { mime: img.mime, data: Buffer.from(img.data, 'base64') };
+}
+
+// Перетворює прохання користувача на детальний англійський опис для моделі зображень
+async function previewBuildImagePrompt(userText, catalog, job) {
+    if (!process.env.GEMINI_API_KEY) return userText;
+    try {
+        const model = geminiPickModel(catalog, process.env.PREVIEW_TEXT_MODEL || GEMINI_DEFAULT_MODEL);
+        if (!model || model.type !== 'text') return userText;
+        const system = 'Rewrite the user request into ONE detailed English prompt for a text-to-image model. ' +
+            'Describe subject, style, lighting, colors and composition. Do not add any text, letters or watermarks to the image. ' +
+            'Output ONLY the prompt, without quotes or explanations.';
+        const out = await callGemini([{ role: 'user', parts: [{ text: userText }] }], system, model, job, { noSearch: true });
+        const cleaned = String(out || '').replace(/^["'\s]+|["'\s]+$/g, '');
+        return cleaned.length >= 5 ? cleaned.slice(0, 900) : userText;
+    } catch (e) {
+        if (e && e.message === 'CANCELLED') throw e;
+        return userText;
+    }
+}
+
+async function previewGenerateImage(userText, catalog, job) {
+    const size = previewImageSize(userText);
+    const prompt = await previewBuildImagePrompt(userText, catalog, job);
+    geminiCheckCancelled(job);
+
+    const order = (process.env.PREVIEW_IMAGE_PROVIDER || 'pollinations').toLowerCase() === 'gemini'
+        ? ['gemini', 'pollinations'] : ['pollinations', 'gemini'];
+    let lastErr = null;
+    for (const provider of order) {
+        try {
+            const img = provider === 'gemini' ? await previewGeminiImage(prompt, job) : await previewPollinations(prompt, size, job);
+            return { mime: img.mime, data: img.data, prompt };
+        } catch (e) {
+            if (e && e.message === 'CANCELLED') throw e;
+            lastErr = e;
+            console.error(`AI Preview (${provider}):`, e && e.message);
+        }
+    }
+    const err = new Error('IMAGE_FAILED');
+    err.cause = lastErr;
+    throw err;
+}
+
+function previewErrorText(err, lang) {
+    lang = geminiLang(lang);
+    if (err && err.message === 'IMAGE_FAILED') return geminiT('preview_image_failed', lang);
+    return geminiErrorText(err, null, lang);
+}
+
+io.on('connection', (socket) => {
+
+    socket.on('preview_get_history', async (email, callback) => {
+        const cb = typeof callback === 'function' ? callback : () => {};
+        const cleanEmail = geminiCleanEmail(email);
+        if (!cleanEmail) return cb({ success: false, messages: [] });
+        try {
+            const rows = await geminiDbAll(
+                `SELECT id, role, text, timestamp, "imageId", model FROM (
+                    SELECT id, role, text, timestamp, image_id AS "imageId", model
+                    FROM preview_messages WHERE email = ? ORDER BY timestamp DESC LIMIT ?
+                 ) AS recent ORDER BY timestamp ASC`,
+                [cleanEmail, PREVIEW_HISTORY_LIMIT]
+            );
+            cb({
+                success: true,
+                messages: rows.map((r) => ({
+                    id: r.id, role: r.role, text: r.text, timestamp: r.timestamp, model: r.model || null,
+                    imageUrl: r.imageId ? '/gemini-image/' + r.imageId : null
+                }))
+            });
+        } catch (err) {
+            console.error('Preview history error:', err.message);
+            cb({ success: false, messages: [] });
+        }
+    });
+
+    socket.on('preview_get_status', (email, callback) => {
+        const cb = typeof callback === 'function' ? callback : () => {};
+        const cleanEmail = geminiCleanEmail(email);
+        if (cleanEmail) socket.join(cleanEmail);
+        const job = cleanEmail ? previewJobs.get(cleanEmail) : null;
+        cb({ success: true, busy: !!job, startedAt: job ? job.startedAt : 0, image: !!(job && job.isImage) });
+    });
+
+    socket.on('preview_send', async (data, callback) => {
+        const ackCb = typeof callback === 'function' ? callback : () => {};
+        const { email, name, text, mode, lang: rawLang } = data || {};
+        const lang = geminiLang(rawLang);
+        const cleanEmail = geminiCleanEmail(email);
+        const cleanText = (typeof text === 'string' ? text : '').trim();
+
+        if (!cleanEmail || !cleanText) return ackCb({ success: false, error: geminiT('empty_msg', lang) });
+        if (cleanText.length > GEMINI_MAX_TEXT) return ackCb({ success: false, error: geminiT('too_long', lang) });
+        if (previewJobs.has(cleanEmail)) return ackCb({ success: false, error: geminiT('busy', lang) });
+
+        socket.join(cleanEmail);
+        const job = geminiMakeJob();
+        const wantsImage = previewWantsImage(cleanText, mode);
+        job.isImage = wantsImage;
+        previewJobs.set(cleanEmail, job);
+
+        const finish = (payload) => {
+            ackCb(payload);
+            io.to(cleanEmail).emit('preview_done', payload);
+        };
+
+        const now = Date.now();
+        const userMsgId = `p_${now}_${Math.random().toString(36).slice(2, 8)}`;
+
+        try {
+            const catalog = await geminiGetCatalog();
+            await geminiDbRun(
+                "INSERT INTO preview_messages (id, email, role, text, timestamp) VALUES (?, ?, 'user', ?, ?)",
+                [userMsgId, cleanEmail, cleanText, now]
+            );
+
+            let reply;
+            if (wantsImage) {
+                const img = await previewGenerateImage(cleanText, catalog, job);
+                geminiCheckCancelled(job);
+                const imageId = crypto.randomBytes(16).toString('hex');
+                await geminiDbRun(
+                    "INSERT INTO gemini_images (id, email, mime, data, timestamp) VALUES (?, ?, ?, ?, ?)",
+                    [imageId, cleanEmail, img.mime, img.data, Date.now()]
+                );
+                reply = {
+                    id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                    role: 'model', text: '', timestamp: Date.now(), model: 'ai-preview', imageId,
+                    memoryText: '[згенероване зображення за запитом: ' + cleanText.slice(0, 200) + ']'
+                };
+            } else {
+                const picked = geminiPickModel(catalog, process.env.PREVIEW_TEXT_MODEL || GEMINI_DEFAULT_MODEL);
+                const rows = await geminiDbAll(
+                    `SELECT role, text, image_id AS "imageId" FROM preview_messages
+                     WHERE email = ? ORDER BY timestamp DESC, id DESC LIMIT ?`,
+                    [cleanEmail, PREVIEW_CONTEXT_LIMIT]
+                );
+                rows.reverse();
+                while (rows.length > 0 && rows[0].role !== 'user') rows.shift();
+                const contents = rows.map((r) => {
+                    let t = r.text || '';
+                    if (r.imageId && !t) t = '[згенероване зображення]';
+                    return { role: r.role, parts: [{ text: t || '[порожнє повідомлення]' }] };
+                });
+
+                const safeName = (typeof name === 'string' ? name : '').trim().slice(0, 60);
+                const systemText =
+                    'Ти — помічник вкладки AI Preview у месенджері Kishka. Ти вмієш: відповідати на повідомлення, памʼятати цю розмову, ' +
+                    'шукати актуальну інформацію в Google і створювати зображення (користувач просить: «намалюй ...» або вмикає кнопку малювання). ' +
+                    'Відповідай мовою користувача, чітко і по суті. ' +
+                    `Зараз ${geminiNowText()}, рік — ${geminiCurrentYear()}. Для актуальних питань (ігри, тренди, новини, ціни, події) використовуй пошук Google, ` +
+                    'а не застарілу памʼять. Не використовуй емодзі та смайлики.' +
+                    (safeName ? ` Користувача звати ${safeName}.` : '');
+
+                const result = await callGeminiResilient(contents, systemText, picked, catalog, job);
+                geminiCheckCancelled(job);
+                reply = {
+                    id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                    role: 'model', text: stripEmoji(result.text), timestamp: Date.now(), model: result.model, imageId: null
+                };
+            }
+
+            await geminiDbRun(
+                "INSERT INTO preview_messages (id, email, role, text, timestamp, image_id, model) VALUES (?, ?, 'model', ?, ?, ?, ?)",
+                [reply.id, cleanEmail, reply.text, reply.timestamp, reply.imageId, reply.model]
+            );
+
+            finish({
+                success: true,
+                reply: {
+                    id: reply.id, role: 'model', text: reply.text, timestamp: reply.timestamp, model: reply.model,
+                    imageUrl: reply.imageId ? '/gemini-image/' + reply.imageId : null
+                }
+            });
+        } catch (err) {
+            const cancelled = err && err.message === 'CANCELLED';
+            if (!cancelled) console.error('Preview send error:', err && err.message);
+            try { await geminiDbRun("DELETE FROM preview_messages WHERE id = ?", [userMsgId]); } catch (e) {}
+            if (cancelled) {
+                ackCb({ success: false, cancelled: true, error: geminiT('stopped', lang) });
+            } else {
+                finish({ success: false, cancelled: false, error: previewErrorText(err, lang) });
+            }
+        } finally {
+            if (previewJobs.get(cleanEmail) === job) previewJobs.delete(cleanEmail);
+        }
+    });
+
+    socket.on('preview_cancel', (email, callback) => {
+        const cb = typeof callback === 'function' ? callback : () => {};
+        const cleanEmail = geminiCleanEmail(email);
+        const job = previewJobs.get(cleanEmail);
+        if (job) {
+            geminiCancelJob(job);
+            previewJobs.delete(cleanEmail);
+        }
+        cb({ success: true });
+    });
+
+    socket.on('preview_clear', async (email, callback) => {
+        const cb = typeof callback === 'function' ? callback : () => {};
+        const cleanEmail = geminiCleanEmail(email);
+        if (!cleanEmail) return cb({ success: false });
+        try {
+            await geminiDbRun("DELETE FROM preview_messages WHERE email = ?", [cleanEmail]);
+            cb({ success: true });
+        } catch (err) {
+            console.error('Preview clear error:', err.message);
+            cb({ success: false });
+        }
+    });
+});
+// ===================== КІНЕЦЬ БЛОКУ AI PREVIEW =====================
+
+// Не даємо Render Free "заснути" (він вимикає сервіс після 15 хв без запитів) — сервер сам звертається до себе
+(function keepAlive() {
+    const url = process.env.RENDER_EXTERNAL_URL;
+    if (!url || process.env.KEEP_ALIVE === '0') return;
+    setInterval(() => {
+        try {
+            https.get(url.replace(/\/$/, '') + '/health', (res) => res.resume()).on('error', () => {});
+        } catch (e) {}
+    }, 10 * 60 * 1000);
+})();
+
+// Сторожовий таймер: помилки не валять сервер
+process.on('unhandledRejection', (e) => console.error('unhandledRejection:', e && e.message));
+process.on('uncaughtException', (e) => console.error('uncaughtException:', e && e.message));
+
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
