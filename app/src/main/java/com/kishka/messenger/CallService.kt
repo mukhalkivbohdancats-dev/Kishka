@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
@@ -21,6 +22,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.os.Process
 import androidx.core.app.NotificationCompat
+import androidx.core.app.Person
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
@@ -36,11 +38,13 @@ class CallService : Service() {
     
     @Volatile
     private var isMuted = false
-    private var isSpeakerOn = true
     @Volatile
     private var isCallActive = false
+    private var stopped = false
+    private var focusRequest: AudioFocusRequest? = null
 
     private var targetEmail: String = ""
+    private var peerName: String = ""
     private var myEmail: String = ""
 
     private var audioRecord: AudioRecord? = null
@@ -61,9 +65,13 @@ class CallService : Service() {
         const val CHANNEL_ID = "KishkaCallChannel"
         const val NOTIFICATION_ID = 1001
 
-        const val ACTION_START_CALL = "ACTION_START_CALL"
-        const val ACTION_INCOMING = "ACTION_INCOMING"
-        const val ACTION_END_CALL = "ACTION_END_CALL"
+        const val ACTION_START_CALL = "ACTION_START_CALL"   // розмова почалась: вмикаємо звук
+        const val ACTION_OUTGOING = "ACTION_OUTGOING"       // ми телефонуємо, чекаємо відповіді
+        const val ACTION_INCOMING = "ACTION_INCOMING"       // нам телефонують
+        const val ACTION_END_CALL = "ACTION_END_CALL"       // лише зупинити службу (сервер уже знає)
+        const val ACTION_HANGUP = "ACTION_HANGUP"           // кнопка "Завершити" в сповіщенні
+        const val ACTION_DECLINE = "ACTION_DECLINE"         // кнопка "Відхилити" в сповіщенні
+        const val ACTION_APPLY_AUDIO = "ACTION_APPLY_AUDIO" // застосувати мікрофон / динамік / гучність
         const val ACTION_TOGGLE_MUTE = "ACTION_TOGGLE_MUTE"
         const val ACTION_TOGGLE_SPEAKER = "ACTION_TOGGLE_SPEAKER"
 
@@ -89,49 +97,121 @@ class CallService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
+        if (intent == null) {
+            // Система перезапустила службу без дзвінка — тут нема що продовжувати
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        val action = intent.action
+        val name = intent.getStringExtra(EXTRA_TARGET_NAME)?.takeIf { it.isNotBlank() }
+        val phone = intent.getStringExtra(EXTRA_TARGET_PHONE)?.trim()?.lowercase()
+        val mine = intent.getStringExtra(EXTRA_MY_EMAIL)?.trim()?.lowercase()
+        if (name != null) peerName = name
+        if (!phone.isNullOrEmpty()) targetEmail = phone
+        if (!mine.isNullOrEmpty()) myEmail = mine
+
+        when (action) {
+            ACTION_INCOMING -> {
+                stopped = false
+                startFg(buildIncomingNotification(), microphone = false)
+                startRingtone()
+            }
+            ACTION_OUTGOING -> {
+                stopped = false
+                startFg(buildOngoingNotification(outgoing = true), microphone = true)
+            }
             ACTION_START_CALL -> {
+                stopped = false
                 stopRingtone()
-                val name = intent.getStringExtra(EXTRA_TARGET_NAME) ?: AppText.tr(this, "call_partner")
-                targetEmail = intent.getStringExtra(EXTRA_TARGET_PHONE)?.trim()?.lowercase() ?: ""
-                myEmail = intent.getStringExtra(EXTRA_MY_EMAIL)?.trim()?.lowercase() ?: ""
-                
-                isMuted = false
-                audioManager.isMicrophoneMute = false
-                
-                startForegroundCall(AppText.tr(this, "call_ongoing", name), targetEmail)
+                CallSession.volume = currentVolumeFraction()
+                startFg(buildOngoingNotification(outgoing = false), microphone = true)
                 enableHighQualityAudio()
-                acquireProximityWakeLock()
+                applyAudioState()
                 acquireNetworkLocks()
                 startAudioStreaming()
+                updateProximity()
             }
-            ACTION_INCOMING -> {
-                val caller = intent.getStringExtra(EXTRA_TARGET_NAME) ?: AppText.tr(this, "call_unknown")
-                myEmail = intent.getStringExtra(EXTRA_MY_EMAIL)?.trim()?.lowercase() ?: ""
-                startRingtone()
-                startIncomingCallNotification(caller)
+            ACTION_END_CALL -> stopCall()
+            ACTION_HANGUP -> {
+                if (CallSession.phase != CallPhase.IDLE) CallCoordinator.end() else stopCall()
             }
-            ACTION_END_CALL -> {
-                stopCall()
+            ACTION_DECLINE -> {
+                if (CallSession.phase == CallPhase.INCOMING) CallCoordinator.decline() else stopCall()
             }
-            ACTION_TOGGLE_MUTE -> {
-                isMuted = !isMuted
-                try {
-                    audioManager.isMicrophoneMute = isMuted
-                } catch (e: Exception) {
-                    e.printStackTrace()
+            ACTION_APPLY_AUDIO -> applyAudioState()
+            ACTION_TOGGLE_MUTE -> CallCoordinator.toggleMute()
+            ACTION_TOGGLE_SPEAKER -> CallCoordinator.toggleSpeaker()
+        }
+        return START_NOT_STICKY
+    }
+
+    private fun startFg(notification: Notification, microphone: Boolean) {
+        try {
+            when {
+                Build.VERSION.SDK_INT >= 30 -> {
+                    var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+                    if (microphone) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                    startForeground(NOTIFICATION_ID, notification, type)
                 }
+                Build.VERSION.SDK_INT >= 29 ->
+                    startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
+                else -> startForeground(NOTIFICATION_ID, notification)
             }
-            ACTION_TOGGLE_SPEAKER -> {
-                isSpeakerOn = !isSpeakerOn
-                try {
-                    audioManager.isSpeakerphoneOn = isSpeakerOn
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            try {
+                startForeground(NOTIFICATION_ID, notification)
+            } catch (e2: Exception) {
+                e2.printStackTrace()
             }
         }
-        return START_STICKY
+    }
+
+    private fun currentVolumeFraction(): Float {
+        return try {
+            val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL).coerceAtLeast(1)
+            (audioManager.getStreamVolume(AudioManager.STREAM_VOICE_CALL).toFloat() / max).coerceIn(0.1f, 1f)
+        } catch (e: Exception) {
+            0.7f
+        }
+    }
+
+    /** Застосовує мікрофон, динамік і гучність із CallSession (єдине джерело правди). */
+    private fun applyAudioState() {
+        isMuted = CallSession.muted
+        try {
+            audioManager.isMicrophoneMute = isMuted
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        try {
+            @Suppress("DEPRECATION")
+            audioManager.isSpeakerphoneOn = CallSession.speakerOn
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        try {
+            val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL).coerceAtLeast(1)
+            val index = Math.round(CallSession.volume * max).coerceIn(1, max)
+            audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, index, 0)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        updateProximity()
+    }
+
+    /** Біля вуха екран гасне; на гучному зв'язку — ні. */
+    private fun updateProximity() {
+        try {
+            if (CallSession.speakerOn) {
+                if (wakeLock?.isHeld == true) wakeLock?.release()
+            } else if (isCallActive) {
+                acquireProximityWakeLock()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     private fun startRingtone() {
@@ -139,6 +219,7 @@ class CallService : Service() {
             stopRingtone()
             val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
             ringtone = RingtoneManager.getRingtone(applicationContext, uri)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) ringtone?.isLooping = true
             ringtone?.play()
         } catch (e: Exception) {
             e.printStackTrace()
@@ -157,8 +238,6 @@ class CallService : Service() {
     private fun enableHighQualityAudio() {
         try {
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-            audioManager.isMicrophoneMute = false
-            audioManager.isSpeakerphoneOn = true
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
@@ -169,6 +248,7 @@ class CallService : Service() {
                             .build()
                     )
                     .build()
+                this.focusRequest = focusRequest
                 audioManager.requestAudioFocus(focusRequest)
             } else {
                 @Suppress("DEPRECATION")
@@ -497,82 +577,73 @@ class CallService : Service() {
         wifiLock = null
     }
 
-    private fun startForegroundCall(title: String, phone: String) {
-        val notification = createCallNotification(title, phone)
-        startForeground(NOTIFICATION_ID, notification)
-    }
+    private fun immutableFlags() = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
 
-    private fun startIncomingCallNotification(callerName: String) {
-        val fullScreenIntent = Intent(this, MainActivity::class.java).apply {
+    private fun activityIntent(extraAction: String?): Intent =
+        Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra("EXTRA_SHOW_ON_LOCK", true)
+            if (extraAction != null) putExtra(CallCoordinator.EXTRA_CALL_ACTION, extraAction)
         }
-        val fullScreenPendingIntent = PendingIntent.getActivity(
-            this, 0, fullScreenIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
 
-        val answerIntent = Intent(this, CallService::class.java).apply {
-            action = ACTION_START_CALL
-            putExtra(EXTRA_TARGET_NAME, callerName)
-            putExtra(EXTRA_TARGET_PHONE, callerName)
-            putExtra(EXTRA_MY_EMAIL, myEmail)
-        }
-        val answerPendingIntent = PendingIntent.getService(
-            this, 2, answerIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+    private fun serviceIntent(action: String): Intent =
+        Intent(this, CallService::class.java).apply { this.action = action }
 
-        val endCallIntent = Intent(this, CallService::class.java).apply {
-            action = ACTION_END_CALL
-        }
-        val endCallPendingIntent = PendingIntent.getService(
-            this, 1, endCallIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+    /** Вхідний дзвінок: кнопки "Прийняти" та "Відхилити" реально повідомляють сервер (через CallCoordinator). */
+    private fun buildIncomingNotification(): Notification {
+        val openPending = PendingIntent.getActivity(this, 10, activityIntent(CallCoordinator.CALL_ACTION_OPEN), immutableFlags())
+        val acceptPending = PendingIntent.getActivity(this, 11, activityIntent(CallCoordinator.CALL_ACTION_ACCEPT), immutableFlags())
+        val declinePending = PendingIntent.getService(this, 12, serviceIntent(ACTION_DECLINE), immutableFlags())
+        val title = AppText.tr(this, "call_incoming_title")
+        val text = AppText.tr(this, "call_incoming_from", peerName.ifEmpty { targetEmail })
 
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(AppText.tr(this, "call_incoming_title"))
-            .setContentText(AppText.tr(this, "call_incoming_from", callerName))
+        val base = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_call)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setOngoing(true)
             .setAutoCancel(false)
-            .setContentIntent(fullScreenPendingIntent)
-            .setFullScreenIntent(fullScreenPendingIntent, true)
-            .addAction(android.R.drawable.ic_menu_call, AppText.tr(this, "call_accept"), answerPendingIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, AppText.tr(this, "call_decline"), endCallPendingIntent)
-            .build()
+            .setContentIntent(openPending)
+            .setFullScreenIntent(openPending, true)
 
-        startForeground(NOTIFICATION_ID, notification)
+        return try {
+            val person = Person.Builder().setName(peerName.ifEmpty { targetEmail }).setImportant(true).build()
+            base.setContentText(text)
+                .setStyle(NotificationCompat.CallStyle.forIncomingCall(person, declinePending, acceptPending))
+                .build()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            base.setContentTitle(title)
+                .setContentText(text)
+                .addAction(android.R.drawable.ic_menu_call, AppText.tr(this, "call_accept"), acceptPending)
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel, AppText.tr(this, "call_decline"), declinePending)
+                .build()
+        }
     }
 
-    private fun createCallNotification(name: String, phone: String): Notification {
-        val intent = Intent(this, MainActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+    private fun buildOngoingNotification(outgoing: Boolean): Notification {
+        val openPending = PendingIntent.getActivity(this, 13, activityIntent(CallCoordinator.CALL_ACTION_OPEN), immutableFlags())
+        val hangPending = PendingIntent.getService(this, 14, serviceIntent(ACTION_HANGUP), immutableFlags())
+        val who = peerName.ifEmpty { targetEmail }
+        val text = if (outgoing) AppText.tr(this, "call_calling", who) else AppText.tr(this, "call_ongoing", who)
 
-        val endCallIntent = Intent(this, CallService::class.java).apply {
-            action = ACTION_END_CALL
-        }
-        val endCallPendingIntent = PendingIntent.getService(
-            this, 1, endCallIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(name)
-            .setContentText(AppText.tr(this, "call_progress", phone))
+        val base = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_call)
-            .setContentIntent(pendingIntent)
+            .setContentText(text)
+            .setContentIntent(openPending)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_CALL)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, AppText.tr(this, "call_end"), endCallPendingIntent)
-            .build()
+
+        return try {
+            val person = Person.Builder().setName(who).setImportant(true).build()
+            base.setStyle(NotificationCompat.CallStyle.forOngoingCall(person, hangPending)).build()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            base.setContentTitle(who)
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel, AppText.tr(this, "call_end"), hangPending)
+                .build()
+        }
     }
 
     private fun createNotificationChannel() {
@@ -593,6 +664,7 @@ class CallService : Service() {
     private fun acquireProximityWakeLock() {
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         try {
+            if (wakeLock?.isHeld == true) return
             if (powerManager.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
                 wakeLock = powerManager.newWakeLock(
                     PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK,
@@ -606,12 +678,24 @@ class CallService : Service() {
     }
 
     private fun stopCall() {
+        if (stopped) return
+        stopped = true
         stopAudioStreaming()
         stopRingtone()
         try {
             audioManager.mode = AudioManager.MODE_NORMAL
+            @Suppress("DEPRECATION")
             audioManager.isSpeakerphoneOn = false
             audioManager.isMicrophoneMute = false
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+            }
+            focusRequest = null
         } catch (e: Exception) {
             e.printStackTrace()
         }
