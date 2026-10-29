@@ -297,11 +297,49 @@ object MediaUtils {
         }
     }
 
+    /** Копіює вміст відповіді в out; для зображень може накласти напівпрозорий логотип у правому нижньому куті. */
+    private fun writeBody(context: Context, conn: HttpURLConnection, out: java.io.OutputStream, watermark: Boolean) {
+        if (!watermark) {
+            conn.inputStream.use { input -> input.copyTo(out) }
+            return
+        }
+        val bytes = conn.inputStream.use { it.readBytes() }
+        val source = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        if (source == null) {
+            out.write(bytes)
+            return
+        }
+        val result = addWatermark(context, source)
+        result.compress(Bitmap.CompressFormat.PNG, 100, out)
+        if (result !== source) result.recycle()
+        source.recycle()
+    }
+
+    /** Накладає логотип (res/drawable-nodpi/logo_watermark.png) із 50% прозорістю знизу праворуч. */
+    fun addWatermark(context: Context, source: Bitmap): Bitmap {
+        return try {
+            val logo = android.graphics.BitmapFactory.decodeResource(context.resources, R.drawable.logo_watermark) ?: return source
+            val result = source.copy(Bitmap.Config.ARGB_8888, true) ?: return source
+            val canvas = android.graphics.Canvas(result)
+            val size = (result.width * 0.14f).toInt().coerceAtLeast(32)
+            val margin = (result.width * 0.02f).toInt()
+            val left = result.width - size - margin
+            val top = result.height - size - margin
+            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG or android.graphics.Paint.FILTER_BITMAP_FLAG).apply { alpha = 128 }
+            canvas.drawBitmap(logo, null, android.graphics.Rect(left, top, left + size, top + size), paint)
+            logo.recycle()
+            result
+        } catch (e: Exception) {
+            e.printStackTrace()
+            source
+        }
+    }
+
     /**
      * Зберігає фото/відео за посиланням у галерею (Pictures/Kishka або Movies/Kishka).
      * Android 10+: без додаткових дозволів. Android 7–9: потрібен WRITE_EXTERNAL_STORAGE (запитується в інтерфейсі).
      */
-    fun saveToGallery(context: Context, url: String, onResult: (Boolean) -> Unit) {
+    fun saveToGallery(context: Context, url: String, watermark: Boolean = false, onResult: (Boolean) -> Unit) {
         val appContext = context.applicationContext
         Thread {
             var ok = false
@@ -309,8 +347,11 @@ object MediaUtils {
                 val conn = URL(url).openConnection() as HttpURLConnection
                 conn.connectTimeout = 30000
                 conn.readTimeout = 120000
-                val mime = (conn.contentType ?: "image/png").substringBefore(';').trim()
-                val isVideo = mime.startsWith("video/")
+                val rawMime = (conn.contentType ?: "image/png").substringBefore(';').trim()
+                val isVideo = rawMime.startsWith("video/")
+                val applyWatermark = watermark && !isVideo
+                // З ватермарком зображення зберігається як PNG
+                val mime = if (applyWatermark) "image/png" else rawMime
                 val ext = when {
                     mime.contains("jpeg") || mime.contains("jpg") -> "jpg"
                     mime.contains("webp") -> "webp"
@@ -338,7 +379,7 @@ object MediaUtils {
                     if (uri != null) {
                         val stream = resolver.openOutputStream(uri)
                         if (stream != null) {
-                            stream.use { out -> conn.inputStream.use { input -> input.copyTo(out) } }
+                            stream.use { out -> writeBody(appContext, conn, out, applyWatermark) }
                             values.clear()
                             values.put(MediaStore.MediaColumns.IS_PENDING, 0)
                             resolver.update(uri, values, null, null)
@@ -350,7 +391,7 @@ object MediaUtils {
                     val dir = File(Environment.getExternalStoragePublicDirectory(folder), "Kishka")
                     dir.mkdirs()
                     val file = File(dir, name)
-                    file.outputStream().use { out -> conn.inputStream.use { input -> input.copyTo(out) } }
+                    file.outputStream().use { out -> writeBody(appContext, conn, out, applyWatermark) }
                     MediaScannerConnection.scanFile(appContext, arrayOf(file.absolutePath), arrayOf(mime), null)
                     ok = true
                 }
