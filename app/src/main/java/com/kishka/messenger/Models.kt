@@ -21,13 +21,17 @@ data class Message(
     val fileName: String? = null  // назва файлу (для fileType = "file")
 )
 
+/** Запис в історії дзвінків (зберігається на пристрої). direction: "out" або "in". */
 data class CallLogItem(
     val id: String = "",
     val callerName: String = "",
     val callerEmail: String = "",
     val time: String = "",
     val duration: String = "",
-    val isMissed: Boolean = false
+    val isMissed: Boolean = false,
+    val direction: String = "out",
+    val startedAt: Long = 0L,
+    val durationSec: Long = 0L
 )
 
 data class CallSignal(
