@@ -3,7 +3,6 @@ package com.kishka.messenger
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import android.widget.Toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -46,7 +45,7 @@ class GeminiSession(context: Context, val email: String) {
             ?: models.first()
 
     private fun toast(message: String) {
-        Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
+        Notice.show(message)
     }
 
     /** Викликається щоразу, коли вкладка Gemini зʼявляється на екрані. */
