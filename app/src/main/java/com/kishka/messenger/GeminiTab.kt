@@ -56,6 +56,33 @@ const val GEMINI_LOGO_URL =
     "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/Assets/Logo.png"
 
 /** Рядки вкладки Gemini (нові ключі; старі gemini_* беруться з Strings у MainActivity.kt). */
+/** Ключ підпису "Gemini думає / створює ..." залежно від типу моделі. */
+fun geminiBusyKey(model: GeminiModel): String = when {
+    model.isImage -> "gemini_generating_label"
+    model.isAudio -> "gemini_audio_label"
+    model.isVideo -> "gemini_video_label"
+    model.isAgent -> "gemini_agent_label"
+    else -> "gemini_thinking_label"
+}
+
+/** Ключ підказки в полі вводу залежно від типу моделі. */
+fun geminiHintKey(model: GeminiModel): String? = when {
+    model.isImage -> "gemini_image_hint"
+    model.isAudio -> "gemini_audio_hint"
+    model.isVideo -> "gemini_video_hint"
+    model.isAgent -> "gemini_agent_hint"
+    else -> null
+}
+
+/** Текст підказки про хід відповіді (ліміт Google, зміна моделі). */
+fun geminiNoteText(note: GeminiNote, lang: String): String = when (note.kind) {
+    "wait" -> String.format(GeminiStrings.get("gemini_note_wait", lang), note.seconds)
+    "busy" -> String.format(GeminiStrings.get("gemini_note_busy", lang), note.seconds)
+    "switch" -> String.format(GeminiStrings.get("gemini_note_switch", lang), note.model)
+    "agent" -> GeminiStrings.get("gemini_note_agent", lang)
+    else -> ""
+}
+
 object GeminiStrings {
     private val dictionary = mapOf(
         "uk" to mapOf(
@@ -64,6 +91,22 @@ object GeminiStrings {
             "gemini_image_models" to "Генерація зображень",
             "gemini_paid" to "Платна",
             "gemini_image_tag" to "Зображення",
+            "gemini_audio_models" to "Озвучка та музика",
+            "gemini_video_models" to "Відео",
+            "gemini_agent_models" to "Агенти",
+            "gemini_audio_tag" to "Аудіо",
+            "gemini_video_tag" to "Відео",
+            "gemini_agent_tag" to "Агент",
+            "gemini_audio_label" to "Gemini створює аудіо",
+            "gemini_video_label" to "Gemini створює відео",
+            "gemini_agent_label" to "Gemini досліджує",
+            "gemini_audio_hint" to "Введіть текст для озвучки або опис музики...",
+            "gemini_video_hint" to "Опишіть відео...",
+            "gemini_agent_hint" to "Опишіть завдання для агента...",
+            "gemini_note_wait" to "Ліміт Google: чекаю %d с і пробую знову",
+            "gemini_note_busy" to "Сервер Google перевантажений: повтор через %d с",
+            "gemini_note_switch" to "Перемикаюсь на модель %s",
+            "gemini_note_agent" to "Агент працює, це може тривати кілька хвилин",
             "gemini_thinking_label" to "Gemini думає",
             "gemini_generating_label" to "Gemini створює зображення",
             "gemini_upload_label" to "Завантаження файлу",
@@ -86,6 +129,22 @@ object GeminiStrings {
             "gemini_image_models" to "Генерация изображений",
             "gemini_paid" to "Платная",
             "gemini_image_tag" to "Изображения",
+            "gemini_audio_models" to "Озвучка и музыка",
+            "gemini_video_models" to "Видео",
+            "gemini_agent_models" to "Агенты",
+            "gemini_audio_tag" to "Аудио",
+            "gemini_video_tag" to "Видео",
+            "gemini_agent_tag" to "Агент",
+            "gemini_audio_label" to "Gemini создаёт аудио",
+            "gemini_video_label" to "Gemini создаёт видео",
+            "gemini_agent_label" to "Gemini исследует",
+            "gemini_audio_hint" to "Введите текст для озвучки или описание музыки...",
+            "gemini_video_hint" to "Опишите видео...",
+            "gemini_agent_hint" to "Опишите задание для агента...",
+            "gemini_note_wait" to "Лимит Google: жду %d с и пробую снова",
+            "gemini_note_busy" to "Сервер Google перегружен: повтор через %d с",
+            "gemini_note_switch" to "Переключаюсь на модель %s",
+            "gemini_note_agent" to "Агент работает, это может занять несколько минут",
             "gemini_thinking_label" to "Gemini думает",
             "gemini_generating_label" to "Gemini создаёт изображение",
             "gemini_upload_label" to "Загрузка файла",
@@ -108,6 +167,22 @@ object GeminiStrings {
             "gemini_image_models" to "Image generation",
             "gemini_paid" to "Paid",
             "gemini_image_tag" to "Image",
+            "gemini_audio_models" to "Speech and music",
+            "gemini_video_models" to "Video",
+            "gemini_agent_models" to "Agents",
+            "gemini_audio_tag" to "Audio",
+            "gemini_video_tag" to "Video",
+            "gemini_agent_tag" to "Agent",
+            "gemini_audio_label" to "Gemini is creating audio",
+            "gemini_video_label" to "Gemini is creating a video",
+            "gemini_agent_label" to "Gemini is researching",
+            "gemini_audio_hint" to "Enter text to read aloud or describe the music...",
+            "gemini_video_hint" to "Describe the video...",
+            "gemini_agent_hint" to "Describe the task for the agent...",
+            "gemini_note_wait" to "Google limit: waiting %d s, then retrying",
+            "gemini_note_busy" to "Google server is busy: retrying in %d s",
+            "gemini_note_switch" to "Switching to model %s",
+            "gemini_note_agent" to "The agent is working, this may take a few minutes",
             "gemini_thinking_label" to "Gemini is thinking",
             "gemini_generating_label" to "Gemini is creating an image",
             "gemini_upload_label" to "Uploading file",
@@ -210,7 +285,7 @@ fun GeminiTab(
                             )
                             Text(
                                 if (session.isSending) {
-                                    gs(if (selectedModel.isImage) "gemini_generating_label" else "gemini_thinking_label") + "…"
+                                    gs(geminiBusyKey(selectedModel)) + "…"
                                 } else {
                                     Strings.get("gemini_subtitle", lang)
                                 },
@@ -373,12 +448,20 @@ fun GeminiTab(
                                                 if (progress != null) {
                                                     "${gs("gemini_upload_label")}… ${(progress * 100).toInt()}%"
                                                 } else {
-                                                    "${gs(if (selectedModel.isImage) "gemini_generating_label" else "gemini_thinking_label")}… " +
+                                                    "${gs(geminiBusyKey(selectedModel))}… " +
                                                         formatElapsed(elapsedSeconds, gs("sec_short"), gs("min_short"))
                                                 },
                                                 color = Color.Gray,
                                                 fontSize = 14.sp
                                             )
+                                        }
+                                        val progressNote = session.note
+                                        if (progressNote != null && session.uploadProgress == null) {
+                                            val noteText = geminiNoteText(progressNote, lang)
+                                            if (noteText.isNotEmpty()) {
+                                                Spacer(modifier = Modifier.height(6.dp))
+                                                Text(noteText, color = ViberPurple, fontSize = 12.sp)
+                                            }
                                         }
                                         if (session.stopArmed) {
                                             Spacer(modifier = Modifier.height(6.dp))
@@ -409,7 +492,7 @@ fun GeminiTab(
             KishkaInputBar(
                 value = session.draft,
                 onValueChange = { session.draft = it },
-                placeholder = if (selectedModel.isImage) gs("gemini_image_hint") else Strings.get("type_message", lang),
+                placeholder = geminiHintKey(selectedModel)?.let { gs(it) } ?: Strings.get("type_message", lang),
                 canSend = session.draft.isNotBlank() || session.pendingMedia != null,
                 busy = session.isSending,
                 stopArmed = session.stopArmed,
@@ -563,26 +646,27 @@ private fun GeminiModelPill(
                             .verticalScroll(rememberScrollState())
                             .padding(vertical = 8.dp)
                     ) {
-                        val textModels = models.filter { !it.isImage }
-                        val imageModels = models.filter { it.isImage }
+                        val groups = listOf(
+                            "gemini_text_models" to models.filter { !it.isImage && !it.isAudio && !it.isVideo && !it.isAgent },
+                            "gemini_image_models" to models.filter { it.isImage },
+                            "gemini_audio_models" to models.filter { it.isAudio },
+                            "gemini_video_models" to models.filter { it.isVideo },
+                            "gemini_agent_models" to models.filter { it.isAgent }
+                        ).filter { it.second.isNotEmpty() }
 
-                        if (textModels.isNotEmpty()) {
-                            GeminiPopupHeader(GeminiStrings.get("gemini_text_models", lang))
-                            textModels.forEach { m ->
-                                GeminiModelRow(m, m.id == selected.id, lang) { onSelect(m) }
+                        groups.forEachIndexed { index, group ->
+                            if (index > 0) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp)
+                                        .height(1.dp)
+                                        .background(ViberLightPurple)
+                                )
                             }
-                        }
-                        if (imageModels.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp)
-                                    .height(1.dp)
-                                    .background(ViberLightPurple)
-                            )
-                            GeminiPopupHeader(GeminiStrings.get("gemini_image_models", lang))
-                            imageModels.forEach { m ->
+                            GeminiPopupHeader(GeminiStrings.get(group.first, lang))
+                            group.second.forEach { m ->
                                 GeminiModelRow(m, m.id == selected.id, lang) { onSelect(m) }
                             }
                         }
@@ -624,11 +708,18 @@ private fun GeminiModelRow(model: GeminiModel, selected: Boolean, lang: String, 
             if (model.note.isNotBlank()) {
                 Text(AppText.modelNote(model.id, lang, model.note), fontSize = 11.sp, color = Color.Gray)
             }
-            if (model.paid || model.isImage) {
+            val tagKey = when {
+                model.isImage -> "gemini_image_tag"
+                model.isAudio -> "gemini_audio_tag"
+                model.isVideo -> "gemini_video_tag"
+                model.isAgent -> "gemini_agent_tag"
+                else -> null
+            }
+            if (model.paid || tagKey != null) {
                 Spacer(modifier = Modifier.height(3.dp))
                 Row {
-                    if (model.isImage) {
-                        GeminiChip(GeminiStrings.get("gemini_image_tag", lang), ViberLightPurple, ViberPurple)
+                    if (tagKey != null) {
+                        GeminiChip(GeminiStrings.get(tagKey, lang), ViberLightPurple, ViberPurple)
                         Spacer(modifier = Modifier.width(4.dp))
                     }
                     if (model.paid) {
