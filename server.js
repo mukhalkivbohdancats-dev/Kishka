@@ -2284,7 +2284,17 @@ io.on('connection', (socket) => {
 // Він замінив вкладку AI Preview. Події сокета: kai_get_history, kai_get_status, kai_send, kai_cancel, kai_clear,
 // kai_get_facts, kai_clear_facts. Пошуку в інтернеті там немає (гуглить тільки Gemini).
 // =====================================================================
-require('./kishkaai')({
+// Файл модуля шукаємо БЕЗ урахування регістру: на Linux (Render) Kishkaai.js і kishkaai.js — різні файли
+function loadKishkaAI() {
+    const found = fs.readdirSync(__dirname).find(f => f.toLowerCase() === 'kishkaai.js');
+    if (!found) {
+        console.error('Файл Kishkaai.js не знайдено поруч із server.js — Kishka AI вимкнено, решта сервера працює.');
+        return null;
+    }
+    return require(path.join(__dirname, found));
+}
+const initKishkaAI = loadKishkaAI();
+if (initKishkaAI) initKishkaAI({
     io,
     db,
     dbRun: geminiDbRun,
