@@ -11,12 +11,13 @@ import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Звʼязок вкладки AI Preview із сервером. Використовує той самий сокет, що й месенджер.
+ * Звʼязок вкладки Кішка ШІ (Kishka AI) із сервером. Використовує той самий сокет, що й месенджер.
  * Памʼять розмови зберігається на сервері окремо для кожного акаунта.
  * Результат — GeminiResult (reply.imageUrl заповнений, якщо згенеровано зображення).
  */
 class PreviewManager(context: Context) {
 
+    private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
     private val socket get() = KishkaManager.getSocket()
 
@@ -56,7 +57,7 @@ class PreviewManager(context: Context) {
 
     fun loadHistory(email: String, onResult: (List<GeminiMessage>?) -> Unit) {
         ensureConnected()
-        socket.emit("preview_get_history", email.trim().lowercase(), io.socket.client.Ack { args ->
+        socket.emit("kai_get_history", email.trim().lowercase(), io.socket.client.Ack { args ->
             var result: List<GeminiMessage>? = null
             try {
                 val obj = args.firstOrNull() as? JSONObject
@@ -86,16 +87,17 @@ class PreviewManager(context: Context) {
             put("text", text)
             put("mode", mode)
             put("lang", lang)
+            put("settings", AiSettings.kaiJson(appContext))
         }
         val done = AtomicBoolean(false)
-        socket.emit("preview_send", json, io.socket.client.Ack { args ->
+        socket.emit("kai_send", json, io.socket.client.Ack { args ->
             if (!done.compareAndSet(false, true)) return@Ack
             val result = parseResult(args.firstOrNull() as? JSONObject)
             mainHandler.post { onResult(result) }
         })
         return GeminiCall {
             if (done.compareAndSet(false, true)) {
-                socket.emit("preview_cancel", cleanEmail, io.socket.client.Ack { })
+                socket.emit("kai_cancel", cleanEmail, io.socket.client.Ack { })
                 mainHandler.post { onResult(GeminiResult(false, null, null, true)) }
             }
         }
@@ -110,17 +112,17 @@ class PreviewManager(context: Context) {
             mainHandler.post { onDone(result) }
         }
         doneListener = listener
-        socket.on("preview_done", listener)
+        socket.on("kai_done", listener)
     }
 
     fun stopListeningDone() {
-        doneListener?.let { socket.off("preview_done", it) }
+        doneListener?.let { socket.off("kai_done", it) }
         doneListener = null
     }
 
     fun getStatus(email: String, onResult: (busy: Boolean, startedAt: Long) -> Unit) {
         ensureConnected()
-        socket.emit("preview_get_status", email.trim().lowercase(), io.socket.client.Ack { args ->
+        socket.emit("kai_get_status", email.trim().lowercase(), io.socket.client.Ack { args ->
             val obj = args.firstOrNull() as? JSONObject
             val busy = obj?.optBoolean("busy", false) ?: false
             val startedAt = obj?.optLong("startedAt", 0L) ?: 0L
@@ -130,12 +132,34 @@ class PreviewManager(context: Context) {
 
     fun cancelRemote(email: String) {
         ensureConnected()
-        socket.emit("preview_cancel", email.trim().lowercase(), io.socket.client.Ack { })
+        socket.emit("kai_cancel", email.trim().lowercase(), io.socket.client.Ack { })
+    }
+
+    /** Факти про користувача, які запамʼятала Кішка ШІ. null — не вдалося отримати. */
+    fun getFacts(email: String, onResult: (List<String>?) -> Unit) {
+        ensureConnected()
+        socket.emit("kai_get_facts", email.trim().lowercase(), io.socket.client.Ack { args ->
+            val obj = args.firstOrNull() as? JSONObject
+            var facts: List<String>? = null
+            if (obj != null && obj.optBoolean("success", false)) {
+                val array = obj.optJSONArray("facts")
+                facts = if (array == null) emptyList() else (0 until array.length()).map { array.optString(it, "") }
+            }
+            mainHandler.post { onResult(facts) }
+        })
+    }
+
+    fun clearFacts(email: String, onResult: (Boolean) -> Unit) {
+        ensureConnected()
+        socket.emit("kai_clear_facts", email.trim().lowercase(), io.socket.client.Ack { args ->
+            val ok = (args.firstOrNull() as? JSONObject)?.optBoolean("success", false) ?: false
+            mainHandler.post { onResult(ok) }
+        })
     }
 
     fun clear(email: String, onResult: (Boolean) -> Unit) {
         ensureConnected()
-        socket.emit("preview_clear", email.trim().lowercase(), io.socket.client.Ack { args ->
+        socket.emit("kai_clear", email.trim().lowercase(), io.socket.client.Ack { args ->
             val ok = (args.firstOrNull() as? JSONObject)?.optBoolean("success", false) ?: false
             mainHandler.post { onResult(ok) }
         })
@@ -143,7 +167,7 @@ class PreviewManager(context: Context) {
 }
 
 /**
- * Стан вкладки AI Preview, що живе ПОЗА екраном: не зникає при повороті екрана та переході між вкладками.
+ * Стан вкладки Кішка ШІ (Kishka AI), що живе ПОЗА екраном: не зникає при повороті екрана та переході між вкладками.
  */
 class PreviewSession(context: Context, val email: String) {
 
