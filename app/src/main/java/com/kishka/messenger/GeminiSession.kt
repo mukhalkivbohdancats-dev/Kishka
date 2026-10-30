@@ -32,6 +32,8 @@ class GeminiSession(context: Context, val email: String) {
     var sendStartedAt by mutableStateOf(0L)
     var isLoadingHistory by mutableStateOf(true)
     var stopArmed by mutableStateOf(false)
+    /** Підказка про хід відповіді: чекаємо ліміт Google, перемкнулись на іншу модель тощо. */
+    var note by mutableStateOf<GeminiNote?>(null)
 
     private var call: GeminiCall? = null
     private var uploadHandle: UploadHandle? = null
@@ -41,7 +43,7 @@ class GeminiSession(context: Context, val email: String) {
     val selectedModel: GeminiModel
         get() = models.firstOrNull { it.id == selectedModelId }
             ?: models.firstOrNull { it.id == "gemini-3.8-flash" }
-            ?: models.firstOrNull { !it.isImage && !it.paid }
+            ?: models.firstOrNull { it.type == "text" && !it.paid }
             ?: models.first()
 
     private fun toast(message: String) {
@@ -53,11 +55,12 @@ class GeminiSession(context: Context, val email: String) {
         if (!started) {
             started = true
             manager.listenDone { result -> handleDone(result) }
+            manager.listenProgress { value -> if (isSending) note = value }
             manager.loadModels { loaded, defaultId ->
                 if (loaded != null) {
                     models = loaded
                     if (loaded.none { it.id == selectedModelId }) {
-                        selectedModelId = defaultId ?: loaded.firstOrNull { !it.isImage && !it.paid }?.id ?: loaded.first().id
+                        selectedModelId = defaultId ?: loaded.firstOrNull { it.type == "text" && !it.paid }?.id ?: loaded.first().id
                     }
                 }
             }
@@ -147,6 +150,7 @@ class GeminiSession(context: Context, val email: String) {
         if (!isSending) return // уже оброблено подією gemini_done
         isSending = false
         stopArmed = false
+        note = null
         call = null
 
         if (result.success && result.reply != null) {
@@ -168,6 +172,7 @@ class GeminiSession(context: Context, val email: String) {
         if (!isSending) return
         isSending = false
         stopArmed = false
+        note = null
         call = null
 
         if (!result.success && !result.cancelled) {
@@ -212,6 +217,7 @@ class GeminiSession(context: Context, val email: String) {
             // Запит виконується на сервері, а цей екран його не запускав (після перезапуску застосунку)
             manager.cancelRemote(email)
             isSending = false
+            note = null
             toast(GeminiStrings.get("gemini_stopped", lang))
             loadHistory()
         }
