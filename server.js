@@ -1017,10 +1017,10 @@ const GEMINI_MAX_TEXT = 8000;
 // ---------------------------------------------------------------------
 // КАТАЛОГ МОДЕЛЕЙ (усі моделі зі списку AI Studio, які працюють як чат / генерація зображень).
 // paid: true  — у AI Studio позначені "Paid" (потрібен платний ключ Gemini API).
-// type: 'text' | 'image'.   noSystem: модель не підтримує system instruction (Gemma).
+// type: 'text' | 'image' | 'audio' | 'video' | 'agent'.   noSystem: модель не підтримує system instruction (Gemma).
 // ---------------------------------------------------------------------
 const GEMINI_CATALOG = [
-    // ----- Текст -----
+    // ----- Текстові (чат, аналіз фото/відео) -----
     { id: 'gemini-4-argon',                          label: 'Gemini 4 Argon',                    type: 'text',  paid: true,  note: 'Найпотужніша модель' },
     { id: 'gemini-3.8-flash',                        label: 'Gemini 3.8 Flash',                  type: 'text',  paid: false, note: 'Найрозумніша Flash-модель' },
     { id: 'gemini-3.6-flash',                        label: 'Gemini 3.6 Flash',                  type: 'text',  paid: true,  note: 'Попереднє покоління Flash' },
@@ -1031,17 +1031,37 @@ const GEMINI_CATALOG = [
     { id: 'gemini-pro-latest',                       label: 'Gemini Pro Latest',                 type: 'text',  paid: false, note: 'Завжди остання Pro' },
     { id: 'gemini-flash-latest',                     label: 'Gemini Flash Latest',               type: 'text',  paid: false, note: 'Завжди остання Flash' },
     { id: 'gemini-flash-lite-latest',                label: 'Gemini Flash-Lite Latest',          type: 'text',  paid: false, note: 'Завжди остання Flash-Lite' },
-    { id: 'gemini-robotics-er-2-preview',            label: 'Gemini Robotics-ER 2 Preview',      type: 'text',  paid: false, note: 'Розуміння простору та відео' },
-    { id: 'gemini-robotics-er-2-streaming-preview',  label: 'Gemini Robotics-ER 2 Streaming',    type: 'text',  paid: false, note: 'Швидкий потоковий режим' },
-    // ----- Зображення (Nano Banana) -----
+    { id: 'gemini-robotics-er-2-preview',            label: 'Gemini Robotics-ER 2 Preview',      type: 'text',  paid: false, note: 'Розуміння простору та відео', special: true },
+    { id: 'gemini-robotics-er-2-streaming-preview',  label: 'Gemini Robotics-ER 2 Streaming',    type: 'text',  paid: false, note: 'Швидкий потоковий режим', special: true },
+    { id: 'gemma-4-31b-it',                          label: 'Gemma 4 31B IT',                    type: 'text',  paid: false, note: 'Відкрита модель Gemma', noSystem: true },
+    { id: 'gemma-4-26b-a4b-it',                      label: 'Gemma 4 26B A4B IT',                type: 'text',  paid: false, note: 'Відкрита модель Gemma (MoE)', noSystem: true },
+    { id: 'gemini-3.5-transcribe',                   label: 'Gemini 3.5 Transcribe',             type: 'text',  paid: false, note: 'Розпізнавання мовлення з відео', special: true, transcribe: true },
+    // ----- Генерація зображень -----
     { id: 'gemini-nano-banana-2.1',                  label: 'Nano Banana 2.1',                   type: 'image', paid: true,  note: 'Найкраща якість, до 4K' },
     { id: 'gemini-3.1-flash-lite-image',             label: 'Nano Banana 2 Lite',                type: 'image', paid: false, note: 'Найшвидша' },
     { id: 'gemini-3.1-flash-image',                  label: 'Nano Banana 2',                     type: 'image', paid: true,  note: 'Збалансована' },
     { id: 'gemini-3-pro-image',                      label: 'Nano Banana Pro',                   type: 'image', paid: true,  note: 'Професійна' },
-    { id: 'gemini-2.5-flash-image',                  label: 'Nano Banana',                       type: 'image', paid: true,  note: 'Перша версія' }
+    { id: 'gemini-2.5-flash-image',                  label: 'Nano Banana',                       type: 'image', paid: true,  note: 'Перша версія' },
+    // ----- Озвучка тексту (повертає аудіо) -----
+    { id: 'gemini-3.8-flash-tts',                    label: 'Gemini 3.8 Flash TTS',              type: 'audio', paid: false, note: 'Озвучка тексту', audioKind: 'tts' },
+    { id: 'gemini-3.8-flash-lite-tts',               label: 'Gemini 3.8 Flash Lite TTS',         type: 'audio', paid: false, note: 'Швидка озвучка', audioKind: 'tts' },
+    { id: 'gemini-3.1-flash-tts-preview',            label: 'Gemini 3.1 Flash TTS Preview',      type: 'audio', paid: false, note: 'Озвучка з низькою затримкою', audioKind: 'tts' },
+    { id: 'gemini-2.5-flash-preview-tts',            label: 'Gemini 2.5 Flash Preview TTS',      type: 'audio', paid: false, note: 'Озвучка (попередня версія)', audioKind: 'tts' },
+    { id: 'gemini-2.5-pro-preview-tts',              label: 'Gemini 2.5 Pro Preview TTS',        type: 'audio', paid: false, note: 'Озвучка вищої якості', audioKind: 'tts' },
+    // ----- Музика (повертає аудіо) -----
+    { id: 'lyria-3.5',                               label: 'Lyria 3.5',                         type: 'audio', paid: true,  note: 'Створення повних пісень', audioKind: 'music' },
+    { id: 'lyria-3-pro-preview',                     label: 'Lyria 3 Pro Preview',               type: 'audio', paid: true,  note: 'Музика вищої якості', audioKind: 'music' },
+    { id: 'lyria-3-clip-preview',                    label: 'Lyria 3 Clip Preview',              type: 'audio', paid: true,  note: 'Короткі музичні кліпи', audioKind: 'music' },
+    // ----- Відео -----
+    { id: 'gemini-omni-1.1-flash',                   label: 'Gemini Omni 1.1 Flash',             type: 'video', paid: true,  note: 'Створення відео' },
+    // ----- Агенти (довгі завдання: Gemini думає, поки не закінчить або поки його не зупинять) -----
+    { id: 'deep-research-preview-04-2026',           label: 'Deep Research Preview',             type: 'agent', paid: true,  note: 'Глибоке дослідження' },
+    { id: 'deep-research-max-preview-04-2026',       label: 'Deep Research Max Preview',         type: 'agent', paid: true,  note: 'Максимально повне дослідження' },
+    { id: 'antigravity-preview-09-2026',             label: 'Antigravity Agent Preview',         type: 'agent', paid: true,  note: 'Автономний агент' }
 ];
-// Не включені (це не чат-моделі): gemini-3.8-flash-tts (озвучка), gemini-3.5-transcribe (розпізнавання мови),
-// antigravity-preview-09-2026 та deep-research-preview-04-2026 (агенти з іншим API).
+// Не включені Live-моделі (gemini-3.8-live, gemini-3.8-live-extended-thinking, gemini-3.1-flash-live-preview,
+// gemini-3.5-transcribe-live, gemini-3.5-live-translate-preview): вони працюють лише через голосовий WebSocket у реальному часі,
+// а не через текстовий чат.
 
 // ---------- Поточна дата для Gemini (його власні знання застарілі, тому він має знати, який зараз рік) ----------
 function geminiNowText() {
@@ -1093,7 +1113,7 @@ function geminiExtraModels() {
         result.push({
             id,
             label: label || id,
-            type: (typeLower === 'image' || typeLower === 'text') ? typeLower : guessedType,
+            type: ['image', 'text', 'audio', 'video', 'agent'].includes(typeLower) ? typeLower : guessedType,
             paid: typeLower === 'paid' || (flag || '').toLowerCase() === 'paid',
             note: 'Додано через Environment'
         });
@@ -1148,15 +1168,30 @@ function geminiDbAll(sql, params = []) {
     });
 }
 
-// Віддаємо згенеровані зображення (id випадковий і непередбачуваний)
+// Віддаємо згенеровані зображення, аудіо та відео (id випадковий і непередбачуваний). Підтримується Range, щоб плеєр міг перемотувати.
+const GEMINI_MEDIA_MIME = /^(image\/(png|jpeg|webp|gif)|audio\/(wav|x-wav|mpeg|mp3|mp4|aac|ogg|webm|flac)|video\/(mp4|webm|quicktime))$/;
 app.get('/gemini-image/:id', (req, res) => {
     const id = String(req.params.id || '').replace(/[^a-zA-Z0-9_-]/g, '');
     db.get("SELECT mime, data FROM gemini_images WHERE id = ?", [id], (err, row) => {
         if (err || !row) return res.status(404).send('Not found');
-        const mime = /^image\/(png|jpeg|webp|gif)$/.test(row.mime) ? row.mime : 'image/png';
+        const mime = GEMINI_MEDIA_MIME.test(row.mime) ? row.mime : 'image/png';
+        const buf = Buffer.isBuffer(row.data) ? row.data : Buffer.from(row.data);
         res.set('Content-Type', mime);
         res.set('Cache-Control', 'public, max-age=31536000, immutable');
-        res.send(row.data);
+        res.set('Accept-Ranges', 'bytes');
+        const range = req.headers.range && /^bytes=(\d*)-(\d*)$/.exec(req.headers.range);
+        if (range && (range[1] || range[2])) {
+            let start = range[1] ? parseInt(range[1], 10) : buf.length - parseInt(range[2], 10);
+            let end = range[1] && range[2] ? parseInt(range[2], 10) : buf.length - 1;
+            if (isNaN(start) || start < 0) start = 0;
+            if (isNaN(end) || end >= buf.length) end = buf.length - 1;
+            if (start > end) { res.status(416).set('Content-Range', `bytes */${buf.length}`); return res.end(); }
+            res.status(206);
+            res.set('Content-Range', `bytes ${start}-${end}/${buf.length}`);
+            res.set('Content-Length', String(end - start + 1));
+            return res.end(buf.subarray(start, end + 1));
+        }
+        res.send(buf);
     });
 });
 
@@ -1169,6 +1204,7 @@ function geminiMakeJob() {
 
 function geminiCancelJob(job) {
     job.cancelled = true;
+    if (typeof job.cleanup === 'function') { try { job.cleanup(); } catch (e) {} }
     job.reqs.forEach((r) => { try { r.destroy(new Error('CANCELLED')); } catch (e) {} });
     job.reqs.clear();
 }
@@ -1216,10 +1252,48 @@ function geminiRequest(method, path, bodyObj, job) {
     });
 }
 
+// Розбір відповіді 429: скільки чекати (retryDelay) і який саме ліміт вичерпано (хвилинний, добовий чи нульовий)
+function geminiQuotaInfo(json) {
+    const info = { retryMs: 0, kind: null };
+    const e = json && json.error;
+    if (!e) return info;
+    (Array.isArray(e.details) ? e.details : []).forEach((d) => {
+        const type = String((d && d['@type']) || '');
+        if (/RetryInfo/.test(type) && d.retryDelay) {
+            const m = String(d.retryDelay).match(/([\d.]+)\s*(ms|s|m)?/);
+            if (m) {
+                const n = parseFloat(m[1]);
+                info.retryMs = Math.ceil(m[2] === 'ms' ? n : (m[2] === 'm' ? n * 60000 : n * 1000));
+            }
+        }
+        if (/QuotaFailure/.test(type) && Array.isArray(d.violations)) {
+            d.violations.forEach((v) => {
+                const id = String(v.quotaId || '') + ' ' + String(v.quotaMetric || '');
+                if (/PerDay/i.test(id) && info.kind !== 'zero') info.kind = 'day';
+                else if (/PerMinute/i.test(id) && !info.kind) info.kind = 'minute';
+                if (v.quotaValue !== undefined && String(v.quotaValue) === '0') info.kind = 'zero';
+            });
+        }
+    });
+    const msg = String(e.message || '');
+    if (!info.retryMs) {
+        const m = msg.match(/retry in ([\d.]+)\s*s/i);
+        if (m) info.retryMs = Math.ceil(parseFloat(m[1]) * 1000);
+    }
+    if (/limit:\s*0\b/.test(msg)) info.kind = 'zero';
+    if (!info.kind && /per\s*day|PerDay/i.test(msg)) info.kind = 'day';
+    return info;
+}
+
 function geminiApiError(res) {
     const msg = (res.json && res.json.error && res.json.error.message) ? res.json.error.message : ('HTTP ' + res.status);
     const err = new Error(msg);
     err.status = res.status;
+    if (res.status === 429) {
+        const q = geminiQuotaInfo(res.json);
+        err.retryMs = q.retryMs;
+        err.quota = q.kind;      // 'minute' | 'day' | 'zero' | null
+    }
     return err;
 }
 
@@ -1419,8 +1493,8 @@ async function callGemini(contents, systemText, model, job, opts) {
     }
 
     const endpoint = `/v1beta/models/${encodeURIComponent(model.id)}:generateContent`;
-    const useSearch = GEMINI_SEARCH_ENABLED && !options.noSearch && !model.noSystem
-        && model.type !== 'image' && !geminiNoSearchModels.has(model.id);
+    const useSearch = GEMINI_SEARCH_ENABLED && options.search !== false && !options.noSearch && !model.noSystem
+        && !model.special && model.type === 'text' && !geminiNoSearchModels.has(model.id);
 
     let res;
     if (useSearch) {
@@ -1430,6 +1504,14 @@ async function callGemini(contents, systemText, model, job, opts) {
         if (res.status === 400 && /tool|search|ground|function/i.test(msg)) {
             geminiNoSearchModels.add(model.id);
             res = await geminiRequest('POST', endpoint, body, job);
+        } else if (res.status === 429) {
+            // Ліміт пошуку Google окремий від ліміту моделі: якщо вичерпано саме його — відповідаємо без пошуку
+            const q = geminiQuotaInfo(res.json);
+            const blob = JSON.stringify(res.json || {});
+            if (/ground|search/i.test(blob) || q.kind === 'day' || q.kind === 'zero') {
+                const retry = await geminiRequest('POST', endpoint, body, job);
+                if (retry.status === 200) res = retry;
+            }
         }
     } else {
         res = await geminiRequest('POST', endpoint, body, job);
@@ -1448,47 +1530,128 @@ function geminiIsOverload(err) {
     const s = err && err.status;
     if (s === 500 || s === 502 || s === 503 || s === 504) return true;
     const m = err && err.message ? err.message : '';
-    return /ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(m);
-}
-
-function isRetryableGeminiError(err) {
-    return geminiIsOverload(err) || (err && err.status === 429);
+    return /ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up/i.test(m);
 }
 
 const geminiSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Обрана модель (до 6 спроб при перевантаженні) -> запасна безкоштовна модель (2 спроби).
-// Запасна модель вмикається ТІЛЬКИ при перевантаженні Google (5xx), а не при ліміті/платній моделі.
-async function callGeminiResilient(contents, systemText, picked, catalog, job) {
-    const chain = [picked];
-    const fallback = catalog.find(m => m.type === 'text' && m.id === GEMINI_FALLBACK_MODEL && m.id !== picked.id && !m.paid)
-        || catalog.find(m => m.type === 'text' && !m.paid && !m.noSystem && m.id !== picked.id);
-    if (fallback) chain.push(fallback);
+// ---------- Ланцюг моделей: ліміти, перевантаження і недоступні моделі більше не показують помилку ----------
+// 429 (хвилинний ліміт)  -> чекаємо рівно стільки, скільки просить Google (retryDelay), і пробуємо знову; після двох очікувань
+//                           перемикаємось на іншу модель; далі по колу БЕЗ кінця — доки Gemini не відповість або користувач не зупинить.
+// 429 (добовий / нульовий) -> модель на 1-6 годин вважається недоступною для цього ключа, беремо наступну.
+// 5xx / мережа            -> кілька спроб, потім наступна модель.
+// 403 / 404 / 400 / порожня відповідь -> наступна модель.
+const geminiDeadUntil = new Map();   // id моделі -> до якого часу не пробуємо
 
+function geminiNote(job, note) {
+    if (!job) return;
+    job.note = note;
+    if (typeof job.onNote === 'function') { try { job.onNote(note); } catch (e) {} }
+}
+
+async function geminiWait(ms, job, model, kind) {
+    const until = Date.now() + ms;
+    while (Date.now() < until) {
+        geminiCheckCancelled(job);
+        geminiNote(job, { kind, seconds: Math.max(1, Math.ceil((until - Date.now()) / 1000)), model: model ? model.label : '' });
+        await geminiSleep(Math.min(2000, Math.max(200, until - Date.now())));
+    }
+    geminiCheckCancelled(job);
+}
+
+async function geminiRunChain(chain, runner, job) {
+    const nowMs = Date.now();
+    let list = chain.filter(m => !((geminiDeadUntil.get(m.id) || 0) > nowMs));
+    if (list.length === 0) list = chain.slice();
+    let i = 0;
+    let rateWaits = 0;
+    let serverFails = 0;
+    let rounds = 0;
     let firstError = null;
-    for (let m = 0; m < chain.length; m++) {
-        const maxAttempts = m === 0 ? 6 : 2;
-        for (let a = 0; a < maxAttempts; a++) {
-            geminiCheckCancelled(job);
-            try {
-                const text = await callGemini(contents, systemText, chain[m], job);
-                return { text, model: chain[m].id };
-            } catch (err) {
-                if (err.message === 'CANCELLED' || err.message === 'NO_KEY') throw err;
-                if (!firstError) firstError = err;
-                if (!isRetryableGeminiError(err)) throw (m > 0 ? firstError : err);
 
-                const limit = err.status === 429 ? 2 : maxAttempts; // ліміт квоти повторами не лікується
-                console.error(`Gemini ${chain[m].id} спроба ${a + 1}/${limit}:`, err.message);
-                if (a + 1 >= limit) {
-                    if (err.status === 429) throw err;   // без підміни моделі
-                    break;                               // перевантаження -> пробуємо запасну модель
-                }
-                await geminiSleep(Math.min(2000 * (a + 1), 10000));
+    const advance = () => {
+        i = (i + 1) % list.length;
+        rateWaits = 0;
+        serverFails = 0;
+        if (i === 0) rounds++;
+        geminiNote(job, { kind: 'switch', model: list[i].label });
+    };
+    const dropCurrent = (model) => {
+        list = list.filter(x => x.id !== model.id);
+        if (list.length === 0) return false;
+        i = i % list.length;
+        rateWaits = 0;
+        serverFails = 0;
+        geminiNote(job, { kind: 'switch', model: list[i].label });
+        return true;
+    };
+
+    for (;;) {
+        geminiCheckCancelled(job);
+        const model = list[i];
+        try {
+            const result = await runner(model);
+            geminiDeadUntil.delete(model.id);
+            geminiNote(job, null);
+            return { result, model };
+        } catch (err) {
+            const m = err && err.message;
+            if (m === 'CANCELLED' || m === 'NO_KEY') throw err;
+            if (!firstError) firstError = err;
+            const s = err && err.status;
+
+            if (s === 429 && (err.quota === 'day' || err.quota === 'zero')) {
+                geminiDeadUntil.set(model.id, Date.now() + (err.quota === 'zero' ? 6 * 3600000 : 3600000));
+                console.error(`Gemini ${model.id}: ліміт недоступний (${err.quota}), беремо іншу модель`);
+                if (!dropCurrent(model)) throw firstError;
+                continue;
             }
+            if (s === 429) {
+                rateWaits++;
+                if (rateWaits >= 3 && list.length > 1) { advance(); continue; }
+                const wait = Math.min(Math.max(err.retryMs || 0, 4000 * rateWaits), 70000) + 500;
+                console.error(`Gemini ${model.id}: ліміт запитів, чекаю ${Math.round(wait / 1000)} с`);
+                await geminiWait(wait, job, model, 'wait');
+                continue;
+            }
+            if (geminiIsOverload(err)) {
+                serverFails++;
+                if (serverFails >= 4) {
+                    if (list.length > 1 && rounds < 2) { advance(); continue; }
+                    throw firstError;
+                }
+                console.error(`Gemini ${model.id}: перевантаження (${s || m}), спроба ${serverFails}/4`);
+                await geminiWait(2000 * serverFails, job, model, 'busy');
+                continue;
+            }
+            if (s === 403 || s === 404) {
+                geminiDeadUntil.set(model.id, Date.now() + 3600000);
+                if (!dropCurrent(model)) throw firstError;
+                continue;
+            }
+            if (s === 400 || m === 'EMPTY' || m === 'BAD_RESPONSE' || m === 'EMPTY_IMAGE' || m === 'EMPTY_AUDIO' || m === 'EMPTY_VIDEO') {
+                console.error(`Gemini ${model.id}: ${m}`);
+                if (!dropCurrent(model)) throw firstError;
+                continue;
+            }
+            throw err;
         }
     }
-    throw firstError || new Error('UNAVAILABLE');
+}
+
+// Запасні моделі для тексту: безкоштовні загальні моделі, потім Gemma
+function geminiTextChain(picked, catalog) {
+    const chain = [picked];
+    const extra = catalog.filter(m => m.type === 'text' && !m.paid && !m.special && !m.noSystem && m.id !== picked.id);
+    extra.sort((a, b) => (b.id === GEMINI_FALLBACK_MODEL ? 1 : 0) - (a.id === GEMINI_FALLBACK_MODEL ? 1 : 0));
+    chain.push(...extra);
+    chain.push(...catalog.filter(m => m.type === 'text' && m.noSystem && !m.paid && m.id !== picked.id));
+    return chain;
+}
+
+async function callGeminiResilient(contents, systemText, picked, catalog, job, opts) {
+    const out = await geminiRunChain(geminiTextChain(picked, catalog), (m) => callGemini(contents, systemText, m, job, opts), job);
+    return { text: out.result, model: out.model.id };
 }
 
 // ---------- Генерація зображення ----------
@@ -1565,21 +1728,187 @@ async function callGeminiImage(prompt, modelId, job, inputImage) {
     throw geminiApiError(res);
 }
 
-async function callGeminiImageResilient(prompt, modelId, job, inputImage) {
-    let lastErr = null;
-    for (let a = 0; a < 3; a++) {
-        geminiCheckCancelled(job);
-        try {
-            return await callGeminiImage(prompt, modelId, job, inputImage);
-        } catch (err) {
-            lastErr = err;
-            if (err.message === 'CANCELLED' || err.message === 'NO_KEY') throw err;
-            if (!geminiIsOverload(err)) throw err;   // 429/403/400 повторами не лікуються
-            console.error(`Gemini image ${modelId} спроба ${a + 1}/3:`, err.message);
-            await geminiSleep(3000 * (a + 1));
+async function callGeminiImageResilient(prompt, picked, catalog, job, inputImage) {
+    const chain = [picked].concat(catalog.filter(m => m.type === 'image' && !m.paid && m.id !== picked.id));
+    const out = await geminiRunChain(chain, (m) => callGeminiImage(prompt, m.id, job, inputImage), job);
+    return Object.assign({}, out.result, { modelId: out.model.id });
+}
+
+// ---------- Аудіо: озвучка (TTS) та музика (Lyria) ----------
+function geminiPcmToWav(pcm, sampleRate, channels) {
+    const bits = 16;
+    const header = Buffer.alloc(44);
+    header.write('RIFF', 0);
+    header.writeUInt32LE(36 + pcm.length, 4);
+    header.write('WAVE', 8);
+    header.write('fmt ', 12);
+    header.writeUInt32LE(16, 16);
+    header.writeUInt16LE(1, 20);
+    header.writeUInt16LE(channels, 22);
+    header.writeUInt32LE(sampleRate, 24);
+    header.writeUInt32LE(sampleRate * channels * bits / 8, 28);
+    header.writeUInt16LE(channels * bits / 8, 32);
+    header.writeUInt16LE(bits, 34);
+    header.write('data', 36);
+    header.writeUInt32LE(pcm.length, 40);
+    return Buffer.concat([header, pcm]);
+}
+
+async function callGeminiAudio(model, text, job) {
+    const endpoint = `/v1beta/models/${encodeURIComponent(model.id)}:generateContent`;
+    const base = { contents: [{ role: 'user', parts: [{ text }] }] };
+    let res;
+    if (model.audioKind === 'music') {
+        res = await geminiRequest('POST', endpoint, Object.assign({}, base, { generationConfig: { responseModalities: ['AUDIO', 'TEXT'] } }), job);
+        if (res.status === 400) {
+            res = await geminiRequest('POST', endpoint, Object.assign({}, base, { generationConfig: { responseModalities: ['AUDIO'] } }), job);
         }
+    } else {
+        res = await geminiRequest('POST', endpoint, Object.assign({}, base, {
+            generationConfig: {
+                responseModalities: ['AUDIO'],
+                speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: process.env.GEMINI_TTS_VOICE || 'Kore' } } }
+            }
+        }), job);
     }
-    throw lastErr;
+    if (res.status !== 200) throw geminiApiError(res);
+    if (!res.json) throw new Error('BAD_RESPONSE');
+
+    let audio = null;
+    let note = '';
+    const parts = (res.json.candidates && res.json.candidates[0] && res.json.candidates[0].content && res.json.candidates[0].content.parts) || [];
+    parts.forEach((p) => {
+        if (typeof p.text === 'string' && !p.thought) note += p.text;
+        const inl = p.inlineData || p.inline_data;
+        const mime = inl && (inl.mimeType || inl.mime_type);
+        if (inl && inl.data && /^audio\//i.test(mime || '') && !audio) audio = { mime, data: Buffer.from(inl.data, 'base64') };
+    });
+    if (!audio) throw new Error('EMPTY_AUDIO');
+    if (/L16|pcm/i.test(audio.mime)) {
+        const rate = parseInt((audio.mime.match(/rate=(\d+)/) || [])[1] || '24000', 10);
+        audio = { mime: 'audio/wav', data: geminiPcmToWav(audio.data, rate, 1) };
+    }
+    return { mime: audio.mime.split(';')[0].trim().toLowerCase(), data: audio.data, text: note.trim() };
+}
+
+// ---------- Довгі завдання через Interactions API (агенти, відео): опитуємо результат, доки він не готовий або не натиснуто "Стоп" ----------
+function geminiCollectText(json) {
+    const outputs = [];
+    if (Array.isArray(json.outputs)) {
+        json.outputs.forEach((o) => { if (o && typeof o.text === 'string' && o.text.trim()) outputs.push(o.text); });
+    }
+    if (Array.isArray(json.steps)) {
+        json.steps.forEach((st) => {
+            if (st && st.type === 'model_output' && Array.isArray(st.content)) {
+                const joined = st.content.filter(b => b && typeof b.text === 'string' && !b.thought).map(b => b.text).join('');
+                if (joined.trim()) outputs.push(joined);
+            }
+        });
+    }
+    if (outputs.length === 0 && typeof json.output_text === 'string' && json.output_text.trim()) outputs.push(json.output_text);
+    return outputs.length ? outputs[outputs.length - 1] : '';
+}
+
+function geminiFindMedia(node, mimeRe, depth) {
+    depth = depth || 0;
+    if (!node || typeof node !== 'object' || depth > 12) return null;
+    const mime = node.mime_type || node.mimeType;
+    if (typeof mime === 'string' && mimeRe.test(mime)) {
+        if (typeof node.data === 'string' && node.data.length > 100) return { mime, data: Buffer.from(node.data, 'base64') };
+        const uri = node.uri || node.url || node.file_uri || node.fileUri;
+        if (typeof uri === 'string' && /^https:\/\//.test(uri)) return { mime, uri };
+    }
+    const children = Array.isArray(node) ? node : Object.values(node);
+    for (const child of children) {
+        const found = geminiFindMedia(child, mimeRe, depth + 1);
+        if (found) return found;
+    }
+    return null;
+}
+
+function geminiDownload(uriStr, job, redirects) {
+    redirects = redirects || 0;
+    return new Promise((resolve, reject) => {
+        if (job && job.cancelled) return reject(new Error('CANCELLED'));
+        let u;
+        try { u = new URL(uriStr); } catch (e) { return reject(e); }
+        const headers = {};
+        if (/(^|\.)googleapis\.com$/.test(u.hostname) && process.env.GEMINI_API_KEY) headers['x-goog-api-key'] = process.env.GEMINI_API_KEY;
+        const req = https.get({ hostname: u.hostname, path: u.pathname + u.search, headers }, (res) => {
+            if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirects < 3) {
+                res.resume();
+                if (job) job.reqs.delete(req);
+                let next;
+                try { next = new URL(res.headers.location, uriStr).toString(); } catch (e) { return reject(e); }
+                return resolve(geminiDownload(next, job, redirects + 1));
+            }
+            const chunks = [];
+            let total = 0;
+            res.on('data', (c) => {
+                total += c.length;
+                if (total > 80 * 1024 * 1024) { req.destroy(new Error('TOO_BIG')); return; }
+                chunks.push(c);
+            });
+            res.on('end', () => {
+                if (job) job.reqs.delete(req);
+                if (res.statusCode !== 200) { const e = new Error('HTTP ' + res.statusCode); e.status = res.statusCode; return reject(e); }
+                resolve({ mime: String(res.headers['content-type'] || '').split(';')[0].trim().toLowerCase(), data: Buffer.concat(chunks) });
+            });
+            res.on('error', (e) => { if (job) job.reqs.delete(req); reject(e); });
+        });
+        if (job) job.reqs.add(req);
+        req.on('error', (e) => { if (job) job.reqs.delete(req); reject(e); });
+    });
+}
+
+async function geminiRunInteraction(startBody, job, finish) {
+    let res = await geminiRequest('POST', '/v1beta/interactions', startBody, job);
+    if (res.status !== 200 || !res.json) throw geminiApiError(res);
+    let it = res.json;
+    const id = it.id || (it.name ? String(it.name).replace(/^interactions\//, '') : '');
+    if (id) {
+        job.cleanup = () => {
+            geminiRequest('POST', `/v1beta/interactions/${encodeURIComponent(id)}/cancel`, {}, null).catch(() => {});
+        };
+    }
+    for (;;) {
+        geminiCheckCancelled(job);
+        const status = String(it.status || '').toLowerCase();
+        if (/^(failed|cancelled|canceled|expired|incomplete)$/.test(status)) throw new Error('AGENT_FAILED');
+        if (!status || /^(completed|succeeded|done)$/.test(status)) {
+            const out = await finish(it);
+            if (out) return out;
+            if (status) throw new Error('EMPTY');
+        }
+        if (!id) throw new Error('BAD_RESPONSE');
+        await geminiSleep(5000);
+        geminiCheckCancelled(job);
+        const poll = await geminiRequest('GET', `/v1beta/interactions/${encodeURIComponent(id)}`, null, job);
+        if (poll.status === 429 || poll.status >= 500) continue;   // тимчасово: просто опитуємо далі
+        if (poll.status !== 200 || !poll.json) throw geminiApiError(poll);
+        it = poll.json;
+    }
+}
+
+async function callGeminiAgent(model, prompt, job) {
+    geminiNote(job, { kind: 'agent', model: model.label });
+    const text = await geminiRunInteraction({ agent: model.id, input: prompt, background: true }, job, async (it) => geminiCollectText(it));
+    return { text };
+}
+
+async function callGeminiVideo(model, prompt, job) {
+    const out = await geminiRunInteraction(
+        { model: model.id, input: [{ type: 'text', text: prompt }], background: true },
+        job,
+        async (it) => {
+            const media = geminiFindMedia(it, /^video\//i);
+            if (!media) return null;
+            if (media.data) return { mime: media.mime, data: media.data, text: geminiCollectText(it) };
+            const dl = await geminiDownload(media.uri, job);
+            return { mime: /^video\//.test(dl.mime) ? dl.mime : media.mime, data: dl.data, text: geminiCollectText(it) };
+        }
+    );
+    return out;
 }
 
 const GEMINI_ERRORS = {
@@ -1604,6 +1933,11 @@ const GEMINI_ERRORS = {
     empty_msg:     { uk: 'Порожнє повідомлення', ru: 'Пустое сообщение', en: 'Empty message' },
     too_long:      { uk: 'Повідомлення занадто довге', ru: 'Сообщение слишком длинное', en: 'The message is too long' },
     preview_image_failed: { uk: 'Не вдалося створити зображення: безкоштовний сервіс зараз зайнятий. Спробуйте ще раз за хвилину', ru: 'Не удалось создать изображение: бесплатный сервис сейчас занят. Попробуйте ещё раз через минуту', en: 'Could not create the image: the free service is busy right now. Try again in a minute' },
+    quota_day:     { uk: 'Добовий ліміт безкоштовного ключа Gemini вичерпано для всіх доступних моделей. Він оновиться завтра, або підключіть платний тариф Google AI Studio', ru: 'Суточный лимит бесплатного ключа Gemini исчерпан для всех доступных моделей. Он обновится завтра, либо подключите платный тариф Google AI Studio', en: 'The daily limit of the free Gemini key is used up for all available models. It resets tomorrow, or enable a paid Google AI Studio plan' },
+    empty_audio:   { uk: 'Gemini не повернув аудіо. Спробуйте інший текст або іншу модель', ru: 'Gemini не вернул аудио. Попробуйте другой текст или другую модель', en: 'Gemini returned no audio. Try another text or another model' },
+    empty_video:   { uk: 'Gemini не повернув відео. Спробуйте інший опис або іншу модель', ru: 'Gemini не вернул видео. Попробуйте другое описание или другую модель', en: 'Gemini returned no video. Try another description or another model' },
+    agent_failed:  { uk: 'Агент Gemini не зміг завершити завдання. Спробуйте сформулювати його інакше', ru: 'Агент Gemini не смог завершить задание. Попробуйте сформулировать его иначе', en: 'The Gemini agent could not finish the task. Try rewording it' },
+    attach_unsupported: { uk: 'Ця модель не приймає фото чи відео. Оберіть текстову модель для аналізу файлів', ru: 'Эта модель не принимает фото или видео. Выберите текстовую модель для анализа файлов', en: 'This model does not accept photos or videos. Choose a text model to analyse files' },
     busy:          { uk: 'Gemini ще відповідає на попереднє повідомлення', ru: 'Gemini ещё отвечает на предыдущее сообщение', en: 'Gemini is still answering the previous message' }
 };
 
@@ -1630,9 +1964,14 @@ function geminiErrorText(err, picked, lang) {
     if (m === 'VIDEO_TO_IMAGE_MODEL') return geminiT('video_to_image', lang);
     if (m === 'ATTACH_TOO_BIG') return geminiT('attach_big', lang);
     if (m === 'NO_KEY') return geminiT('no_key', lang);
+    if (m === 'ATTACH_UNSUPPORTED') return geminiT('attach_unsupported', lang);
+    if (m === 'EMPTY_AUDIO') return geminiT('empty_audio', lang);
+    if (m === 'EMPTY_VIDEO') return geminiT('empty_video', lang);
+    if (m === 'AGENT_FAILED') return geminiT('agent_failed', lang);
+    if (s === 429 && err.quota === 'day') return geminiT('quota_day', lang);
     if ((s === 403 || s === 429) && picked && picked.paid) return geminiT('paid', lang, name);
     if (s === 403) return geminiT('forbidden', lang, name);
-    if (s === 404) return geminiT('not_found', lang, name);
+    if (s === 404 || (s === 429 && err.quota === 'zero')) return geminiT('not_found', lang, name);
     if (s === 429) {
         return picked && picked.type === 'image' ? geminiT('image_quota', lang, name) : geminiT('quota', lang);
     }
@@ -1641,6 +1980,15 @@ function geminiErrorText(err, picked, lang) {
     if (m === 'EMPTY_IMAGE') return geminiT('empty_image', lang);
     if (m === 'BAD_RESPONSE') return geminiT('bad_response', lang);
     return geminiT('generic', lang, m || geminiT('unknown', lang));
+}
+
+// Налаштування вкладки Gemini, які надсилає застосунок разом із повідомленням
+function geminiCleanSettings(raw) {
+    const r = raw && typeof raw === 'object' ? raw : {};
+    return {
+        search: r.search !== false,
+        style: ['balanced', 'short', 'detailed'].includes(r.style) ? r.style : 'balanced'
+    };
 }
 
 function geminiCleanEmail(email) {
@@ -1703,16 +2051,17 @@ io.on('connection', (socket) => {
         const cleanEmail = geminiCleanEmail(email);
         if (cleanEmail) socket.join(cleanEmail);
         const job = cleanEmail ? geminiJobs.get(cleanEmail) : null;
-        cb({ success: true, busy: !!job, startedAt: job ? job.startedAt : 0 });
+        cb({ success: true, busy: !!job, startedAt: job ? job.startedAt : 0, note: job && job.note ? job.note : null });
     });
 
-    // Нове повідомлення до Gemini (текст, фото/відео для аналізу або генерація зображення залежно від моделі)
+    // Нове повідомлення до Gemini (текст, фото/відео для аналізу, зображення, озвучка, музика, відео, агенти — залежно від моделі)
     socket.on('gemini_send', async (data, callback) => {
         const ackCb = typeof callback === 'function' ? callback : () => {};
-        const { email, name, text, model, attachment, lang: rawLang } = data || {};
+        const { email, name, text, model, attachment, lang: rawLang, settings: rawSettings } = data || {};
         const lang = geminiLang(rawLang);
         const cleanEmail = geminiCleanEmail(email);
         const cleanText = (typeof text === 'string' ? text : '').trim();
+        const gset = geminiCleanSettings(rawSettings);
 
         const attachUrl = attachment && typeof attachment.url === 'string' ? attachment.url : null;
         const attachType = attachment && attachment.type === 'video' ? 'video' : (attachUrl ? 'image' : null);
@@ -1725,6 +2074,8 @@ io.on('connection', (socket) => {
 
         socket.join(cleanEmail);
         const job = geminiMakeJob();
+        // Що зараз відбувається (чекаємо ліміт Google, перемкнулись на іншу модель...) — показуємо в застосунку
+        job.onNote = (note) => io.to(cleanEmail).emit('gemini_progress', note || { kind: 'clear' });
         geminiJobs.set(cleanEmail, job);
 
         // Результат віддаємо і через ack, і через подію gemini_done: якщо сокет перепідключився, ack загубиться,
@@ -1741,10 +2092,12 @@ io.on('connection', (socket) => {
         try {
             const catalog = await geminiGetCatalog();
             picked = geminiPickModel(catalog, typeof model === 'string' ? model : '');
-            const isImage = picked.type === 'image';
+            const kind = picked.type;                 // text | image | audio | video | agent
+            const isImage = kind === 'image';
 
             let mediaRecord = null;
             if (attachUrl) {
+                if (kind !== 'text' && kind !== 'image') throw new Error('ATTACH_UNSUPPORTED');
                 mediaRecord = await geminiGetMediaRecord(attachUrl);
                 if (!mediaRecord) throw new Error('ATTACH_MISSING');
                 if (!/^(image|video)\//.test(mediaRecord.mime || '')) throw new Error('ATTACH_BAD');
@@ -1755,6 +2108,16 @@ io.on('connection', (socket) => {
                 "INSERT INTO gemini_messages (id, email, role, text, timestamp, attach_url, attach_type, attach_thumb) VALUES (?, ?, 'user', ?, ?, ?, ?, ?)",
                 [userMsgId, cleanEmail, cleanText, now, attachUrl, attachType, attachThumb]
             );
+
+            const newId = () => `g_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            const saveMedia = async (mime, buffer) => {
+                const mediaId = crypto.randomBytes(16).toString('hex');
+                await geminiDbRun(
+                    "INSERT INTO gemini_images (id, email, mime, data, timestamp) VALUES (?, ?, ?, ?, ?)",
+                    [mediaId, cleanEmail, mime, buffer, Date.now()]
+                );
+                return mediaId;
+            };
 
             let reply;
 
@@ -1767,21 +2130,25 @@ io.on('connection', (socket) => {
                     inputImage = { mime: mediaRecord.mime, data: fs.readFileSync(filePath).toString('base64') };
                 }
                 const prompt = cleanText || 'Покращ це зображення';
-                const img = await callGeminiImageResilient(prompt, picked.id, job, inputImage);
+                const img = await callGeminiImageResilient(prompt, picked, catalog, job, inputImage);
                 geminiCheckCancelled(job);
-                const imageId = crypto.randomBytes(16).toString('hex');
-                await geminiDbRun(
-                    "INSERT INTO gemini_images (id, email, mime, data, timestamp) VALUES (?, ?, ?, ?, ?)",
-                    [imageId, cleanEmail, img.mime, Buffer.from(img.data, 'base64'), Date.now()]
-                );
-                reply = {
-                    id: `g_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-                    role: 'model',
-                    text: img.text || '',
-                    timestamp: Date.now(),
-                    model: picked.id,
-                    imageId
-                };
+                const imageId = await saveMedia(img.mime, Buffer.from(img.data, 'base64'));
+                reply = { id: newId(), role: 'model', text: img.text || '', timestamp: Date.now(), model: img.modelId || picked.id, imageId, fileType: null };
+            } else if (kind === 'audio') {
+                const chain = [picked].concat(catalog.filter(m => m.type === 'audio' && m.audioKind === picked.audioKind && !m.paid && m.id !== picked.id));
+                const out = await geminiRunChain(chain, (m) => callGeminiAudio(m, cleanText, job), job);
+                geminiCheckCancelled(job);
+                const mediaId = await saveMedia(out.result.mime, out.result.data);
+                reply = { id: newId(), role: 'model', text: out.result.text || '', timestamp: Date.now(), model: out.model.id, imageId: mediaId, fileType: 'video' };
+            } else if (kind === 'video') {
+                const out = await geminiRunChain([picked], (m) => callGeminiVideo(m, cleanText, job), job);
+                geminiCheckCancelled(job);
+                const mediaId = await saveMedia(out.result.mime, out.result.data);
+                reply = { id: newId(), role: 'model', text: out.result.text || '', timestamp: Date.now(), model: out.model.id, imageId: mediaId, fileType: 'video' };
+            } else if (kind === 'agent') {
+                const out = await geminiRunChain([picked], (m) => callGeminiAgent(m, cleanText, job), job);
+                geminiCheckCancelled(job);
+                reply = { id: newId(), role: 'model', text: stripEmoji(out.result.text), timestamp: Date.now(), model: out.model.id, imageId: null, fileType: null };
             } else {
                 const rows = await geminiDbAll(
                     `SELECT role, text, image_id AS "imageId", attach_url AS "attachUrl", attach_type AS "attachType"
@@ -1813,7 +2180,7 @@ io.on('connection', (socket) => {
                         }
                     }
                     let t = (r.text || '');
-                    if (r.imageId) t += ' [згенероване зображення]';
+                    if (r.imageId) t += (r.attachType === 'video' ? ' [згенероване аудіо або відео]' : ' [згенероване зображення]');
                     if (r.attachUrl && !r.include) t += (r.attachType === 'video' ? ' [користувач надіслав відео]' : ' [користувач надіслав фото]');
                     t = t.trim();
                     if (!t && parts.length === 0) t = '[порожнє повідомлення]';
@@ -1823,32 +2190,36 @@ io.on('connection', (socket) => {
                 }
 
                 const safeName = (typeof name === 'string' ? name : '').trim().slice(0, 60);
-                const systemText =
-                    'Ти — Gemini, штучний інтелект усередині месенджера Kishka (Кішка месенджер). ' +
-                    'Відповідай тією мовою, якою пише користувач. Пиши чітко, доброзичливо і по суті. ' +
-                    'Ти памʼятаєш попередні повідомлення цієї розмови з цим користувачем. ' +
-                    'Користувач може надсилати фото та відео: уважно аналізуй їх і відповідай на запитання про вміст. ' +
-                    `Зараз ${geminiNowText()}, рік — ${geminiCurrentYear()}. Твої внутрішні знання можуть бути застарілими, ` +
-                    'тому коли питають про актуальне (нові ігри, тренди, новини, ціни, релізи, події, версії програм, погоду, спорт) — ' +
-                    'ОБОВʼЯЗКОВО скористайся пошуком Google і спирайся на свіжі джерела, а не на памʼять. ' +
-                    'Ніколи не вважай, що зараз 2023 рік. Не використовуй емодзі та смайлики.' +
-                    (safeName ? ` Користувача звати ${safeName}.` : '');
+                let systemText;
+                if (picked.transcribe) {
+                    systemText = 'Ти — модель розпізнавання мовлення. Зроби повну дослівну розшифровку мовлення з наданого відео чи аудіо тією мовою, якою воно звучить. ' +
+                        'Якщо мовлення немає — скажи про це. Не додавай коментарів.';
+                } else {
+                    const styleLine = gset.style === 'short'
+                        ? 'Відповідай максимально коротко: 1-4 речення, якщо користувач не просить докладніше. '
+                        : (gset.style === 'detailed' ? 'Відповідай докладно, з поясненнями, прикладами та кроками. ' : '');
+                    const searchLine = gset.search
+                        ? 'Твої внутрішні знання можуть бути застарілими, тому коли питають про актуальне (нові ігри, тренди, новини, ціни, релізи, події, версії програм, погоду, спорт) — ' +
+                          'ОБОВʼЯЗКОВО скористайся пошуком Google і спирайся на свіжі джерела, а не на памʼять. '
+                        : 'Пошук в інтернеті вимкнений у налаштуваннях користувача: відповідай зі своїх знань і чесно попереджай, якщо інформація може бути застарілою. ';
+                    systemText =
+                        'Ти — Gemini, штучний інтелект усередині месенджера Kishka (Кішка месенджер). ' +
+                        'Відповідай тією мовою, якою пише користувач. Пиши чітко, доброзичливо і по суті. ' + styleLine +
+                        'Ти памʼятаєш попередні повідомлення цієї розмови з цим користувачем. ' +
+                        'Користувач може надсилати фото та відео: уважно аналізуй їх і відповідай на запитання про вміст. ' +
+                        `Зараз ${geminiNowText()}, рік — ${geminiCurrentYear()}. ` + searchLine +
+                        'Ніколи не вважай, що зараз 2023 рік. Не використовуй емодзі та смайлики.' +
+                        (safeName ? ` Користувача звати ${safeName}.` : '');
+                }
 
-                const result = await callGeminiResilient(contents, systemText, picked, catalog, job);
+                const result = await callGeminiResilient(contents, systemText, picked, catalog, job, { search: gset.search });
                 geminiCheckCancelled(job);
-                reply = {
-                    id: `g_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-                    role: 'model',
-                    text: stripEmoji(result.text),
-                    timestamp: Date.now(),
-                    model: result.model,
-                    imageId: null
-                };
+                reply = { id: newId(), role: 'model', text: stripEmoji(result.text), timestamp: Date.now(), model: result.model, imageId: null, fileType: null };
             }
 
             await geminiDbRun(
-                "INSERT INTO gemini_messages (id, email, role, text, timestamp, image_id, model) VALUES (?, ?, 'model', ?, ?, ?, ?)",
-                [reply.id, cleanEmail, reply.text, reply.timestamp, reply.imageId, reply.model]
+                "INSERT INTO gemini_messages (id, email, role, text, timestamp, image_id, model, attach_type) VALUES (?, ?, 'model', ?, ?, ?, ?, ?)",
+                [reply.id, cleanEmail, reply.text, reply.timestamp, reply.imageId, reply.model, reply.fileType]
             );
 
             finish({
@@ -1859,7 +2230,8 @@ io.on('connection', (socket) => {
                     text: reply.text,
                     timestamp: reply.timestamp,
                     model: reply.model,
-                    imageUrl: reply.imageId ? '/gemini-image/' + reply.imageId : null
+                    imageUrl: reply.imageId ? '/gemini-image/' + reply.imageId : null,
+                    fileType: reply.fileType
                 }
             });
         } catch (err) {
@@ -1874,6 +2246,7 @@ io.on('connection', (socket) => {
             }
         } finally {
             if (geminiJobs.get(cleanEmail) === job) geminiJobs.delete(cleanEmail);
+            io.to(cleanEmail).emit('gemini_progress', { kind: 'clear' });
         }
     });
 
@@ -1907,336 +2280,34 @@ io.on('connection', (socket) => {
 // ===================== КІНЕЦЬ БЛОКУ GEMINI =====================
 
 // =====================================================================
-// ===== AI PREVIEW: безкоштовна генерація зображень + чат із памʼяттю та пошуком =====
-// Зображення: Pollinations (безкоштовно, без ключа). Запасний варіант — безкоштовна модель Gemini (якщо є GEMINI_API_KEY).
-// Environment (необовʼязково):
-//   PREVIEW_IMAGE_PROVIDER     — pollinations (за замовчуванням) | gemini
-//   PREVIEW_GEMINI_IMAGE_MODEL — запасна модель зображень (за замовчуванням gemini-3.1-flash-lite-image)
-//   PREVIEW_TEXT_MODEL         — модель для відповідей (за замовчуванням як у Gemini-вкладці)
+// ===== KISHKA AI (Кішка ШІ): власний ШІ месенджера, окремий від Gemini — див. файл kishkaai.js =====
+// Він замінив вкладку AI Preview. Події сокета: kai_get_history, kai_get_status, kai_send, kai_cancel, kai_clear,
+// kai_get_facts, kai_clear_facts. Пошуку в інтернеті там немає (гуглить тільки Gemini).
 // =====================================================================
-db.serialize(() => {
-    db.run(`CREATE TABLE IF NOT EXISTS preview_messages (
-        id TEXT PRIMARY KEY,
-        email TEXT NOT NULL,
-        role TEXT NOT NULL,
-        text TEXT NOT NULL,
-        timestamp INTEGER NOT NULL,
-        image_id TEXT,
-        model TEXT
-    )`);
-    db.run("CREATE INDEX IF NOT EXISTS idx_preview_email_time ON preview_messages (email, timestamp)", () => {});
-});
-
-const previewJobs = new Map(); // email -> job
-const PREVIEW_CONTEXT_LIMIT = 40;
-const PREVIEW_HISTORY_LIMIT = 300;
-
-const IMAGE_INTENT_REGEX = new RegExp(
-    '(намал[юі]|нарису[йй]|згенеру[йї]|сгенери[рр]у[йй]|створи[^.!?\\n]{0,20}(зображенн|картинк|малюн|фото|ілюстрац|постер|логотип|обої)|' +
-    'создай[^.!?\\n]{0,20}(изображени|картинк|рисун|фото|иллюстрац|постер|логотип|обои)|' +
-    'зроби[^.!?\\n]{0,20}(зображенн|картинк|малюн|ілюстрац|постер|логотип|обої)|' +
-    'сделай[^.!?\\n]{0,20}(изображени|картинк|рисун|иллюстрац|постер|логотип|обои)|' +
-    '\\bdraw\\b|\\bpaint\\b|\\billustrate\\b|' +
-    '(generate|create|make|render)[^.!?\\n]{0,25}(image|picture|photo|drawing|illustration|logo|wallpaper|poster|avatar|art))',
-    'i'
-);
-
-function previewWantsImage(text, mode) {
-    if (mode === 'image') return true;
-    if (mode === 'chat') return false;
-    return IMAGE_INTENT_REGEX.test(String(text || ''));
-}
-
-function previewImageSize(text) {
-    const t = String(text || '').toLowerCase();
-    if (/(горизонталь|горизонтальн|landscape|16:9|широк|панорам)/.test(t)) return { w: 1344, h: 768 };
-    if (/(вертикаль|portrait|9:16|для телефон|сторіс|stories|обої на телефон|обои на телефон)/.test(t)) return { w: 768, h: 1344 };
-    return { w: 1024, h: 1024 };
-}
-
-// Завантаження зображення за URL (з редіректами, з можливістю скасування)
-function previewHttpGet(urlStr, job, redirects) {
-    redirects = redirects || 0;
-    return new Promise((resolve, reject) => {
-        if (job && job.cancelled) return reject(new Error('CANCELLED'));
-        let u;
-        try { u = new URL(urlStr); } catch (e) { return reject(e); }
-        const req = https.get({
-            hostname: u.hostname,
-            path: u.pathname + u.search,
-            headers: { 'User-Agent': 'KishkaMessenger/3.0', 'Accept': 'image/*,*/*;q=0.5' }
-        }, (res) => {
-            if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirects < 3) {
-                res.resume();
-                if (job) job.reqs.delete(req);
-                let next;
-                try { next = new URL(res.headers.location, urlStr).toString(); } catch (e) { return reject(e); }
-                return resolve(previewHttpGet(next, job, redirects + 1));
-            }
-            const chunks = [];
-            let total = 0;
-            res.on('data', (c) => {
-                total += c.length;
-                if (total > 20 * 1024 * 1024) { req.destroy(new Error('TOO_BIG')); return; }
-                chunks.push(c);
-            });
-            res.on('end', () => {
-                if (job) job.reqs.delete(req);
-                resolve({
-                    status: res.statusCode,
-                    mime: String(res.headers['content-type'] || '').split(';')[0].trim().toLowerCase(),
-                    data: Buffer.concat(chunks)
-                });
-            });
-            res.on('error', (e) => { if (job) job.reqs.delete(req); reject(e); });
-        });
-        if (job) job.reqs.add(req);
-        req.setTimeout(240000, () => req.destroy(new Error('IMAGE_TIMEOUT')));
-        req.on('error', (e) => { if (job) job.reqs.delete(req); reject(e); });
-    });
-}
-
-async function previewPollinations(prompt, size, job) {
-    const seed = Math.floor(Math.random() * 1000000000);
-    const url = 'https://image.pollinations.ai/prompt/' + encodeURIComponent(prompt.slice(0, 900)) +
-        `?model=flux&width=${size.w}&height=${size.h}&seed=${seed}&nologo=true&private=true`;
-    let lastErr = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-        geminiCheckCancelled(job);
+require('./kishkaai')({
+    io,
+    db,
+    dbRun: geminiDbRun,
+    dbAll: geminiDbAll,
+    cleanEmail: geminiCleanEmail,
+    langOf: geminiLang,
+    stripEmoji,
+    makeJob: geminiMakeJob,
+    cancelJob: geminiCancelJob,
+    checkCancelled: geminiCheckCancelled,
+    sleep: geminiSleep,
+    tz: process.env.GEMINI_TIMEZONE || 'Europe/Kyiv',
+    nowText: (lang) => {
         try {
-            const r = await previewHttpGet(url, job);
-            if (r.status === 200 && /^image\//.test(r.mime) && r.data.length > 1000) {
-                return { mime: r.mime === 'image/jpg' ? 'image/jpeg' : r.mime, data: r.data };
-            }
-            lastErr = new Error('HTTP ' + r.status);
-            lastErr.status = r.status;
+            return new Date().toLocaleString(lang === 'en' ? 'en-GB' : (lang === 'ru' ? 'ru-RU' : 'uk-UA'), {
+                timeZone: process.env.GEMINI_TIMEZONE || 'Europe/Kyiv', dateStyle: 'full', timeStyle: 'short'
+            });
         } catch (e) {
-            if (e.message === 'CANCELLED') throw e;
-            lastErr = e;
-        }
-        await geminiSleep(2500 * (attempt + 1));
-    }
-    throw lastErr || new Error('EMPTY_IMAGE');
-}
-
-async function previewGeminiImage(prompt, job) {
-    if (!process.env.GEMINI_API_KEY) throw new Error('NO_KEY');
-    const modelId = process.env.PREVIEW_GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-lite-image';
-    const img = await callGeminiImageResilient(prompt, modelId, job, null);
-    return { mime: img.mime, data: Buffer.from(img.data, 'base64') };
-}
-
-// Перетворює прохання користувача на детальний англійський опис для моделі зображень
-async function previewBuildImagePrompt(userText, catalog, job) {
-    if (!process.env.GEMINI_API_KEY) return userText;
-    try {
-        const model = geminiPickModel(catalog, process.env.PREVIEW_TEXT_MODEL || GEMINI_DEFAULT_MODEL);
-        if (!model || model.type !== 'text') return userText;
-        const system = 'Rewrite the user request into ONE detailed English prompt for a text-to-image model. ' +
-            'Describe subject, style, lighting, colors and composition. Do not add any text, letters or watermarks to the image. ' +
-            'Output ONLY the prompt, without quotes or explanations.';
-        const out = await callGemini([{ role: 'user', parts: [{ text: userText }] }], system, model, job, { noSearch: true });
-        const cleaned = String(out || '').replace(/^["'\s]+|["'\s]+$/g, '');
-        return cleaned.length >= 5 ? cleaned.slice(0, 900) : userText;
-    } catch (e) {
-        if (e && e.message === 'CANCELLED') throw e;
-        return userText;
-    }
-}
-
-async function previewGenerateImage(userText, catalog, job) {
-    const size = previewImageSize(userText);
-    const prompt = await previewBuildImagePrompt(userText, catalog, job);
-    geminiCheckCancelled(job);
-
-    const order = (process.env.PREVIEW_IMAGE_PROVIDER || 'pollinations').toLowerCase() === 'gemini'
-        ? ['gemini', 'pollinations'] : ['pollinations', 'gemini'];
-    let lastErr = null;
-    for (const provider of order) {
-        try {
-            const img = provider === 'gemini' ? await previewGeminiImage(prompt, job) : await previewPollinations(prompt, size, job);
-            return { mime: img.mime, data: img.data, prompt };
-        } catch (e) {
-            if (e && e.message === 'CANCELLED') throw e;
-            lastErr = e;
-            console.error(`AI Preview (${provider}):`, e && e.message);
+            return new Date().toISOString();
         }
     }
-    const err = new Error('IMAGE_FAILED');
-    err.cause = lastErr;
-    throw err;
-}
-
-function previewErrorText(err, lang) {
-    lang = geminiLang(lang);
-    if (err && err.message === 'IMAGE_FAILED') return geminiT('preview_image_failed', lang);
-    return geminiErrorText(err, null, lang);
-}
-
-io.on('connection', (socket) => {
-
-    socket.on('preview_get_history', async (email, callback) => {
-        const cb = typeof callback === 'function' ? callback : () => {};
-        const cleanEmail = geminiCleanEmail(email);
-        if (!cleanEmail) return cb({ success: false, messages: [] });
-        try {
-            const rows = await geminiDbAll(
-                `SELECT id, role, text, timestamp, "imageId", model FROM (
-                    SELECT id, role, text, timestamp, image_id AS "imageId", model
-                    FROM preview_messages WHERE email = ? ORDER BY timestamp DESC LIMIT ?
-                 ) AS recent ORDER BY timestamp ASC`,
-                [cleanEmail, PREVIEW_HISTORY_LIMIT]
-            );
-            cb({
-                success: true,
-                messages: rows.map((r) => ({
-                    id: r.id, role: r.role, text: r.text, timestamp: r.timestamp, model: r.model || null,
-                    imageUrl: r.imageId ? '/gemini-image/' + r.imageId : null
-                }))
-            });
-        } catch (err) {
-            console.error('Preview history error:', err.message);
-            cb({ success: false, messages: [] });
-        }
-    });
-
-    socket.on('preview_get_status', (email, callback) => {
-        const cb = typeof callback === 'function' ? callback : () => {};
-        const cleanEmail = geminiCleanEmail(email);
-        if (cleanEmail) socket.join(cleanEmail);
-        const job = cleanEmail ? previewJobs.get(cleanEmail) : null;
-        cb({ success: true, busy: !!job, startedAt: job ? job.startedAt : 0, image: !!(job && job.isImage) });
-    });
-
-    socket.on('preview_send', async (data, callback) => {
-        const ackCb = typeof callback === 'function' ? callback : () => {};
-        const { email, name, text, mode, lang: rawLang } = data || {};
-        const lang = geminiLang(rawLang);
-        const cleanEmail = geminiCleanEmail(email);
-        const cleanText = (typeof text === 'string' ? text : '').trim();
-
-        if (!cleanEmail || !cleanText) return ackCb({ success: false, error: geminiT('empty_msg', lang) });
-        if (cleanText.length > GEMINI_MAX_TEXT) return ackCb({ success: false, error: geminiT('too_long', lang) });
-        if (previewJobs.has(cleanEmail)) return ackCb({ success: false, error: geminiT('busy', lang) });
-
-        socket.join(cleanEmail);
-        const job = geminiMakeJob();
-        const wantsImage = previewWantsImage(cleanText, mode);
-        job.isImage = wantsImage;
-        previewJobs.set(cleanEmail, job);
-
-        const finish = (payload) => {
-            ackCb(payload);
-            io.to(cleanEmail).emit('preview_done', payload);
-        };
-
-        const now = Date.now();
-        const userMsgId = `p_${now}_${Math.random().toString(36).slice(2, 8)}`;
-
-        try {
-            const catalog = await geminiGetCatalog();
-            await geminiDbRun(
-                "INSERT INTO preview_messages (id, email, role, text, timestamp) VALUES (?, ?, 'user', ?, ?)",
-                [userMsgId, cleanEmail, cleanText, now]
-            );
-
-            let reply;
-            if (wantsImage) {
-                const img = await previewGenerateImage(cleanText, catalog, job);
-                geminiCheckCancelled(job);
-                const imageId = crypto.randomBytes(16).toString('hex');
-                await geminiDbRun(
-                    "INSERT INTO gemini_images (id, email, mime, data, timestamp) VALUES (?, ?, ?, ?, ?)",
-                    [imageId, cleanEmail, img.mime, img.data, Date.now()]
-                );
-                reply = {
-                    id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-                    role: 'model', text: '', timestamp: Date.now(), model: 'ai-preview', imageId,
-                    memoryText: '[згенероване зображення за запитом: ' + cleanText.slice(0, 200) + ']'
-                };
-            } else {
-                const picked = geminiPickModel(catalog, process.env.PREVIEW_TEXT_MODEL || GEMINI_DEFAULT_MODEL);
-                const rows = await geminiDbAll(
-                    `SELECT role, text, image_id AS "imageId" FROM preview_messages
-                     WHERE email = ? ORDER BY timestamp DESC, id DESC LIMIT ?`,
-                    [cleanEmail, PREVIEW_CONTEXT_LIMIT]
-                );
-                rows.reverse();
-                while (rows.length > 0 && rows[0].role !== 'user') rows.shift();
-                const contents = rows.map((r) => {
-                    let t = r.text || '';
-                    if (r.imageId && !t) t = '[згенероване зображення]';
-                    return { role: r.role, parts: [{ text: t || '[порожнє повідомлення]' }] };
-                });
-
-                const safeName = (typeof name === 'string' ? name : '').trim().slice(0, 60);
-                const systemText =
-                    'Ти — помічник вкладки AI Preview у месенджері Kishka. Ти вмієш: відповідати на повідомлення, памʼятати цю розмову, ' +
-                    'шукати актуальну інформацію в Google і створювати зображення (користувач просить: «намалюй ...» або вмикає кнопку малювання). ' +
-                    'Відповідай мовою користувача, чітко і по суті. ' +
-                    `Зараз ${geminiNowText()}, рік — ${geminiCurrentYear()}. Для актуальних питань (ігри, тренди, новини, ціни, події) використовуй пошук Google, ` +
-                    'а не застарілу памʼять. Не використовуй емодзі та смайлики.' +
-                    (safeName ? ` Користувача звати ${safeName}.` : '');
-
-                const result = await callGeminiResilient(contents, systemText, picked, catalog, job);
-                geminiCheckCancelled(job);
-                reply = {
-                    id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-                    role: 'model', text: stripEmoji(result.text), timestamp: Date.now(), model: result.model, imageId: null
-                };
-            }
-
-            await geminiDbRun(
-                "INSERT INTO preview_messages (id, email, role, text, timestamp, image_id, model) VALUES (?, ?, 'model', ?, ?, ?, ?)",
-                [reply.id, cleanEmail, reply.text, reply.timestamp, reply.imageId, reply.model]
-            );
-
-            finish({
-                success: true,
-                reply: {
-                    id: reply.id, role: 'model', text: reply.text, timestamp: reply.timestamp, model: reply.model,
-                    imageUrl: reply.imageId ? '/gemini-image/' + reply.imageId : null
-                }
-            });
-        } catch (err) {
-            const cancelled = err && err.message === 'CANCELLED';
-            if (!cancelled) console.error('Preview send error:', err && err.message);
-            try { await geminiDbRun("DELETE FROM preview_messages WHERE id = ?", [userMsgId]); } catch (e) {}
-            if (cancelled) {
-                ackCb({ success: false, cancelled: true, error: geminiT('stopped', lang) });
-            } else {
-                finish({ success: false, cancelled: false, error: previewErrorText(err, lang) });
-            }
-        } finally {
-            if (previewJobs.get(cleanEmail) === job) previewJobs.delete(cleanEmail);
-        }
-    });
-
-    socket.on('preview_cancel', (email, callback) => {
-        const cb = typeof callback === 'function' ? callback : () => {};
-        const cleanEmail = geminiCleanEmail(email);
-        const job = previewJobs.get(cleanEmail);
-        if (job) {
-            geminiCancelJob(job);
-            previewJobs.delete(cleanEmail);
-        }
-        cb({ success: true });
-    });
-
-    socket.on('preview_clear', async (email, callback) => {
-        const cb = typeof callback === 'function' ? callback : () => {};
-        const cleanEmail = geminiCleanEmail(email);
-        if (!cleanEmail) return cb({ success: false });
-        try {
-            await geminiDbRun("DELETE FROM preview_messages WHERE email = ?", [cleanEmail]);
-            cb({ success: true });
-        } catch (err) {
-            console.error('Preview clear error:', err.message);
-            cb({ success: false });
-        }
-    });
 });
-// ===================== КІНЕЦЬ БЛОКУ AI PREVIEW =====================
+// ===================== КІНЕЦЬ БЛОКУ KISHKA AI =====================
 
 // Не даємо Render Free "заснути" (він вимикає сервіс після 15 хв без запитів) — сервер сам звертається до себе
 (function keepAlive() {
