@@ -37,12 +37,22 @@ data class GeminiResult(
 data class GeminiModel(
     val id: String,
     val label: String,
-    val type: String = "text", // "text" або "image"
+    val type: String = "text", // "text", "image", "audio", "video" або "agent"
     val paid: Boolean = false, // позначка Paid в Google AI Studio
     val note: String = ""
 ) {
     val isImage: Boolean get() = type == "image"
+    val isAudio: Boolean get() = type == "audio"
+    val isVideo: Boolean get() = type == "video"
+    val isAgent: Boolean get() = type == "agent"
 }
+
+/** Що зараз робить Gemini, коли відповідь затримується: чекає ліміт Google, перемкнувся на іншу модель тощо. */
+data class GeminiNote(
+    val kind: String, // "wait", "busy", "switch", "agent"
+    val seconds: Int = 0,
+    val model: String = ""
+)
 
 /** Дескриптор запиту до Gemini: дозволяє його зупинити. */
 class GeminiCall(private val onCancel: () -> Unit) {
@@ -88,14 +98,29 @@ class GeminiManager(context: Context) {
         GeminiModel("gemini-flash-lite-latest", "Gemini Flash-Lite Latest", "text", false, "Завжди остання Flash-Lite"),
         GeminiModel("gemini-robotics-er-2-preview", "Gemini Robotics-ER 2 Preview", "text", false, "Розуміння простору та відео"),
         GeminiModel("gemini-robotics-er-2-streaming-preview", "Gemini Robotics-ER 2 Streaming", "text", false, "Швидкий потоковий режим"),
+        GeminiModel("gemma-4-31b-it", "Gemma 4 31B IT", "text", false, "Відкрита модель Gemma"),
+        GeminiModel("gemma-4-26b-a4b-it", "Gemma 4 26B A4B IT", "text", false, "Відкрита модель Gemma (MoE)"),
+        GeminiModel("gemini-3.5-transcribe", "Gemini 3.5 Transcribe", "text", false, "Розпізнавання мовлення з відео"),
         GeminiModel("gemini-nano-banana-2.1", "Nano Banana 2.1", "image", true, "Найкраща якість, до 4K"),
         GeminiModel("gemini-3.1-flash-lite-image", "Nano Banana 2 Lite", "image", false, "Найшвидша"),
         GeminiModel("gemini-3.1-flash-image", "Nano Banana 2", "image", true, "Збалансована"),
         GeminiModel("gemini-3-pro-image", "Nano Banana Pro", "image", true, "Професійна"),
-        GeminiModel("gemini-2.5-flash-image", "Nano Banana", "image", true, "Перша версія")
+        GeminiModel("gemini-2.5-flash-image", "Nano Banana", "image", true, "Перша версія"),
+        GeminiModel("gemini-3.8-flash-tts", "Gemini 3.8 Flash TTS", "audio", false, "Озвучка тексту"),
+        GeminiModel("gemini-3.8-flash-lite-tts", "Gemini 3.8 Flash Lite TTS", "audio", false, "Швидка озвучка"),
+        GeminiModel("gemini-3.1-flash-tts-preview", "Gemini 3.1 Flash TTS Preview", "audio", false, "Озвучка з низькою затримкою"),
+        GeminiModel("gemini-2.5-flash-preview-tts", "Gemini 2.5 Flash Preview TTS", "audio", false, "Озвучка (попередня версія)"),
+        GeminiModel("gemini-2.5-pro-preview-tts", "Gemini 2.5 Pro Preview TTS", "audio", false, "Озвучка вищої якості"),
+        GeminiModel("lyria-3.5", "Lyria 3.5", "audio", true, "Створення повних пісень"),
+        GeminiModel("lyria-3-pro-preview", "Lyria 3 Pro Preview", "audio", true, "Музика вищої якості"),
+        GeminiModel("lyria-3-clip-preview", "Lyria 3 Clip Preview", "audio", true, "Короткі музичні кліпи"),
+        GeminiModel("gemini-omni-1.1-flash", "Gemini Omni 1.1 Flash", "video", true, "Створення відео"),
+        GeminiModel("deep-research-preview-04-2026", "Deep Research Preview", "agent", true, "Глибоке дослідження"),
+        GeminiModel("deep-research-max-preview-04-2026", "Deep Research Max Preview", "agent", true, "Максимально повне дослідження"),
+        GeminiModel("antigravity-preview-09-2026", "Antigravity Agent Preview", "agent", true, "Автономний агент")
     )
 
-    private fun modelsCacheKey() = "gemini_models_cache_v2"
+    private fun modelsCacheKey() = "gemini_models_cache_v3"
 
     fun getCachedModels(): List<GeminiModel> {
         return try {
@@ -261,6 +286,7 @@ class GeminiManager(context: Context) {
             put("text", text)
             put("model", modelId)
             put("lang", lang)
+            put("settings", AiSettings.geminiJson(appContext))
             if (attachment != null) {
                 put("attachment", JSONObject().apply {
                     put("url", KishkaManager.relativeUrl(attachment.url) ?: attachment.url)
@@ -329,6 +355,27 @@ class GeminiManager(context: Context) {
     fun stopListeningDone() {
         doneListener?.let { socket.off("gemini_done", it) }
         doneListener = null
+    }
+
+    private var progressListener: io.socket.emitter.Emitter.Listener? = null
+
+    /** Підказки про хід відповіді (ліміт Google, зміна моделі). null означає "очистити підказку". */
+    fun listenProgress(onNote: (GeminiNote?) -> Unit) {
+        stopListeningProgress()
+        val listener = io.socket.emitter.Emitter.Listener { args ->
+            val obj = args.firstOrNull() as? JSONObject
+            val kind = obj?.optString("kind", "") ?: ""
+            val note = if (obj == null || kind.isEmpty() || kind == "clear") null
+            else GeminiNote(kind, obj.optInt("seconds", 0), obj.optString("model", ""))
+            mainHandler.post { onNote(note) }
+        }
+        progressListener = listener
+        socket.on("gemini_progress", listener)
+    }
+
+    fun stopListeningProgress() {
+        progressListener?.let { socket.off("gemini_progress", it) }
+        progressListener = null
     }
 
     /** Чи Gemini зараз відповідає на запит цього користувача (відновлення стану після перезапуску). */
