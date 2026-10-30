@@ -23,7 +23,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.SaveAlt
@@ -68,42 +68,42 @@ import kotlinx.coroutines.delay
 object PreviewStrings {
     private val dictionary = mapOf(
         "uk" to mapOf(
-            "preview_title" to "AI Preview",
-            "preview_subtitle" to "Чат, пошук і безкоштовні зображення",
-            "preview_empty" to "Опишіть, що намалювати, або поставте запитання. Я памʼятаю розмову, вмію шукати в інтернеті та створювати зображення безкоштовно.",
+            "preview_title" to "Кішка ШІ (Kishka)",
+            "preview_subtitle" to "Власний ШІ месенджера: чат, памʼять і зображення",
+            "preview_empty" to "Привіт! Я Кішка ШІ — власний штучний інтелект Kishka. Поставте запитання, попросіть порахувати, запамʼятати факт про вас або намалювати зображення. Я памʼятаю нашу розмову. Пошук в інтернеті доступний у вкладці Gemini.",
             "preview_hint" to "Опишіть зображення або поставте запитання",
             "preview_hint_draw" to "Опишіть, що намалювати",
             "preview_draw" to "Малювати",
             "preview_thinking" to "Думаю",
             "preview_generating" to "Створюю зображення",
-            "preview_cleared" to "Памʼять AI Preview очищено",
-            "preview_clear_confirm" to "Видалити всю розмову та памʼять AI Preview?",
+            "preview_cleared" to "Памʼять Кішки ШІ очищено",
+            "preview_clear_confirm" to "Видалити всю розмову та памʼять Кішки ШІ?",
             "preview_stop_hint" to "Натисніть ■ ще раз, щоб зупинити"
         ),
         "ru" to mapOf(
-            "preview_title" to "AI Preview",
-            "preview_subtitle" to "Чат, поиск и бесплатные изображения",
-            "preview_empty" to "Опишите, что нарисовать, или задайте вопрос. Я помню разговор, умею искать в интернете и создавать изображения бесплатно.",
+            "preview_title" to "Кішка ИИ (Kishka)",
+            "preview_subtitle" to "Собственный ИИ мессенджера: чат, память и изображения",
+            "preview_empty" to "Привет! Я Кішка ИИ — собственный искусственный интеллект Kishka. Задайте вопрос, попросите посчитать, запомнить факт о вас или нарисовать изображение. Я помню наш разговор. Поиск в интернете доступен во вкладке Gemini.",
             "preview_hint" to "Опишите изображение или задайте вопрос",
             "preview_hint_draw" to "Опишите, что нарисовать",
             "preview_draw" to "Рисовать",
             "preview_thinking" to "Думаю",
             "preview_generating" to "Создаю изображение",
-            "preview_cleared" to "Память AI Preview очищена",
-            "preview_clear_confirm" to "Удалить весь разговор и память AI Preview?",
+            "preview_cleared" to "Память Кішка ИИ очищена",
+            "preview_clear_confirm" to "Удалить весь разговор и память Кішка ИИ?",
             "preview_stop_hint" to "Нажмите ■ ещё раз, чтобы остановить"
         ),
         "en" to mapOf(
-            "preview_title" to "AI Preview",
-            "preview_subtitle" to "Chat, search and free images",
-            "preview_empty" to "Describe what to draw or ask a question. I remember the conversation, can search the web and create images for free.",
+            "preview_title" to "Kishka AI",
+            "preview_subtitle" to "The messenger's own AI: chat, memory and images",
+            "preview_empty" to "Hi! I am Kishka AI, the built-in artificial intelligence of Kishka. Ask a question, ask me to calculate, to remember a fact about you, or to draw an image. I remember our conversation. Web search is available in the Gemini tab.",
             "preview_hint" to "Describe an image or ask a question",
             "preview_hint_draw" to "Describe what to draw",
             "preview_draw" to "Draw",
             "preview_thinking" to "Thinking",
             "preview_generating" to "Creating the image",
-            "preview_cleared" to "AI Preview memory cleared",
-            "preview_clear_confirm" to "Delete the whole conversation and AI Preview memory?",
+            "preview_cleared" to "Kishka AI memory cleared",
+            "preview_clear_confirm" to "Delete the whole conversation and Kishka AI memory?",
             "preview_stop_hint" to "Tap ■ again to stop"
         )
     )
@@ -434,6 +434,6 @@ fun PreviewAvatar(size: Int) {
         modifier = Modifier.size(size.dp).clip(CircleShape).background(ViberPurple),
         contentAlignment = Alignment.Center
     ) {
-        Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Color.White, modifier = Modifier.size((size * 0.55f).dp))
+        Icon(Icons.Default.Pets, contentDescription = null, tint = Color.White, modifier = Modifier.size((size * 0.55f).dp))
     }
 }
