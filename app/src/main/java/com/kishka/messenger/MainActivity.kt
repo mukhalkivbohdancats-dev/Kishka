@@ -24,7 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallMade
 import androidx.compose.material.icons.filled.CallMissed
@@ -118,7 +118,7 @@ object Strings {
             "gemini_clear_confirm" to "Видалити всю історію та пам'ять вашої розмови з Gemini?",
             "gemini_cleared" to "Пам'ять Gemini очищено",
             "gemini_error" to "Gemini зараз недоступний. Спробуйте пізніше.",
-            "ai_preview" to "AI Preview",
+            "ai_preview" to "Кішка ШІ (Kishka)",
             "no_contacts" to "Контактів поки немає. Натисніть значок додавання вгорі, щоб додати людину за поштою.",
             "unread_empty" to "Непрочитаних повідомлень немає",
             "resend_verification" to "Надіслати лист підтвердження ще раз"
@@ -176,7 +176,7 @@ object Strings {
             "gemini_clear_confirm" to "Удалить всю историю и память вашего разговора с Gemini?",
             "gemini_cleared" to "Память Gemini очищена",
             "gemini_error" to "Gemini сейчас недоступен. Попробуйте позже.",
-            "ai_preview" to "AI Preview",
+            "ai_preview" to "Кішка ИИ (Kishka)",
             "no_contacts" to "Контактов пока нет. Нажмите значок добавления вверху, чтобы добавить человека по почте.",
             "unread_empty" to "Непрочитанных сообщений нет",
             "resend_verification" to "Отправить письмо подтверждения ещё раз"
@@ -234,7 +234,7 @@ object Strings {
             "gemini_clear_confirm" to "Delete the whole history and memory of your conversation with Gemini?",
             "gemini_cleared" to "Gemini memory cleared",
             "gemini_error" to "Gemini is unavailable right now. Please try again later.",
-            "ai_preview" to "AI Preview",
+            "ai_preview" to "Kishka AI",
             "no_contacts" to "No contacts yet. Tap the add icon at the top to add someone by email.",
             "unread_empty" to "No unread messages",
             "resend_verification" to "Send the confirmation email again"
@@ -338,7 +338,7 @@ fun OfflineBanner(lang: String) {
     }
 }
 
-/** Вкладки: 0 Чати, 1 Дзвінки, 2 Gemini, 3 AI Preview, 4 Акаунт. */
+/** Вкладки: 0 Чати, 1 Дзвінки, 2 Gemini, 3 Кішка ШІ (Kishka AI), 4 Акаунт. */
 private const val TAB_CHATS = 0
 private const val TAB_CALLS = 1
 private const val TAB_GEMINI = 2
@@ -359,7 +359,7 @@ private fun TabIcon(index: Int) {
         TAB_CHATS -> Icon(Icons.Default.Chat, contentDescription = null)
         TAB_CALLS -> Icon(Icons.Default.Call, contentDescription = null)
         TAB_GEMINI -> AsyncImage(model = GEMINI_LOGO_URL, contentDescription = null, modifier = Modifier.size(24.dp))
-        TAB_PREVIEW -> Icon(Icons.Default.AutoAwesome, contentDescription = null)
+        TAB_PREVIEW -> Icon(Icons.Default.Pets, contentDescription = null)
         else -> Icon(Icons.Default.Person, contentDescription = null)
     }
 }
@@ -551,7 +551,7 @@ fun KishkaApp() {
                                 onClick = { selectedBottomTab = tab },
                                 icon = { TabIcon(tab) },
                                 label = {
-                                    Text(Strings.get(tabLabelKey(tab), currentLanguage), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(Strings.get(tabLabelKey(tab), currentLanguage), fontSize = 10.sp, maxLines = 2, lineHeight = 11.sp, textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis)
                                 },
                                 alwaysShowLabel = true
                             )
@@ -594,7 +594,7 @@ fun KishkaApp() {
                                 onClick = { selectedBottomTab = tab },
                                 icon = { TabIcon(tab) },
                                 label = {
-                                    Text(Strings.get(tabLabelKey(tab), currentLanguage), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(Strings.get(tabLabelKey(tab), currentLanguage), fontSize = 10.sp, maxLines = 2, lineHeight = 11.sp, textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis)
                                 },
                                 alwaysShowLabel = true
                             )
@@ -1075,6 +1075,10 @@ fun AccountTab(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 LanguageSelector(currentLang = currentLang, onLangSelected = onLangChanged)
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                AiSettingsSection(email = email, lang = currentLang)
 
                 Spacer(modifier = Modifier.height(12.dp))
 
