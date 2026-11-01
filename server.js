@@ -995,13 +995,123 @@ io.on('connection', (socket) => {
 });
 
 // =====================================================================
+// ===== ПРИСУТНІСТЬ: «в мережі» / «був(-ла) в мережі 3 хв тому» — зберігається в базі (Neon) =====
+// Користувач вважається «в мережі», коли застосунок відкритий на екрані (застосунок надсилає presence_state).
+// Фонова служба, яка просто тримає сокет для сповіщень, «в мережі» не робить.
+// Події: presence_state {email, active}; get_presence {email} -> {presence: {email: {online, lastSeen}}};
+//        presence_changed {email, online, lastSeen} — надсилається всім, у кого цей користувач у контактах.
+// =====================================================================
+db.serialize(() => {
+    db.run(`CREATE TABLE IF NOT EXISTS user_presence (
+        email TEXT PRIMARY KEY,
+        last_seen INTEGER NOT NULL,
+        online INTEGER NOT NULL DEFAULT 0,
+        updated INTEGER NOT NULL
+    )`);
+    // Після перезапуску сервера жодного сокета немає: усіх вважаємо офлайн (час останньої активності вже збережений)
+    db.run('UPDATE user_presence SET online = 0');
+});
+
+const presenceActive = new Map();   // email -> Set(socket.id), у яких застосунок зараз на екрані
+
+function presenceIsOnline(email) {
+    const set = presenceActive.get(email);
+    return !!(set && set.size > 0);
+}
+
+async function presenceSave(email, online) {
+    const now = Date.now();
+    try {
+        await geminiDbRun(
+            'INSERT INTO user_presence (email, last_seen, online, updated) VALUES (?, ?, ?, ?) ' +
+            'ON CONFLICT(email) DO UPDATE SET last_seen = excluded.last_seen, online = excluded.online, updated = excluded.updated',
+            [email, now, online ? 1 : 0, now]
+        );
+    } catch (e) {
+        console.error('Presence save:', e.message);
+    }
+    return now;
+}
+
+async function presenceBroadcast(email, online, lastSeen) {
+    try {
+        const rows = await geminiDbAll('SELECT owner_email FROM contacts WHERE contact_email = ?', [email]);
+        rows.forEach((r) => io.to(r.owner_email).emit('presence_changed', { email, online, lastSeen }));
+    } catch (e) {
+        console.error('Presence broadcast:', e.message);
+    }
+}
+
+async function presenceSet(socket, email, active) {
+    const before = presenceIsOnline(email);
+    let set = presenceActive.get(email);
+    if (active) {
+        if (!set) { set = new Set(); presenceActive.set(email, set); }
+        set.add(socket.id);
+    } else if (set) {
+        set.delete(socket.id);
+        if (set.size === 0) presenceActive.delete(email);
+    }
+    const after = presenceIsOnline(email);
+    if (before !== after) {
+        const ts = await presenceSave(email, after);
+        presenceBroadcast(email, after, ts);
+    }
+}
+
+// Поки користувач в мережі, раз на хвилину оновлюємо «останню активність» — якщо сервер впаде, час буде майже точним
+setInterval(() => {
+    const now = Date.now();
+    presenceActive.forEach((set, email) => {
+        geminiDbRun('UPDATE user_presence SET last_seen = ?, updated = ? WHERE email = ?', [now, now, email]).catch(() => {});
+    });
+}, 60 * 1000);
+
+io.on('connection', (socket) => {
+    socket.on('presence_state', async (data) => {
+        const email = geminiCleanEmailEarly(data && data.email);
+        if (!email) return;
+        if (socket.presenceEmail && socket.presenceEmail !== email) {
+            await presenceSet(socket, socket.presenceEmail, false);
+        }
+        socket.presenceEmail = email;
+        socket.join(email);
+        await presenceSet(socket, email, !!(data && data.active));
+    });
+
+    socket.on('get_presence', async (data, callback) => {
+        const cb = typeof callback === 'function' ? callback : () => {};
+        const me = geminiCleanEmailEarly(data && data.email);
+        if (!me) return cb({ success: false, presence: {} });
+        try {
+            const rows = await geminiDbAll(
+                'SELECT p.email AS email, p.last_seen AS "lastSeen" FROM contacts c JOIN user_presence p ON p.email = c.contact_email WHERE c.owner_email = ?',
+                [me]
+            );
+            const presence = {};
+            rows.forEach((r) => {
+                presence[r.email] = { online: presenceIsOnline(r.email), lastSeen: Number(r.lastSeen) || 0 };
+            });
+            cb({ success: true, presence });
+        } catch (e) {
+            console.error('get_presence:', e.message);
+            cb({ success: false, presence: {} });
+        }
+    });
+
+    socket.on('disconnect', () => {
+        if (socket.presenceEmail) presenceSet(socket, socket.presenceEmail, false);
+    });
+});
+
+// =====================================================================
 // ===== GEMINI (ДОДАНО): моделі, зображення, зупинка запиту, памʼять ШІ =====
 // Існуючі події (повідомлення, контакти, дзвінки) НЕ змінені.
 //
 // Environment (Render -> Environment):
 //   GEMINI_API_KEY        — ключ з Google AI Studio (обовʼязково)
-//   GEMINI_MODEL          — модель за замовчуванням (необовʼязково, напр. gemini-3.8-flash)
-//   GEMINI_FALLBACK_MODEL — запасна модель при перевантаженні Google (необовʼязково)
+//   GEMINI_MODEL          — модель, яка береться ЛИШЕ коли користувач не вибрав жодної (необовʼязково, напр. gemini-3.8-flash)
+//   GEMINI_FALLBACK_MODEL — запасна модель, теж лише коли користувач не вибирав модель (необовʼязково)
 //   GEMINI_EXTRA_MODELS   — додаткові моделі, через кому:  id|Назва|text|paid
 //                           приклад: gemini-5-flash|Gemini 5 Flash|text,my-image-model|Моя картинка|image|paid
 //   GEMINI_HIDE_MODELS    — id моделей, які треба сховати зі списку, через кому
@@ -1013,6 +1123,8 @@ const GEMINI_CONTEXT_LIMIT = 40;      // скільки останніх пов�
 const GEMINI_HISTORY_LIMIT = 500;     // скільки повідомлень віддаємо в застосунок при відкритті вкладки
 const GEMINI_MAX_TEXT = 8000;
 // Таймаутів на відповідь моделі НЕМАЄ: запит триває, поки Google не відповість або користувач не натисне "Стоп".
+// Модель, яку користувач вибрав у застосунку, використовується ТОЧНО вона: жодних тихих підмін на іншу.
+// Міркування не обмежені (thinkingBudget = -1), відповідь надходить потоком, щоб Google не обривав довгі запити.
 
 // ---------------------------------------------------------------------
 // КАТАЛОГ МОДЕЛЕЙ (усі моделі зі списку AI Studio, які працюють як чат / генерація зображень).
@@ -1097,6 +1209,7 @@ function stripEmoji(text) {
 
 const GEMINI_SEARCH_ENABLED = process.env.GEMINI_SEARCH !== '0';
 const geminiNoSearchModels = new Set();   // моделі, які не підтримують пошук Google
+const geminiNoThinkCfg = new Set();       // моделі, які не приймають thinkingConfig
 
 function geminiParseList(raw) {
     return String(raw || '').split(/[,\n;]+/).map(s => s.trim()).filter(Boolean);
@@ -1214,7 +1327,7 @@ function geminiCheckCancelled(job) {
 }
 
 // ---------- Низькорівневий HTTPS-запит до Gemini API (БЕЗ таймауту) ----------
-function geminiRequest(method, path, bodyObj, job) {
+function geminiRequest(method, path, bodyObj, job, timeoutMs) {
     return new Promise((resolve, reject) => {
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) return reject(new Error('NO_KEY'));
@@ -1246,10 +1359,129 @@ function geminiRequest(method, path, bodyObj, job) {
         });
 
         if (job) job.reqs.add(req);
+        // Мертве зʼєднання (обрив мережі без повідомлення) виявляємо через TCP keep-alive, а не через таймер відповіді моделі
+        req.on('socket', (sock) => { try { sock.setKeepAlive(true, 15000); } catch (e) {} });
+        // Таймаут застосовується ТІЛЬКИ до службових запитів (список моделей), а не до відповіді моделі
+        if (timeoutMs) req.setTimeout(timeoutMs, () => req.destroy(new Error('TIMEOUT')));
         req.on('error', (e) => { if (job) job.reqs.delete(req); reject(e); });
         if (body) req.write(body);
         req.end();
     });
+}
+
+// ---------- Потокова генерація (SSE) ----------
+// Під час довгих міркувань зʼєднання не «мовчить»: Gemini надсилає шматки відповіді, тому Google не обриває запит за часом.
+// Результат збираємо в таку саму структуру, як у звичайного generateContent.
+function geminiStreamRequest(path, bodyObj, job, onThought) {
+    return new Promise((resolve, reject) => {
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) return reject(new Error('NO_KEY'));
+        if (job && job.cancelled) return reject(new Error('CANCELLED'));
+
+        const body = JSON.stringify(bodyObj);
+        let settled = false;
+        const done = (fn, v) => { if (settled) return; settled = true; fn(v); };
+
+        const req = https.request({
+            hostname: 'generativelanguage.googleapis.com',
+            path: path + (path.includes('?') ? '&' : '?') + 'alt=sse',
+            method: 'POST',
+            headers: {
+                'x-goog-api-key': apiKey,
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body)
+            }
+        }, (res) => {
+            const cleanup = () => { if (job) job.reqs.delete(req); };
+
+            if (res.statusCode !== 200) {
+                const chunks = [];
+                res.on('data', (c) => chunks.push(c));
+                res.on('end', () => {
+                    cleanup();
+                    let json = null;
+                    try { json = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch (e) {}
+                    done(resolve, { status: res.statusCode, json });
+                });
+                res.on('error', (e) => { cleanup(); done(reject, e); });
+                return;
+            }
+
+            const parts = [];
+            let finishReason = null;
+            let promptFeedback = null;
+            let apiError = null;
+            let buf = '';
+            res.setEncoding('utf8');
+
+            const handleBlock = (block) => {
+                block.split(/\r?\n/).forEach((line) => {
+                    if (!line.startsWith('data:')) return;
+                    const payload = line.slice(5).trim();
+                    if (!payload || payload === '[DONE]') return;
+                    let obj;
+                    try { obj = JSON.parse(payload); } catch (e) { return; }
+                    if (obj.error) { apiError = obj.error; return; }
+                    if (obj.promptFeedback) promptFeedback = obj.promptFeedback;
+                    const cand = obj.candidates && obj.candidates[0];
+                    if (!cand) return;
+                    if (cand.finishReason) finishReason = cand.finishReason;
+                    const cp = cand.content && cand.content.parts;
+                    if (Array.isArray(cp)) {
+                        cp.forEach((part) => {
+                            parts.push(part);
+                            if (part.thought && typeof onThought === 'function') { try { onThought(); } catch (e) {} }
+                        });
+                    }
+                });
+            };
+
+            res.on('data', (chunk) => {
+                buf += chunk;
+                let m;
+                while ((m = buf.match(/\r?\n\r?\n/))) {
+                    handleBlock(buf.slice(0, m.index));
+                    buf = buf.slice(m.index + m[0].length);
+                }
+            });
+            res.on('end', () => {
+                cleanup();
+                if (buf.trim()) handleBlock(buf);
+                if (apiError) {
+                    return done(resolve, { status: apiError.code || 500, json: { error: apiError } });
+                }
+                done(resolve, {
+                    status: 200,
+                    json: { candidates: [{ content: { parts }, finishReason }], promptFeedback }
+                });
+            });
+            res.on('error', (e) => { cleanup(); done(reject, e); });
+            // Звʼязок обірвався посеред відповіді: це мережева помилка, її повторюємо тією самою моделлю
+            res.on('close', () => { if (!res.complete) { cleanup(); done(reject, new Error('ECONNRESET')); } });
+        });
+
+        if (job) job.reqs.add(req);
+        req.on('socket', (sock) => { try { sock.setKeepAlive(true, 15000); } catch (e) {} });
+        req.on('error', (e) => { if (job) job.reqs.delete(req); done(reject, e); });
+        req.write(body);
+        req.end();
+    });
+}
+
+// Генерація однієї моделлю: спершу потоком, а якщо потік не підтримується — звичайним запитом
+async function geminiGenerate(model, body, job) {
+    const base = `/v1beta/models/${encodeURIComponent(model.id)}`;
+    const res = await geminiStreamRequest(base + ':streamGenerateContent', body, job, () => {
+        // Підказку «Gemini міркує» надсилаємо один раз, а не на кожен шматок міркувань
+        if (!job || !job.note || job.note.kind !== 'thinking') {
+            geminiNote(job, { kind: 'thinking', seconds: 0, model: model.label });
+        }
+    });
+    const msg = (res.json && res.json.error && res.json.error.message) || '';
+    if (res.status === 400 && /stream/i.test(msg) && !/think|thought/i.test(msg)) {
+        return geminiRequest('POST', base + ':generateContent', body, job);
+    }
+    return res;
 }
 
 // Розбір відповіді 429: скільки чекати (retryDelay) і який саме ліміт вичерпано (хвилинний, добовий чи нульовий)
@@ -1421,7 +1653,7 @@ async function geminiFetchRemoteModels() {
     let pageToken = '';
     for (let page = 0; page < 4; page++) {
         const q = '/v1beta/models?pageSize=1000' + (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : '');
-        const res = await geminiRequest('GET', q, null, null);
+        const res = await geminiRequest('GET', q, null, null, 15000);
         if (res.status !== 200 || !res.json || !Array.isArray(res.json.models)) throw geminiApiError(res);
         all.push(...res.json.models);
         pageToken = res.json.nextPageToken || '';
@@ -1474,8 +1706,26 @@ function geminiDefaultModel(catalog) {
         || catalog[0];
 }
 
+// Якщо користувач ВИБРАВ модель — працюємо саме з нею (жодних тихих підмін на іншу). Якщо її немає в каталозі —
+// пробуємо її за id, а Google сам скаже, чи вона існує. Модель за замовчуванням беремо тільки коли нічого не вибрано.
+function geminiGuessType(id) {
+    if (/image/i.test(id)) return 'image';
+    if (/tts|lyria/i.test(id)) return 'audio';
+    if (/veo|omni/i.test(id)) return 'video';
+    if (/deep-research|antigravity/i.test(id)) return 'agent';
+    return 'text';
+}
+
 function geminiPickModel(catalog, requestedId) {
-    return catalog.find(m => m.id === requestedId) || geminiDefaultModel(catalog);
+    const wanted = typeof requestedId === 'string' ? requestedId.trim() : '';
+    if (!wanted) return geminiDefaultModel(catalog);
+    const found = catalog.find(m => m.id === wanted);
+    if (found) return found;
+    if (/^[A-Za-z0-9._-]{3,80}$/.test(wanted)) {
+        const type = geminiGuessType(wanted);
+        return { id: wanted, label: wanted, type, paid: false, adhoc: true, audioKind: type === 'audio' ? (/lyria/i.test(wanted) ? 'music' : 'tts') : undefined };
+    }
+    return geminiDefaultModel(catalog);
 }
 
 // ---------- Текстова відповідь ----------
@@ -1492,29 +1742,39 @@ async function callGemini(contents, systemText, model, job, opts) {
         body.systemInstruction = { parts: [{ text: systemText }] };
     }
 
-    const endpoint = `/v1beta/models/${encodeURIComponent(model.id)}:generateContent`;
+    // Міркування БЕЗ обмеження: thinkingBudget = -1 означає «модель сама вирішує, скільки думати»
+    const useThinking = !model.noSystem && !model.special && !model.transcribe && model.type === 'text' && !geminiNoThinkCfg.has(model.id);
+    if (useThinking) {
+        body.generationConfig = Object.assign({}, body.generationConfig, { thinkingConfig: { thinkingBudget: -1, includeThoughts: true } });
+    }
+
     const useSearch = GEMINI_SEARCH_ENABLED && options.search !== false && !options.noSearch && !model.noSystem
         && !model.special && model.type === 'text' && !geminiNoSearchModels.has(model.id);
 
     let res;
     if (useSearch) {
         // Пошук Google: Gemini може шукати актуальну інформацію (ігри, тренди, новини) в інтернеті
-        res = await geminiRequest('POST', endpoint, Object.assign({}, body, { tools: [{ google_search: {} }] }), job);
+        res = await geminiGenerate(model, Object.assign({}, body, { tools: [{ google_search: {} }] }), job);
         const msg = (res.json && res.json.error && res.json.error.message) || '';
-        if (res.status === 400 && /tool|search|ground|function/i.test(msg)) {
+        if (res.status === 400 && /tool|search|ground|function/i.test(msg) && !/think|thought/i.test(msg)) {
             geminiNoSearchModels.add(model.id);
-            res = await geminiRequest('POST', endpoint, body, job);
+            res = await geminiGenerate(model, body, job);
         } else if (res.status === 429) {
             // Ліміт пошуку Google окремий від ліміту моделі: якщо вичерпано саме його — відповідаємо без пошуку
             const q = geminiQuotaInfo(res.json);
             const blob = JSON.stringify(res.json || {});
             if (/ground|search/i.test(blob) || q.kind === 'day' || q.kind === 'zero') {
-                const retry = await geminiRequest('POST', endpoint, body, job);
+                const retry = await geminiGenerate(model, body, job);
                 if (retry.status === 200) res = retry;
             }
         }
     } else {
-        res = await geminiRequest('POST', endpoint, body, job);
+        res = await geminiGenerate(model, body, job);
+    }
+    // Модель не підтримує налаштування міркувань — запамʼятовуємо й повторюємо без нього (модель лишається та сама)
+    if (res.status === 400 && useThinking && /think|thought/i.test((res.json && res.json.error && res.json.error.message) || '')) {
+        geminiNoThinkCfg.add(model.id);
+        return callGemini(contents, systemText, model, job, opts);
     }
     if (res.status !== 200) throw geminiApiError(res);
     if (!res.json) throw new Error('BAD_RESPONSE');
@@ -1530,7 +1790,7 @@ function geminiIsOverload(err) {
     const s = err && err.status;
     if (s === 500 || s === 502 || s === 503 || s === 504) return true;
     const m = err && err.message ? err.message : '';
-    return /ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up/i.test(m);
+    return /ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EPIPE|socket hang up|aborted|TIMEOUT/i.test(m);
 }
 
 const geminiSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -1559,7 +1819,7 @@ async function geminiWait(ms, job, model, kind) {
     geminiCheckCancelled(job);
 }
 
-async function geminiRunChain(chain, runner, job) {
+async function geminiRunChain(chain, runner, job, strict) {
     const nowMs = Date.now();
     let list = chain.filter(m => !((geminiDeadUntil.get(m.id) || 0) > nowMs));
     if (list.length === 0) list = chain.slice();
@@ -1567,6 +1827,7 @@ async function geminiRunChain(chain, runner, job) {
     let rateWaits = 0;
     let serverFails = 0;
     let rounds = 0;
+    let emptyFails = 0;
     let firstError = null;
 
     const advance = () => {
@@ -1616,6 +1877,12 @@ async function geminiRunChain(chain, runner, job) {
             }
             if (geminiIsOverload(err)) {
                 serverFails++;
+                if (strict) {
+                    // Обрана модель: не міняємо її на іншу, а повторюємо, доки Google не відповість або користувач не натисне «Стоп»
+                    console.error(`Gemini ${model.id}: перевантаження або обрив звʼязку (${s || m}), повтор ${serverFails}`);
+                    await geminiWait(Math.min(30000, 2000 * serverFails), job, model, 'busy');
+                    continue;
+                }
                 if (serverFails >= 4) {
                     if (list.length > 1 && rounds < 2) { advance(); continue; }
                     throw firstError;
@@ -1627,6 +1894,12 @@ async function geminiRunChain(chain, runner, job) {
             if (s === 403 || s === 404) {
                 geminiDeadUntil.set(model.id, Date.now() + 3600000);
                 if (!dropCurrent(model)) throw firstError;
+                continue;
+            }
+            if (strict && emptyFails < 3 && (m === 'EMPTY' || m === 'BAD_RESPONSE' || m === 'EMPTY_IMAGE' || m === 'EMPTY_AUDIO' || m === 'EMPTY_VIDEO')) {
+                emptyFails++;
+                console.error(`Gemini ${model.id}: порожня відповідь, повтор ${emptyFails}/3`);
+                await geminiWait(1500, job, model, 'busy');
                 continue;
             }
             if (s === 400 || m === 'EMPTY' || m === 'BAD_RESPONSE' || m === 'EMPTY_IMAGE' || m === 'EMPTY_AUDIO' || m === 'EMPTY_VIDEO') {
@@ -1650,7 +1923,9 @@ function geminiTextChain(picked, catalog) {
 }
 
 async function callGeminiResilient(contents, systemText, picked, catalog, job, opts) {
-    const out = await geminiRunChain(geminiTextChain(picked, catalog), (m) => callGemini(contents, systemText, m, job, opts), job);
+    const strict = !!(opts && opts.strict);
+    const chain = strict ? [picked] : geminiTextChain(picked, catalog);
+    const out = await geminiRunChain(chain, (m) => callGemini(contents, systemText, m, job, opts), job, strict);
     return { text: out.result, model: out.model.id };
 }
 
@@ -1728,9 +2003,9 @@ async function callGeminiImage(prompt, modelId, job, inputImage) {
     throw geminiApiError(res);
 }
 
-async function callGeminiImageResilient(prompt, picked, catalog, job, inputImage) {
-    const chain = [picked].concat(catalog.filter(m => m.type === 'image' && !m.paid && m.id !== picked.id));
-    const out = await geminiRunChain(chain, (m) => callGeminiImage(prompt, m.id, job, inputImage), job);
+async function callGeminiImageResilient(prompt, picked, catalog, job, inputImage, strict) {
+    const chain = strict ? [picked] : [picked].concat(catalog.filter(m => m.type === 'image' && !m.paid && m.id !== picked.id));
+    const out = await geminiRunChain(chain, (m) => callGeminiImage(prompt, m.id, job, inputImage), job, strict);
     return Object.assign({}, out.result, { modelId: out.model.id });
 }
 
@@ -2091,6 +2366,7 @@ io.on('connection', (socket) => {
 
         try {
             const catalog = await geminiGetCatalog();
+            const explicitModel = typeof model === 'string' && model.trim() !== '';
             picked = geminiPickModel(catalog, typeof model === 'string' ? model : '');
             const kind = picked.type;                 // text | image | audio | video | agent
             const isImage = kind === 'image';
@@ -2130,23 +2406,23 @@ io.on('connection', (socket) => {
                     inputImage = { mime: mediaRecord.mime, data: fs.readFileSync(filePath).toString('base64') };
                 }
                 const prompt = cleanText || 'Покращ це зображення';
-                const img = await callGeminiImageResilient(prompt, picked, catalog, job, inputImage);
+                const img = await callGeminiImageResilient(prompt, picked, catalog, job, inputImage, explicitModel);
                 geminiCheckCancelled(job);
                 const imageId = await saveMedia(img.mime, Buffer.from(img.data, 'base64'));
                 reply = { id: newId(), role: 'model', text: img.text || '', timestamp: Date.now(), model: img.modelId || picked.id, imageId, fileType: null };
             } else if (kind === 'audio') {
-                const chain = [picked].concat(catalog.filter(m => m.type === 'audio' && m.audioKind === picked.audioKind && !m.paid && m.id !== picked.id));
-                const out = await geminiRunChain(chain, (m) => callGeminiAudio(m, cleanText, job), job);
+                const chain = explicitModel ? [picked] : [picked].concat(catalog.filter(m => m.type === 'audio' && m.audioKind === picked.audioKind && !m.paid && m.id !== picked.id));
+                const out = await geminiRunChain(chain, (m) => callGeminiAudio(m, cleanText, job), job, explicitModel);
                 geminiCheckCancelled(job);
                 const mediaId = await saveMedia(out.result.mime, out.result.data);
                 reply = { id: newId(), role: 'model', text: out.result.text || '', timestamp: Date.now(), model: out.model.id, imageId: mediaId, fileType: 'video' };
             } else if (kind === 'video') {
-                const out = await geminiRunChain([picked], (m) => callGeminiVideo(m, cleanText, job), job);
+                const out = await geminiRunChain([picked], (m) => callGeminiVideo(m, cleanText, job), job, true);
                 geminiCheckCancelled(job);
                 const mediaId = await saveMedia(out.result.mime, out.result.data);
                 reply = { id: newId(), role: 'model', text: out.result.text || '', timestamp: Date.now(), model: out.model.id, imageId: mediaId, fileType: 'video' };
             } else if (kind === 'agent') {
-                const out = await geminiRunChain([picked], (m) => callGeminiAgent(m, cleanText, job), job);
+                const out = await geminiRunChain([picked], (m) => callGeminiAgent(m, cleanText, job), job, true);
                 geminiCheckCancelled(job);
                 reply = { id: newId(), role: 'model', text: stripEmoji(out.result.text), timestamp: Date.now(), model: out.model.id, imageId: null, fileType: null };
             } else {
@@ -2212,7 +2488,7 @@ io.on('connection', (socket) => {
                         (safeName ? ` Користувача звати ${safeName}.` : '');
                 }
 
-                const result = await callGeminiResilient(contents, systemText, picked, catalog, job, { search: gset.search });
+                const result = await callGeminiResilient(contents, systemText, picked, catalog, job, { search: gset.search, strict: explicitModel });
                 geminiCheckCancelled(job);
                 reply = { id: newId(), role: 'model', text: stripEmoji(result.text), timestamp: Date.now(), model: result.model, imageId: null, fileType: null };
             }
@@ -2281,8 +2557,9 @@ io.on('connection', (socket) => {
 
 // =====================================================================
 // ===== KISHKA AI (Кішка ШІ): власний ШІ месенджера, окремий від Gemini — див. файл kishkaai.js =====
-// Він замінив вкладку AI Preview. Події сокета: kai_get_history, kai_get_status, kai_send, kai_cancel, kai_clear,
-// kai_get_facts, kai_clear_facts. Пошуку в інтернеті там немає (гуглить тільки Gemini).
+// Він замінив вкладку AI Preview. Працює БЕЗ чужих ШІ (власні моделі Kishka-1 і Kishka-image, файли kishkaai.js,
+// kishkaknowledge.js, kishkaimage.js). Події сокета: kai_get_models, kai_get_history, kai_get_status, kai_send,
+// kai_cancel, kai_clear, kai_get_facts, kai_clear_facts. Пошуку в інтернеті там немає (гуглить тільки Gemini).
 // =====================================================================
 // Файл модуля шукаємо БЕЗ урахування регістру: на Linux (Render) Kishkaai.js і kishkaai.js — різні файли
 function loadKishkaAI() {
