@@ -89,6 +89,7 @@ fun ChatScreen(
     val context = LocalContext.current
     val saver = rememberGallerySaver(lang)
     val partnerTyping = isUserTyping(targetUser.email)
+    LaunchedEffect(targetUser.email) { Presence.request() }
     val myEmail = currentEmail.trim().lowercase()
     val cs: (String) -> String = { key -> ChatStrings.get(key, lang) }
 
@@ -210,7 +211,20 @@ fun ChatScreen(
                                 // Біля аватарки: "пише" з анімованими крапками та слайдером
                                 TypingIndicator(text = cs("typing"), fontSize = 12.sp)
                             } else {
-                                Text(targetUser.email, fontSize = 11.sp, color = Color.Gray)
+                                // «в мережі» або «був(-ла) в мережі 3 хв тому» / «о 16:56»; поки статусу немає — показуємо email
+                                val presenceInfo = PresenceRepo.state[targetUser.email.trim().lowercase()]
+                                val presenceNow = rememberPresenceNow()
+                                val statusText = PresenceText.status(lang, presenceInfo, presenceNow)
+                                if (statusText != null) {
+                                    Text(
+                                        statusText,
+                                        fontSize = 11.sp,
+                                        color = if (presenceInfo?.online == true) Color(0xFF2E9E5B) else Color.Gray,
+                                        maxLines = 1
+                                    )
+                                } else {
+                                    Text(targetUser.email, fontSize = 11.sp, color = Color.Gray)
+                                }
                             }
                         }
                     }
