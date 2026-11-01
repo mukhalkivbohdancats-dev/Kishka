@@ -3,6 +3,7 @@ package com.kishka.messenger
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -14,15 +15,20 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Delete
@@ -56,12 +62,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 
@@ -70,10 +80,16 @@ object PreviewStrings {
         "uk" to mapOf(
             "preview_title" to "Кішка ШІ (Kishka)",
             "preview_subtitle" to "Власний ШІ месенджера: чат, памʼять і зображення",
-            "preview_empty" to "Привіт! Я Кішка ШІ — власний штучний інтелект Kishka. Поставте запитання, попросіть порахувати, запамʼятати факт про вас або намалювати зображення. Я памʼятаю нашу розмову. Пошук в інтернеті доступний у вкладці Gemini.",
-            "preview_hint" to "Опишіть зображення або поставте запитання",
+            "preview_empty" to "Привіт! Я Кішка ШІ — власний штучний інтелект Kishka без чужих моделей. Kishka-1 відповідає на питання, рахує, памʼятає факти про вас і вчиться від вас: напишіть «Навчу тебе: питання = відповідь». Щоб намалювати зображення, оберіть модель Kishka-image (кнопка зліва від поля вводу). Пошук в інтернеті доступний у вкладці Gemini.",
+            "preview_model_choose" to "Обрати модель",
+            "preview_models_title" to "Моделі Кішки ШІ",
+            "preview_model_text_note" to "Чат, памʼять, калькулятор, знання",
+            "preview_model_image_note" to "Малює зображення власним алгоритмом",
+            "preview_tag_text" to "Текст",
+            "preview_tag_image" to "Зображення",
+            "preview_own_note" to "Власні моделі, без чужих ШІ",
+            "preview_hint" to "Поставте запитання Kishka-1",
             "preview_hint_draw" to "Опишіть, що намалювати",
-            "preview_draw" to "Малювати",
             "preview_thinking" to "Думаю",
             "preview_generating" to "Створюю зображення",
             "preview_cleared" to "Памʼять Кішки ШІ очищено",
@@ -83,10 +99,16 @@ object PreviewStrings {
         "ru" to mapOf(
             "preview_title" to "Кішка ИИ (Kishka)",
             "preview_subtitle" to "Собственный ИИ мессенджера: чат, память и изображения",
-            "preview_empty" to "Привет! Я Кішка ИИ — собственный искусственный интеллект Kishka. Задайте вопрос, попросите посчитать, запомнить факт о вас или нарисовать изображение. Я помню наш разговор. Поиск в интернете доступен во вкладке Gemini.",
-            "preview_hint" to "Опишите изображение или задайте вопрос",
+            "preview_empty" to "Привет! Я Кішка ИИ — собственный искусственный интеллект Kishka без чужих моделей. Kishka-1 отвечает на вопросы, считает, помнит факты о вас и учится у вас: напишите «Научу тебя: вопрос = ответ». Чтобы нарисовать изображение, выберите модель Kishka-image (кнопка слева от поля ввода). Поиск в интернете доступен во вкладке Gemini.",
+            "preview_model_choose" to "Выбрать модель",
+            "preview_models_title" to "Модели Кішка ИИ",
+            "preview_model_text_note" to "Чат, память, калькулятор, знания",
+            "preview_model_image_note" to "Рисует изображения собственным алгоритмом",
+            "preview_tag_text" to "Текст",
+            "preview_tag_image" to "Изображение",
+            "preview_own_note" to "Собственные модели, без чужих ИИ",
+            "preview_hint" to "Задайте вопрос Kishka-1",
             "preview_hint_draw" to "Опишите, что нарисовать",
-            "preview_draw" to "Рисовать",
             "preview_thinking" to "Думаю",
             "preview_generating" to "Создаю изображение",
             "preview_cleared" to "Память Кішка ИИ очищена",
@@ -96,10 +118,16 @@ object PreviewStrings {
         "en" to mapOf(
             "preview_title" to "Kishka AI",
             "preview_subtitle" to "The messenger's own AI: chat, memory and images",
-            "preview_empty" to "Hi! I am Kishka AI, the built-in artificial intelligence of Kishka. Ask a question, ask me to calculate, to remember a fact about you, or to draw an image. I remember our conversation. Web search is available in the Gemini tab.",
-            "preview_hint" to "Describe an image or ask a question",
+            "preview_empty" to "Hi! I am Kishka AI, the built-in artificial intelligence of Kishka, without any third-party models. Kishka-1 answers questions, calculates, remembers facts about you and learns from you: write “Teach you: question = answer”. To draw an image, choose the Kishka-image model (the button left of the input field). Web search is available in the Gemini tab.",
+            "preview_model_choose" to "Choose a model",
+            "preview_models_title" to "Kishka AI models",
+            "preview_model_text_note" to "Chat, memory, calculator, knowledge",
+            "preview_model_image_note" to "Draws images with its own algorithm",
+            "preview_tag_text" to "Text",
+            "preview_tag_image" to "Image",
+            "preview_own_note" to "Own models, no third-party AI",
+            "preview_hint" to "Ask Kishka-1 a question",
             "preview_hint_draw" to "Describe what to draw",
-            "preview_draw" to "Draw",
             "preview_thinking" to "Thinking",
             "preview_generating" to "Creating the image",
             "preview_cleared" to "Kishka AI memory cleared",
@@ -164,6 +192,7 @@ fun PreviewTab(
     var showClearDialog by remember { mutableStateOf(false) }
     var viewerUrl by remember { mutableStateOf<String?>(null) }
     var menuMessage by remember { mutableStateOf<GeminiMessage?>(null) }
+    var modelMenu by remember { mutableStateOf(false) }
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
 
     val messages = session.messages
@@ -195,7 +224,7 @@ fun PreviewTab(
                             Text(ps("preview_title"), fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ViberPurple)
                             Text(
                                 if (session.isSending) {
-                                    ps(if (session.drawMode) "preview_generating" else "preview_thinking") + "…"
+                                    ps(if (session.isImageModel) "preview_generating" else "preview_thinking") + "…"
                                 } else {
                                     ps("preview_subtitle")
                                 },
@@ -328,7 +357,7 @@ fun PreviewTab(
                                             CircularProgressIndicator(color = ViberPurple, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
                                             Spacer(modifier = Modifier.width(10.dp))
                                             Text(
-                                                "${ps(if (session.drawMode) "preview_generating" else "preview_thinking")}… " +
+                                                "${ps(if (session.isImageModel) "preview_generating" else "preview_thinking")}… " +
                                                     formatElapsed(elapsedSeconds, gs("sec_short"), gs("min_short")),
                                                 color = Color.Gray,
                                                 fontSize = 14.sp
@@ -346,11 +375,11 @@ fun PreviewTab(
                 }
             }
 
-            // Рядок вводу: [Малювати] [поле] [відправити / стоп]
+            // Рядок вводу: [модель] [поле] [відправити / стоп]
             KishkaInputBar(
                 value = session.draft,
                 onValueChange = { session.draft = it },
-                placeholder = ps(if (session.drawMode) "preview_hint_draw" else "preview_hint"),
+                placeholder = ps(if (session.isImageModel) "preview_hint_draw" else "preview_hint"),
                 canSend = session.draft.isNotBlank(),
                 busy = session.isSending,
                 stopArmed = session.stopArmed,
@@ -358,11 +387,16 @@ fun PreviewTab(
                 onStop = { session.onStopTap() },
                 onAttach = null,
                 leading = {
-                    DrawToggle(
-                        active = session.drawMode,
-                        label = ps("preview_draw"),
+                    KaiModelPill(
+                        selectedId = session.selectedModelId,
                         enabled = !session.isSending,
-                        onClick = { session.drawMode = !session.drawMode }
+                        expanded = modelMenu,
+                        lang = lang,
+                        onExpandedChange = { modelMenu = it },
+                        onSelect = { id ->
+                            session.selectModel(id)
+                            modelMenu = false
+                        }
                     )
                 }
             )
@@ -409,21 +443,128 @@ fun PreviewTab(
     GallerySavedDialog(saver)
 }
 
+private data class KaiModelInfo(val id: String, val label: String, val noteKey: String, val tagKey: String)
+
+private val KAI_MODELS = listOf(
+    KaiModelInfo(KAI_MODEL_TEXT, "Kishka-1", "preview_model_text_note", "preview_tag_text"),
+    KaiModelInfo(KAI_MODEL_IMAGE, "Kishka-image", "preview_model_image_note", "preview_tag_image")
+)
+
+/** Овальна кнопка з назвою моделі зліва від поля вводу (як у Gemini) + список моделей, що відкривається вгору. */
 @Composable
-private fun DrawToggle(active: Boolean, label: String, enabled: Boolean, onClick: () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = if (active) ViberPurple else ViberLightPurple,
-        modifier = Modifier.height(40.dp).clip(RoundedCornerShape(50)).clickable(enabled = enabled) { onClick() }
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
+private fun KaiModelPill(
+    selectedId: String,
+    enabled: Boolean,
+    expanded: Boolean,
+    lang: String,
+    onExpandedChange: (Boolean) -> Unit,
+    onSelect: (String) -> Unit
+) {
+    val ps: (String) -> String = { key -> PreviewStrings.get(key, lang) }
+    val selected = KAI_MODELS.firstOrNull { it.id == selectedId } ?: KAI_MODELS.first()
+    val gapPx = with(LocalDensity.current) { 8.dp.roundToPx() }
+
+    Box {
+        Surface(
+            shape = RoundedCornerShape(50),
+            color = if (enabled) ViberLightPurple else Color(0xFFF1F1F4),
+            border = BorderStroke(1.dp, ViberPurple.copy(alpha = if (enabled) 0.35f else 0.12f)),
+            modifier = Modifier.height(40.dp)
         ) {
-            Icon(Icons.Default.Brush, contentDescription = null, tint = if (active) Color.White else ViberPurple, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(label, color = if (active) Color.White else ViberPurple, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .clickable(enabled = enabled) { onExpandedChange(!expanded) }
+                    .padding(start = 14.dp, end = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    selected.label,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (enabled) ViberPurple else Color.Gray,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 110.dp)
+                )
+                Icon(
+                    Icons.Default.ArrowDropDown,
+                    contentDescription = ps("preview_model_choose"),
+                    tint = if (enabled) ViberPurple else Color.Gray,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        }
+
+        if (expanded) {
+            Popup(
+                popupPositionProvider = AbovePopupPositionProvider(gapPx),
+                onDismissRequest = { onExpandedChange(false) },
+                properties = PopupProperties(focusable = true)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(22.dp),
+                    color = Color.White,
+                    shadowElevation = 10.dp,
+                    border = BorderStroke(1.dp, ViberLightPurple),
+                    modifier = Modifier.width(300.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = 420.dp)
+                            .verticalScroll(rememberScrollState())
+                            .padding(vertical = 8.dp)
+                    ) {
+                        Text(
+                            ps("preview_models_title"),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = ViberPurple,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                        KAI_MODELS.forEach { m ->
+                            val isSelected = m.id == selected.id
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(if (isSelected) ViberLightPurple else Color.Transparent)
+                                    .clickable { onSelect(m.id) }
+                                    .padding(horizontal = 16.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        m.label,
+                                        fontSize = 14.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSelected) ViberPurple else Color.Black
+                                    )
+                                    Text(ps(m.noteKey), fontSize = 11.sp, color = Color.Gray)
+                                    Spacer(modifier = Modifier.height(3.dp))
+                                    Surface(shape = RoundedCornerShape(50), color = ViberLightPurple) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            if (m.id == KAI_MODEL_IMAGE) {
+                                                Icon(Icons.Default.Brush, contentDescription = null, tint = ViberPurple, modifier = Modifier.size(11.dp))
+                                                Spacer(modifier = Modifier.width(3.dp))
+                                            }
+                                            Text(ps(m.tagKey), fontSize = 10.sp, color = ViberPurple, fontWeight = FontWeight.SemiBold)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Text(
+                            ps("preview_own_note"),
+                            fontSize = 11.sp,
+                            color = Color.Gray,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+            }
         }
     }
 }
