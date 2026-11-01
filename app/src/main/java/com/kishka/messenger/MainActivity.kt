@@ -273,6 +273,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // «В мережі» показуємо, лише коли застосунок на екрані (фонова служба сповіщень цього не змінює)
+    override fun onStart() {
+        super.onStart()
+        Presence.setForeground(true)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        Presence.setForeground(false)
+    }
+
     // Активність у режимі singleTask: натискання на сповіщення / кнопку "Прийняти" приходить сюди
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
@@ -401,6 +412,7 @@ fun KishkaApp() {
 
             // Фоновий слухач повідомлень, служба й слухач дзвінків (працюють і коли застосунок закрито)
             manager.startGlobalMessageListener(currentUserEmail)
+            Presence.start(currentUserEmail)
             KishkaConnectionService.start(context)
             CallCoordinator.init(context, currentUserEmail)
 
@@ -451,6 +463,7 @@ fun KishkaApp() {
     }
 
     val doLogout: () -> Unit = {
+        Presence.stop()
         CallCoordinator.reset()
         KishkaConnectionService.stop(context)
         manager.resetSession()
@@ -841,6 +854,9 @@ fun ChatsTab(
         manager.listenToUserContacts(currentEmail) { }
     }
 
+    // Стан «в мережі» контактів (зберігається на сервері в Neon); оновлюється при зміні списку контактів
+    LaunchedEffect(contacts.size, currentEmail) { Presence.request() }
+
     val previews = remember(contacts, storeVersion) {
         contacts.associate { it.email to store.chatPreview(me, KishkaManager.chatIdFor(me, it.email)) }
     }
@@ -906,11 +922,16 @@ fun ChatsTab(
                                 modifier = Modifier.padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                AsyncImage(
-                                    model = if (user.avatarUrl.isNullOrEmpty()) DEFAULT_AVATAR_URL else user.avatarUrl,
-                                    contentDescription = "Avatar",
-                                    modifier = Modifier.size(56.dp).clip(CircleShape)
-                                )
+                                Box {
+                                    AsyncImage(
+                                        model = if (user.avatarUrl.isNullOrEmpty()) DEFAULT_AVATAR_URL else user.avatarUrl,
+                                        contentDescription = "Avatar",
+                                        modifier = Modifier.size(56.dp).clip(CircleShape)
+                                    )
+                                    if (PresenceRepo.state[user.email.trim().lowercase()]?.online == true) {
+                                        OnlineDot(modifier = Modifier.align(Alignment.BottomEnd))
+                                    }
+                                }
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
@@ -1037,11 +1058,18 @@ fun AccountTab(
     var nameInput by remember(displayName) { mutableStateOf(displayName) }
     var selectedPhotoUri by remember { mutableStateOf<Uri?>(null) }
     var isLoading by remember { mutableStateOf(false) }
+    // «Налаштування ШІ» — окремий екран, який відкривається з цієї вкладки
+    var showAiSettings by rememberSaveable { mutableStateOf(false) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         selectedPhotoUri = uri
+    }
+
+    if (showAiSettings) {
+        AiSettingsScreen(email = email, lang = currentLang, onBack = { showAiSettings = false })
+        return
     }
 
     Scaffold(
@@ -1078,7 +1106,7 @@ fun AccountTab(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                AiSettingsSection(email = email, lang = currentLang)
+                AiSettingsEntry(lang = currentLang, onOpen = { showAiSettings = true })
 
                 Spacer(modifier = Modifier.height(12.dp))
 
