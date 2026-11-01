@@ -79,6 +79,7 @@ fun geminiNoteText(note: GeminiNote, lang: String): String = when (note.kind) {
     "wait" -> String.format(GeminiStrings.get("gemini_note_wait", lang), note.seconds)
     "busy" -> String.format(GeminiStrings.get("gemini_note_busy", lang), note.seconds)
     "switch" -> String.format(GeminiStrings.get("gemini_note_switch", lang), note.model)
+    "thinking" -> GeminiStrings.get("gemini_note_thinking", lang)
     "agent" -> GeminiStrings.get("gemini_note_agent", lang)
     else -> ""
 }
@@ -106,6 +107,7 @@ object GeminiStrings {
             "gemini_note_wait" to "Ліміт Google: чекаю %d с і пробую знову",
             "gemini_note_busy" to "Сервер Google перевантажений: повтор через %d с",
             "gemini_note_switch" to "Перемикаюсь на модель %s",
+            "gemini_note_thinking" to "Gemini міркує над відповіддю. Обмеження часу немає — можна чекати скільки потрібно",
             "gemini_note_agent" to "Агент працює, це може тривати кілька хвилин",
             "gemini_thinking_label" to "Gemini думає",
             "gemini_generating_label" to "Gemini створює зображення",
@@ -144,6 +146,7 @@ object GeminiStrings {
             "gemini_note_wait" to "Лимит Google: жду %d с и пробую снова",
             "gemini_note_busy" to "Сервер Google перегружен: повтор через %d с",
             "gemini_note_switch" to "Переключаюсь на модель %s",
+            "gemini_note_thinking" to "Gemini размышляет над ответом. Ограничения времени нет — можно ждать сколько нужно",
             "gemini_note_agent" to "Агент работает, это может занять несколько минут",
             "gemini_thinking_label" to "Gemini думает",
             "gemini_generating_label" to "Gemini создаёт изображение",
@@ -182,6 +185,7 @@ object GeminiStrings {
             "gemini_note_wait" to "Google limit: waiting %d s, then retrying",
             "gemini_note_busy" to "Google server is busy: retrying in %d s",
             "gemini_note_switch" to "Switching to model %s",
+            "gemini_note_thinking" to "Gemini is reasoning about the answer. There is no time limit, so you can wait as long as needed",
             "gemini_note_agent" to "The agent is working, this may take a few minutes",
             "gemini_thinking_label" to "Gemini is thinking",
             "gemini_generating_label" to "Gemini is creating an image",
@@ -569,7 +573,7 @@ internal fun formatElapsed(seconds: Int, secLabel: String, minLabel: String): St
 }
 
 /** Розташовує список моделей НАД кнопкою моделі (над рядком вводу). */
-private class AbovePopupPositionProvider(private val gapPx: Int) : PopupPositionProvider {
+internal class AbovePopupPositionProvider(private val gapPx: Int) : PopupPositionProvider {
     override fun calculatePosition(
         anchorBounds: IntRect,
         windowSize: IntSize,
