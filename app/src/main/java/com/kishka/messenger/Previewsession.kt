@@ -10,6 +10,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
 
+const val KAI_MODEL_TEXT = "kishka-1"
+const val KAI_MODEL_IMAGE = "kishka-image"
+
 /**
  * Звʼязок вкладки Кішка ШІ (Kishka AI) із сервером. Використовує той самий сокет, що й месенджер.
  * Памʼять розмови зберігається на сервері окремо для кожного акаунта.
@@ -77,15 +80,15 @@ class PreviewManager(context: Context) {
         })
     }
 
-    /** mode: "image" — завжди малювати; "auto" — малювати лише за проханням, інакше відповісти текстом. */
-    fun send(email: String, displayName: String, text: String, mode: String, lang: String, onResult: (GeminiResult) -> Unit): GeminiCall {
+    /** model: "kishka-1" — відповідь текстом; "kishka-image" — створення зображення. Інших ШІ тут немає. */
+    fun send(email: String, displayName: String, text: String, model: String, lang: String, onResult: (GeminiResult) -> Unit): GeminiCall {
         ensureConnected()
         val cleanEmail = email.trim().lowercase()
         val json = JSONObject().apply {
             put("email", cleanEmail)
             put("name", displayName)
             put("text", text)
-            put("mode", mode)
+            put("model", model)
             put("lang", lang)
             put("settings", AiSettings.kaiJson(appContext))
         }
@@ -179,7 +182,17 @@ class PreviewSession(context: Context, val email: String) {
 
     var messages by mutableStateOf(listOf<GeminiMessage>())
     var draft by mutableStateOf("")
-    var drawMode by mutableStateOf(false)
+    /** Обрана модель: kishka-1 (текст) або kishka-image (зображення). Запамʼятовується між запусками. */
+    var selectedModelId by mutableStateOf(
+        AiSettings.kaiModel(appContext).let { if (it == KAI_MODEL_IMAGE) KAI_MODEL_IMAGE else KAI_MODEL_TEXT }
+    )
+        private set
+    val isImageModel: Boolean get() = selectedModelId == KAI_MODEL_IMAGE
+
+    fun selectModel(id: String) {
+        selectedModelId = if (id == KAI_MODEL_IMAGE) KAI_MODEL_IMAGE else KAI_MODEL_TEXT
+        AiSettings.setKaiModel(appContext, selectedModelId)
+    }
     var isSending by mutableStateOf(false)
     var sendStartedAt by mutableStateOf(0L)
     var isLoadingHistory by mutableStateOf(true)
@@ -223,7 +236,7 @@ class PreviewSession(context: Context, val email: String) {
         messages = messages + GeminiMessage(id = localId, role = "user", text = text, timestamp = System.currentTimeMillis())
         draft = ""
 
-        call = manager.send(email, displayName, text, if (drawMode) "image" else "auto", lang) { result ->
+        call = manager.send(email, displayName, text, selectedModelId, lang) { result ->
             handleResult(result, localId, text)
         }
     }
