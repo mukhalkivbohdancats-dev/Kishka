@@ -18,8 +18,26 @@ data class Message(
     val fileUrl: String? = null,
     val fileType: String? = null, // "image", "video" або "file"
     val thumbUrl: String? = null, // мініатюра відео
-    val fileName: String? = null  // назва файлу (для fileType = "file")
+    val fileName: String? = null, // назва файлу (для fileType = "file")
+    val seenAt: Long = 0L,        // коли співрозмовник побачив повідомлення (0 = ще ні)
+    val pending: Boolean = false  // ще не підтверджено сервером
 )
+
+/** Запис про дзвінок у чаті: сервер надсилає звичайне повідомлення з текстом [[call:статус:секунди]]. */
+data class CallRecordInfo(val status: String, val seconds: Long)
+
+private val callRecordRegex = Regex("^\\[\\[call:([a-z]+):(\\d+)\\]\\]$")
+
+fun parseCallRecord(text: String): CallRecordInfo? {
+    val m = callRecordRegex.matchEntire(text.trim()) ?: return null
+    return CallRecordInfo(m.groupValues[1], m.groupValues[2].toLongOrNull() ?: 0L)
+}
+
+/** Повідомлення від ШІ-бота в чаті (відповідь на @gemini / @chatgpt). */
+fun isAiBotEmail(email: String): Boolean {
+    val e = email.trim().lowercase()
+    return e == "gemini@kishka.ai" || e == "chatgpt@kishka.ai"
+}
 
 /** Запис в історії дзвінків (зберігається на пристрої). direction: "out" або "in". */
 data class CallLogItem(
