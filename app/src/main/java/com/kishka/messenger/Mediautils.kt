@@ -348,8 +348,10 @@ object MediaUtils {
                 conn.connectTimeout = 30000
                 conn.readTimeout = 120000
                 val rawMime = (conn.contentType ?: "image/png").substringBefore(';').trim()
+                // Озвучка (Gemini / ChatGPT) — це аудіо: зберігаємо як mp3 у Music/Kishka, а не як картинку
+                val isAudio = rawMime.startsWith("audio/")
                 val isVideo = rawMime.startsWith("video/")
-                val applyWatermark = watermark && !isVideo
+                val applyWatermark = watermark && !isVideo && !isAudio
                 // З ватермарком зображення зберігається як PNG
                 val mime = if (applyWatermark) "image/png" else rawMime
                 val ext = when {
@@ -357,17 +359,30 @@ object MediaUtils {
                     mime.contains("webp") -> "webp"
                     mime.contains("gif") -> "gif"
                     mime.contains("png") -> "png"
+                    mime.contains("mpeg") || mime.contains("mp3") -> if (isAudio) "mp3" else "mpg"
+                    mime.contains("wav") -> "wav"
+                    mime.contains("ogg") -> "ogg"
+                    mime.contains("aac") -> "aac"
+                    mime.contains("flac") -> "flac"
                     mime.contains("quicktime") -> "mov"
                     mime.contains("webm") -> "webm"
                     isVideo -> "mp4"
+                    isAudio -> "mp3"
                     else -> "png"
                 }
                 val name = "Kishka_${System.currentTimeMillis()}.$ext"
-                val folder = if (isVideo) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES
+                val folder = when {
+                    isAudio -> Environment.DIRECTORY_MUSIC
+                    isVideo -> Environment.DIRECTORY_MOVIES
+                    else -> Environment.DIRECTORY_PICTURES
+                }
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val collection = if (isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-                    else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                    val collection = when {
+                        isAudio -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+                        isVideo -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                        else -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                    }
                     val values = ContentValues().apply {
                         put(MediaStore.MediaColumns.DISPLAY_NAME, name)
                         put(MediaStore.MediaColumns.MIME_TYPE, mime)
