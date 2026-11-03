@@ -43,6 +43,8 @@ const USE_PG = /^postgres(ql)?:\/\//i.test(DATABASE_URL);
 const PG_PRIMARY_KEYS = {
     push_tokens: ['email', 'token'],
     gemini_media: ['media_id'],
+    contact_removed: ['owner_email', 'contact_email'],
+    gemini_caps: ['model_id'],
     media_blobs: ['id']
 };
 
@@ -222,6 +224,18 @@ db.serialize(() => {
     db.run("ALTER TABLE messages ADD COLUMN file_type TEXT", () => {});
     db.run("ALTER TABLE messages ADD COLUMN thumb_url TEXT", () => {});
     db.run("ALTER TABLE messages ADD COLUMN file_name TEXT", () => {});
+    // Галочки «прочитано» (час, коли отримувач побачив повідомлення) та другий учасник чату для відповідей @gemini / @chatgpt
+    db.run("ALTER TABLE messages ADD COLUMN seen_at INTEGER", () => {});
+    db.run("ALTER TABLE messages ADD COLUMN also_for TEXT", () => {});
+    db.run("CREATE INDEX IF NOT EXISTS idx_messages_also_for ON messages (also_for, timestamp)", () => {});
+
+    // Видалені контакти (щоб видалення дійшло й до інших пристроїв цього акаунта і контакт не «воскресав»)
+    db.run(`CREATE TABLE IF NOT EXISTS contact_removed (
+        owner_email TEXT NOT NULL,
+        contact_email TEXT NOT NULL,
+        removed_at INTEGER NOT NULL,
+        PRIMARY KEY (owner_email, contact_email)
+    )`);
 
     // Токени push-сповіщень (FCM) для доставки повідомлень, коли застосунок закритий
     db.run(`CREATE TABLE IF NOT EXISTS push_tokens (
@@ -555,6 +569,58 @@ setInterval(() => {
     busyUsers.forEach((e) => { if (!activeCalls.has(e)) busyUsers.delete(e); });
 }, 5 * 60 * 1000);
 
+// ===================== ЗАПИСИ ПРО ДЗВІНКИ У ЧАТІ + СЛУЖБОВІ ПОВІДОМЛЕННЯ =====================
+// Той самий алгоритм, що й у застосунку (KishkaManager.chatIdFor)
+function serverChatIdFor(a, b) {
+    const e1 = String(a || '').trim().toLowerCase().replace(/\./g, '_dot_');
+    const e2 = String(b || '').trim().toLowerCase().replace(/\./g, '_dot_');
+    return e1 < e2 ? `${e1}_${e2}` : `${e2}_${e1}`;
+}
+
+// Записує повідомлення в базу і надсилає його ВСІМ учасникам (кожному — зі своїм receiverEmail)
+async function serverDeliverMessage(msg, recipients) {
+    await geminiDbRun(
+        'INSERT INTO messages (id, chat_id, sender_email, receiver_email, text, timestamp, also_for) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [msg.id, msg.chatId, msg.senderEmail, msg.receiverEmail, msg.text, msg.timestamp, msg.alsoFor || null]
+    );
+    recipients.forEach((rcv) => {
+        io.to(rcv).emit('receive_message', {
+            id: msg.id, chatId: msg.chatId, senderEmail: msg.senderEmail, receiverEmail: rcv, text: msg.text,
+            timestamp: msg.timestamp, fileUrl: msg.fileUrl || null, fileType: msg.fileType || null, thumbUrl: null, fileName: null
+        });
+    });
+}
+
+// Дзвінок: caller|receiver -> { caller, receiver, startedAt, answeredAt }
+const callMeta = new Map();
+function takeCallMeta(a, b) {
+    const k1 = a + '|' + b;
+    const k2 = b + '|' + a;
+    const meta = callMeta.get(k1) || callMeta.get(k2) || null;
+    callMeta.delete(k1);
+    callMeta.delete(k2);
+    return meta;
+}
+
+// status: ended (з тривалістю) | cancelled (дзвонивший скинув до відповіді) | missed (ніхто не відповів) |
+//         declined (абонент відхилив) | unavailable (абонент не в мережі)
+// Текст запису: [[call:статус:секунди]] — застосунок показує його як «Пропущений виклик», «Виклик 2:15» тощо.
+function recordCall(caller, receiver, status, durationSec) {
+    if (!caller || !receiver) return;
+    const now = Date.now();
+    const id = 'call_' + now + '_' + crypto.randomBytes(4).toString('hex');
+    const text = '[[call:' + status + ':' + Math.max(0, Math.round(durationSec || 0)) + ']]';
+    serverDeliverMessage(
+        { id, chatId: serverChatIdFor(caller, receiver), senderEmail: caller, receiverEmail: receiver, text, timestamp: now },
+        [caller, receiver]
+    ).catch((e) => console.error('Запис про дзвінок:', e.message));
+}
+
+setInterval(() => {
+    const cutoff = Date.now() - 3 * 3600 * 1000;
+    callMeta.forEach((m, k) => { if (m.startedAt < cutoff) callMeta.delete(k); });
+}, 30 * 60 * 1000);
+
 io.on('connection', (socket) => {
     console.log('Клієнт підключився:', socket.id);
 
@@ -576,6 +642,8 @@ io.on('connection', (socket) => {
                 if (err) console.error('Помилка збереження профілю:', err.message);
             }
         );
+        // Щоб у контактів завжди був «останній раз у мережі» (а не порожньо)
+        geminiDbRun('INSERT OR IGNORE INTO user_presence (email, last_seen, online, updated) VALUES (?, ?, 0, ?)', [cleanEmail, Date.now(), Date.now()]).catch(() => {});
     });
 
     socket.on('get_user_profile', (email, callback) => {
@@ -623,6 +691,8 @@ io.on('connection', (socket) => {
                 return safeCallback({ success: false, code: 'not_found', message: "User is not registered in Kishka" });
             }
 
+            db.run("DELETE FROM contact_removed WHERE owner_email = ? AND contact_email = ?", [cleanMy, cleanTarget], () => {});
+            db.run("DELETE FROM contact_removed WHERE owner_email = ? AND contact_email = ?", [cleanTarget, cleanMy], () => {});
             const stmt = db.prepare("INSERT OR IGNORE INTO contacts (owner_email, contact_email) VALUES (?, ?)");
             stmt.run(cleanMy, cleanTarget);
             stmt.run(cleanTarget, cleanMy);
@@ -656,15 +726,20 @@ io.on('connection', (socket) => {
         const placeholders = wanted.map(() => '?').join(',');
         db.all("SELECT email FROM users WHERE email IN (" + placeholders + ")", wanted, (err, rows) => {
             if (err || !rows || rows.length === 0) return safeCallback({ success: true, added: 0 });
-            const existing = rows.map((r) => r.email);
-            const stmt = db.prepare("INSERT OR IGNORE INTO contacts (owner_email, contact_email) VALUES (?, ?)");
-            existing.forEach((email) => {
-                stmt.run(cleanMy, email);
-                stmt.run(email, cleanMy);
-            });
-            stmt.finalize(() => {
-                existing.forEach((email) => io.to(email).emit('contact_updated'));
-                safeCallback({ success: true, added: existing.length });
+            // Контакти, які користувач видалив, не повертаємо (інший пристрій міг ще їх пам'ятати)
+            db.all("SELECT contact_email FROM contact_removed WHERE owner_email = ?", [cleanMy], (rmErr, rmRows) => {
+                const removed = new Set((rmRows || []).map((r) => r.contact_email));
+                const existing = rows.map((r) => r.email).filter((e) => !removed.has(e));
+                if (existing.length === 0) return safeCallback({ success: true, added: 0 });
+                const stmt = db.prepare("INSERT OR IGNORE INTO contacts (owner_email, contact_email) VALUES (?, ?)");
+                existing.forEach((email) => {
+                    stmt.run(cleanMy, email);
+                    stmt.run(email, cleanMy);
+                });
+                stmt.finalize(() => {
+                    existing.forEach((email) => io.to(email).emit('contact_updated'));
+                    safeCallback({ success: true, added: existing.length });
+                });
             });
         });
     });
@@ -685,8 +760,10 @@ io.on('connection', (socket) => {
         `;
         db.all(query, [cleanEmail], (err, rows) => {
             // Помилка бази НЕ має виглядати як "контактів немає"
-            if (err) safeCallback({ success: false, contacts: [] });
-            else safeCallback({ success: true, contacts: rows || [] });
+            if (err) return safeCallback({ success: false, contacts: [] });
+            db.all("SELECT contact_email FROM contact_removed WHERE owner_email = ?", [cleanEmail], (rmErr, rmRows) => {
+                safeCallback({ success: true, contacts: rows || [], removed: (rmRows || []).map((r) => r.contact_email) });
+            });
         });
     });
 
@@ -696,7 +773,7 @@ io.on('connection', (socket) => {
         socket.join(chatId);
 
         db.all(
-            "SELECT id, chat_id AS \"chatId\", sender_email AS \"senderEmail\", receiver_email AS \"receiverEmail\", text, timestamp, file_url AS \"fileUrl\", file_type AS \"fileType\", thumb_url AS \"thumbUrl\", file_name AS \"fileName\" FROM messages WHERE chat_id = ? ORDER BY timestamp ASC",
+            "SELECT id, chat_id AS \"chatId\", sender_email AS \"senderEmail\", receiver_email AS \"receiverEmail\", text, timestamp, file_url AS \"fileUrl\", file_type AS \"fileType\", thumb_url AS \"thumbUrl\", file_name AS \"fileName\", seen_at AS \"seenAt\" FROM messages WHERE chat_id = ? ORDER BY timestamp ASC",
             [chatId],
             (err, rows) => {
                 if (!err) socket.emit('load_history', rows || []);
@@ -717,8 +794,8 @@ io.on('connection', (socket) => {
         userSockets.set(email, socket.id);
         socket.join(email);
         db.all(
-            "SELECT id, chat_id AS \"chatId\", sender_email AS \"senderEmail\", receiver_email AS \"receiverEmail\", text, timestamp, file_url AS \"fileUrl\", file_type AS \"fileType\", thumb_url AS \"thumbUrl\", file_name AS \"fileName\" FROM messages WHERE (sender_email = ? OR receiver_email = ?) AND timestamp > ? ORDER BY timestamp ASC LIMIT 5000",
-            [email, email, since],
+            "SELECT id, chat_id AS \"chatId\", sender_email AS \"senderEmail\", receiver_email AS \"receiverEmail\", text, timestamp, file_url AS \"fileUrl\", file_type AS \"fileType\", thumb_url AS \"thumbUrl\", file_name AS \"fileName\", seen_at AS \"seenAt\" FROM messages WHERE (sender_email = ? OR receiver_email = ? OR also_for = ?) AND timestamp > ? ORDER BY timestamp ASC LIMIT 5000",
+            [email, email, email, since],
             (err, rows) => {
                 if (err) return safeCallback({ success: false, messages: [] });
                 safeCallback({ success: true, messages: rows || [] });
@@ -744,6 +821,46 @@ io.on('connection', (socket) => {
 
     socket.on('leave_chat', (chatId) => {
         if (chatId) socket.leave(chatId);
+    });
+
+    // Отримувач побачив повідомлення: відправнику приходять дві фіолетові галочки (як у Viber)
+    socket.on('messages_seen', async (data) => {
+        const reader = geminiCleanEmailEarly(data && data.reader);
+        const peer = geminiCleanEmailEarly(data && data.peer);
+        const chatId = data && typeof data.chatId === 'string' ? data.chatId : '';
+        if (!reader || !peer || !chatId) return;
+        try {
+            const now = Date.now();
+            const rows = await geminiDbAll(
+                'SELECT id FROM messages WHERE chat_id = ? AND receiver_email = ? AND sender_email = ? AND seen_at IS NULL',
+                [chatId, reader, peer]
+            );
+            if (!rows.length) return;
+            await geminiDbRun(
+                'UPDATE messages SET seen_at = ? WHERE chat_id = ? AND receiver_email = ? AND sender_email = ? AND seen_at IS NULL',
+                [now, chatId, reader, peer]
+            );
+            io.to(peer).emit('messages_seen', { chatId, reader, ids: rows.map(r => r.id), seenAt: now });
+        } catch (e) {
+            console.error('messages_seen:', e.message);
+        }
+    });
+
+    // Видалення контакту ЛИШЕ у того, хто його видаляє (у співрозмовника контакт лишається)
+    socket.on('delete_contact', async (data, callback) => {
+        const cb = typeof callback === 'function' ? callback : () => {};
+        const me = geminiCleanEmailEarly(data && data.myEmail);
+        const other = geminiCleanEmailEarly(data && data.contactEmail);
+        if (!me || !other) return cb({ success: false });
+        try {
+            await geminiDbRun('DELETE FROM contacts WHERE owner_email = ? AND contact_email = ?', [me, other]);
+            await geminiDbRun('INSERT OR REPLACE INTO contact_removed (owner_email, contact_email, removed_at) VALUES (?, ?, ?)', [me, other, Date.now()]);
+            io.to(me).emit('contact_updated');
+            cb({ success: true });
+        } catch (e) {
+            console.error('delete_contact:', e.message);
+            cb({ success: false });
+        }
     });
 
     socket.on('send_message', (data) => {
@@ -892,6 +1009,7 @@ io.on('connection', (socket) => {
         // Абонент не в мережі: повідомляємо про це окремою подією (а не "лінія зайнята")
         if (!userIsOnline(cleanReceiver)) {
             io.to(cleanCaller).emit(`call_unavailable_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
+            recordCall(cleanCaller, cleanReceiver, 'unavailable', 0);
             return;
         }
 
@@ -900,11 +1018,14 @@ io.on('connection', (socket) => {
         socket.myCallEmails = [cleanCaller, cleanReceiver];
         activeCalls.set(cleanCaller, cleanReceiver);
         activeCalls.set(cleanReceiver, cleanCaller);
+        callMeta.set(cleanCaller + '|' + cleanReceiver, { caller: cleanCaller, receiver: cleanReceiver, startedAt: Date.now(), answeredAt: 0 });
 
         // Якщо ніхто не відповів за 60 секунд — дзвінок завершується на обох пристроях
         clearRingTimer(cleanCaller, cleanReceiver);
         ringTimers.set(cleanCaller + '|' + cleanReceiver, setTimeout(() => {
             ringTimers.delete(cleanCaller + '|' + cleanReceiver);
+            const metaTimeout = takeCallMeta(cleanCaller, cleanReceiver);
+            if (metaTimeout && !metaTimeout.answeredAt) recordCall(cleanCaller, cleanReceiver, 'missed', 0);
             finishCall(cleanCaller, cleanReceiver);
             io.to(cleanCaller).emit(`call_ended_${cleanCaller}`, { reason: 'no_answer' });
             io.to(cleanReceiver).emit(`call_ended_${cleanReceiver}`, { reason: 'no_answer' });
@@ -937,6 +1058,8 @@ io.on('connection', (socket) => {
         busyUsers.add(cleanReceiver);
         activeCalls.set(cleanCaller, cleanReceiver);
         activeCalls.set(cleanReceiver, cleanCaller);
+        const metaAnswer = callMeta.get(cleanCaller + '|' + cleanReceiver);
+        if (metaAnswer && !metaAnswer.answeredAt) metaAnswer.answeredAt = Date.now();
 
         io.to(cleanCaller).emit(`call_answered_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
     });
@@ -946,6 +1069,8 @@ io.on('connection', (socket) => {
         const cleanCaller = String(callerEmail || '').trim().toLowerCase();
         const cleanReceiver = String(receiverEmail || '').trim().toLowerCase();
 
+        const metaReject = takeCallMeta(cleanCaller, cleanReceiver);
+        if (metaReject && !metaReject.answeredAt) recordCall(metaReject.caller, metaReject.receiver, 'declined', 0);
         finishCall(cleanCaller, cleanReceiver);
         if (cleanCaller) io.to(cleanCaller).emit(`call_rejected_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
         // Інші пристрої того, хто відхилив, теж припиняють дзвонити
@@ -957,6 +1082,16 @@ io.on('connection', (socket) => {
         const cleanCaller = String(callerEmail || '').trim().toLowerCase();
         const cleanReceiver = String(receiverEmail || '').trim().toLowerCase();
 
+        const metaEnd = takeCallMeta(cleanCaller, cleanReceiver);
+        if (metaEnd) {
+            if (metaEnd.answeredAt) {
+                recordCall(metaEnd.caller, metaEnd.receiver, 'ended', (Date.now() - metaEnd.answeredAt) / 1000);
+            } else {
+                // До відповіді завершив той, хто дзвонив — «скасований»; якщо завершив абонент — «відхилений»
+                const by = socket.userEmail || '';
+                recordCall(metaEnd.caller, metaEnd.receiver, by === metaEnd.receiver ? 'declined' : 'cancelled', 0);
+            }
+        }
         finishCall(cleanCaller, cleanReceiver);
         if (cleanCaller) io.to(cleanCaller).emit(`call_ended_${cleanCaller}`, {});
         if (cleanReceiver) io.to(cleanReceiver).emit(`call_ended_${cleanReceiver}`, {});
@@ -966,7 +1101,9 @@ io.on('connection', (socket) => {
         const { targetEmail, chunk } = data || {};
         if (!targetEmail || !chunk) return;
         const cleanTarget = targetEmail.trim().toLowerCase();
-        io.to(cleanTarget).emit(`voice_chunk_${cleanTarget}`, chunk);
+        // volatile: якщо мережа клієнта «забита», застарілі пакети голосу відкидаються, а не накопичуються (інакше за 10+ хв звук «ламається»)
+        const voiceRoom = io.to(cleanTarget);
+        (voiceRoom.volatile || voiceRoom).emit(`voice_chunk_${cleanTarget}`, chunk);
     });
 
     socket.on('disconnect', () => {
@@ -984,6 +1121,11 @@ io.on('connection', (socket) => {
             callGrace.set(email, setTimeout(() => {
                 callGrace.delete(email);
                 if (userSockets.has(email) || userIsOnline(email)) return;
+                const metaGrace = takeCallMeta(email, peer);
+                if (metaGrace) {
+                    recordCall(metaGrace.caller, metaGrace.receiver, metaGrace.answeredAt ? 'ended' : 'cancelled',
+                        metaGrace.answeredAt ? (Date.now() - metaGrace.answeredAt) / 1000 : 0);
+                }
                 finishCall(email, peer);
                 io.to(peer).emit(`call_ended_${peer}`, {});
             }, CALL_GRACE_MS));
@@ -1136,6 +1278,7 @@ const GEMINI_CATALOG = [
     { id: 'gemini-4-argon',                          label: 'Gemini 4 Argon',                    type: 'text',  paid: true,  note: 'Найпотужніша модель' },
     { id: 'gemini-3.8-flash',                        label: 'Gemini 3.8 Flash',                  type: 'text',  paid: false, note: 'Найрозумніша Flash-модель' },
     { id: 'gemini-3.6-flash',                        label: 'Gemini 3.6 Flash',                  type: 'text',  paid: true,  note: 'Попереднє покоління Flash' },
+    { id: 'gemini-3.5-flash',                        label: 'Gemini 3.5 Flash',                  type: 'text',  paid: false, note: 'Швидка Flash-модель (за замовчуванням для @gemini)' },
     { id: 'gemini-3.5-flash-lite',                   label: 'Gemini 3.5 Flash-Lite',             type: 'text',  paid: false, note: 'Найшвидша' },
     { id: 'gemini-3.1-pro-preview',                  label: 'Gemini 3.1 Pro Preview',            type: 'text',  paid: false, note: 'Складні завдання та код' },
     { id: 'gemini-3.1-flash-lite',                   label: 'Gemini 3.1 Flash-Lite',             type: 'text',  paid: false, note: 'Легка та швидка' },
@@ -1210,6 +1353,21 @@ function stripEmoji(text) {
 const GEMINI_SEARCH_ENABLED = process.env.GEMINI_SEARCH !== '0';
 const geminiNoSearchModels = new Set();   // моделі, які не підтримують пошук Google
 const geminiNoThinkCfg = new Set();       // моделі, які не приймають thinkingConfig
+
+// Запамʼятовуємо можливості моделей у базі: після перезапуску сервера не витрачаємо зайві запити до Google
+db.run(`CREATE TABLE IF NOT EXISTS gemini_caps (model_id TEXT PRIMARY KEY, no_think INTEGER, no_search INTEGER)`, () => {
+    db.all('SELECT model_id, no_think, no_search FROM gemini_caps', [], (err, rows) => {
+        (rows || []).forEach((r) => {
+            if (Number(r.no_think)) geminiNoThinkCfg.add(r.model_id);
+            if (Number(r.no_search)) geminiNoSearchModels.add(r.model_id);
+        });
+    });
+});
+function geminiCapsSave(modelId, field) {
+    if (field !== 'no_think' && field !== 'no_search') return;
+    db.run(`INSERT INTO gemini_caps (model_id, no_think, no_search) VALUES (?, ?, ?) ON CONFLICT(model_id) DO UPDATE SET ${field} = 1`,
+        [modelId, field === 'no_think' ? 1 : 0, field === 'no_search' ? 1 : 0], () => {});
+}
 
 function geminiParseList(raw) {
     return String(raw || '').split(/[,\n;]+/).map(s => s.trim()).filter(Boolean);
@@ -1678,22 +1836,42 @@ async function geminiGetCatalog() {
 
     // Відкриті моделі Gemma (безкоштовні) підтягуємо автоматично зі списку Google
     let remoteOk = false;
+    let remoteIds = null;
     try {
         const remote = await geminiFetchRemoteModels();
         remoteOk = true;
+        remoteIds = new Set();
         remote.forEach((m) => {
             const id = String(m.name || '').replace(/^models\//, '');
             const methods = m.supportedGenerationMethods || [];
-            if (/^gemma-/.test(id) && methods.includes('generateContent') && !models.some(x => x.id === id)) {
+            remoteIds.add(id);
+            if (!methods.includes('generateContent') || models.some(x => x.id === id)) return;
+            if (/^gemma-/.test(id)) {
                 models.push({ id, label: m.displayName || id, type: 'text', paid: false, note: 'Gemma (відкрита модель)', noSystem: true });
+            } else if (/^(gemini|nano-banana)/.test(id) && !/embed|live|native-audio|aqa|computer-use|learnlm/i.test(id)) {
+                // Усі інші моделі зі списку Google для цього ключа з'являються самі — нічого не треба додавати вручну
+                const type = geminiGuessType(id);
+                models.push({ id, label: m.displayName || id, type, paid: false, note: 'З вашого списку Google', audioKind: type === 'audio' ? 'tts' : undefined });
             }
         });
     } catch (e) {
         console.error('Gemini ListModels:', e.message);
     }
 
+    // Якщо Google точно знає список моделей цього ключа — ховаємо ті, яких там немає (вони дають лише помилку 404).
+    // Агенти, відео та музика працюють через інший API, тому їх не чіпаємо. GEMINI_SHOW_ALL=1 вимикає це приховування.
+    const extraIds = new Set(geminiExtraModels().map(m => m.id));
+    let visible = models;
+    if (remoteIds && remoteIds.size >= 5 && process.env.GEMINI_SHOW_ALL !== '1') {
+        visible = models.filter((m) => {
+            if (extraIds.has(m.id)) return true;
+            const checkable = m.type === 'text' || m.type === 'image' || (m.type === 'audio' && m.audioKind === 'tts');
+            return !checkable || remoteIds.has(m.id);
+        });
+    }
+
     const hidden = new Set(geminiParseList(process.env.GEMINI_HIDE_MODELS));
-    const result = models.filter(m => !hidden.has(m.id));
+    const result = visible.filter(m => !hidden.has(m.id));
 
     geminiCatalogCache = { at: now, ttl: remoteOk ? 3600000 : 300000, models: result };
     return result;
@@ -1758,12 +1936,13 @@ async function callGemini(contents, systemText, model, job, opts) {
         const msg = (res.json && res.json.error && res.json.error.message) || '';
         if (res.status === 400 && /tool|search|ground|function/i.test(msg) && !/think|thought/i.test(msg)) {
             geminiNoSearchModels.add(model.id);
+            geminiCapsSave(model.id, 'no_search');
             res = await geminiGenerate(model, body, job);
         } else if (res.status === 429) {
             // Ліміт пошуку Google окремий від ліміту моделі: якщо вичерпано саме його — відповідаємо без пошуку
             const q = geminiQuotaInfo(res.json);
             const blob = JSON.stringify(res.json || {});
-            if (/ground|search/i.test(blob) || q.kind === 'day' || q.kind === 'zero') {
+            if (/ground|google_search|search_tool/i.test(blob)) {
                 const retry = await geminiGenerate(model, body, job);
                 if (retry.status === 200) res = retry;
             }
@@ -1774,6 +1953,7 @@ async function callGemini(contents, systemText, model, job, opts) {
     // Модель не підтримує налаштування міркувань — запамʼятовуємо й повторюємо без нього (модель лишається та сама)
     if (res.status === 400 && useThinking && /think|thought/i.test((res.json && res.json.error && res.json.error.message) || '')) {
         geminiNoThinkCfg.add(model.id);
+        geminiCapsSave(model.id, 'no_think');
         return callGemini(contents, systemText, model, job, opts);
     }
     if (res.status !== 200) throw geminiApiError(res);
@@ -2029,6 +2209,36 @@ function geminiPcmToWav(pcm, sampleRate, channels) {
     return Buffer.concat([header, pcm]);
 }
 
+// MP3 (бібліотека @breezystack/lamejs). Якщо вона недоступна — залишаємо WAV, озвучка все одно працює.
+let geminiMp3Encoder = null;
+try {
+    const lame = require('@breezystack/lamejs');
+    geminiMp3Encoder = lame.Mp3Encoder || (lame.default && lame.default.Mp3Encoder) || null;
+} catch (e) {
+    console.warn('MP3-кодувальник недоступний (npm install @breezystack/lamejs). Озвучка зберігатиметься як WAV.');
+}
+
+function geminiPcmToMp3(pcm, sampleRate) {
+    if (!geminiMp3Encoder) return null;
+    try {
+        const samples = new Int16Array(Math.floor(pcm.length / 2));
+        for (let i = 0; i < samples.length; i++) samples[i] = pcm.readInt16LE(i * 2);
+        const encoder = new geminiMp3Encoder(1, sampleRate, 128);
+        const out = [];
+        for (let i = 0; i < samples.length; i += 1152) {
+            const chunk = encoder.encodeBuffer(samples.subarray(i, i + 1152));
+            if (chunk && chunk.length) out.push(Buffer.from(chunk));
+        }
+        const tail = encoder.flush();
+        if (tail && tail.length) out.push(Buffer.from(tail));
+        const buf = Buffer.concat(out);
+        return buf.length > 100 ? buf : null;
+    } catch (e) {
+        console.error('PCM -> MP3:', e.message);
+        return null;
+    }
+}
+
 async function callGeminiAudio(model, text, job) {
     const endpoint = `/v1beta/models/${encodeURIComponent(model.id)}:generateContent`;
     const base = { contents: [{ role: 'user', parts: [{ text }] }] };
@@ -2061,7 +2271,8 @@ async function callGeminiAudio(model, text, job) {
     if (!audio) throw new Error('EMPTY_AUDIO');
     if (/L16|pcm/i.test(audio.mime)) {
         const rate = parseInt((audio.mime.match(/rate=(\d+)/) || [])[1] || '24000', 10);
-        audio = { mime: 'audio/wav', data: geminiPcmToWav(audio.data, rate, 1) };
+        const mp3 = geminiPcmToMp3(audio.data, rate);
+        audio = mp3 ? { mime: 'audio/mpeg', data: mp3 } : { mime: 'audio/wav', data: geminiPcmToWav(audio.data, rate, 1) };
     }
     return { mime: audio.mime.split(';')[0].trim().toLowerCase(), data: audio.data, text: note.trim() };
 }
@@ -2208,6 +2419,9 @@ const GEMINI_ERRORS = {
     empty_msg:     { uk: 'Порожнє повідомлення', ru: 'Пустое сообщение', en: 'Empty message' },
     too_long:      { uk: 'Повідомлення занадто довге', ru: 'Сообщение слишком длинное', en: 'The message is too long' },
     preview_image_failed: { uk: 'Не вдалося створити зображення: безкоштовний сервіс зараз зайнятий. Спробуйте ще раз за хвилину', ru: 'Не удалось создать изображение: бесплатный сервис сейчас занят. Попробуйте ещё раз через минуту', en: 'Could not create the image: the free service is busy right now. Try again in a minute' },
+    zero_quota:    { uk: 'Google не дає моделі %s безкоштовної квоти для вашого ключа (limit: 0). Підключіть оплату: aistudio.google.com -> Get API key -> Set up billing',
+                     ru: 'Google не даёт модели %s бесплатной квоты для вашего ключа (limit: 0). Подключите оплату: aistudio.google.com -> Get API key -> Set up billing',
+                     en: 'Google gives %s no free quota for your key (limit: 0). Enable billing: aistudio.google.com -> Get API key -> Set up billing' },
     quota_day:     { uk: 'Добовий ліміт безкоштовного ключа Gemini вичерпано для всіх доступних моделей. Він оновиться завтра, або підключіть платний тариф Google AI Studio', ru: 'Суточный лимит бесплатного ключа Gemini исчерпан для всех доступных моделей. Он обновится завтра, либо подключите платный тариф Google AI Studio', en: 'The daily limit of the free Gemini key is used up for all available models. It resets tomorrow, or enable a paid Google AI Studio plan' },
     empty_audio:   { uk: 'Gemini не повернув аудіо. Спробуйте інший текст або іншу модель', ru: 'Gemini не вернул аудио. Попробуйте другой текст или другую модель', en: 'Gemini returned no audio. Try another text or another model' },
     empty_video:   { uk: 'Gemini не повернув відео. Спробуйте інший опис або іншу модель', ru: 'Gemini не вернул видео. Попробуйте другое описание или другую модель', en: 'Gemini returned no video. Try another description or another model' },
@@ -2244,6 +2458,7 @@ function geminiErrorText(err, picked, lang) {
     if (m === 'EMPTY_VIDEO') return geminiT('empty_video', lang);
     if (m === 'AGENT_FAILED') return geminiT('agent_failed', lang);
     if (s === 429 && err.quota === 'day') return geminiT('quota_day', lang);
+    if (s === 429 && err.quota === 'zero') return geminiT('zero_quota', lang, name);
     if ((s === 403 || s === 429) && picked && picked.paid) return geminiT('paid', lang, name);
     if (s === 403) return geminiT('forbidden', lang, name);
     if (s === 404 || (s === 429 && err.quota === 'zero')) return geminiT('not_found', lang, name);
@@ -2595,6 +2810,140 @@ if (initKishkaAI) initKishkaAI({
     }
 });
 // ===================== КІНЕЦЬ БЛОКУ KISHKA AI =====================
+
+// =====================================================================
+// ===== CHATGPT (файл chatgpt.js) =====
+// =====================================================================
+function loadSiblingModule(fileName) {
+    const found = fs.readdirSync(__dirname).find(f => f.toLowerCase() === fileName.toLowerCase());
+    if (!found) { console.error(`Файл ${fileName} не знайдено поруч із server.js — відповідна функція вимкнена, решта сервера працює.`); return null; }
+    return require(path.join(__dirname, found));
+}
+let chatgptApi = null;
+try {
+    const initChatGPT = loadSiblingModule('chatgpt.js');
+    if (initChatGPT) {
+        chatgptApi = initChatGPT({
+            app, io, db,
+            dbRun: geminiDbRun, dbAll: geminiDbAll,
+            cleanEmail: geminiCleanEmail, langOf: geminiLang, stripEmoji,
+            makeJob: geminiMakeJob, cancelJob: geminiCancelJob, checkCancelled: geminiCheckCancelled, sleep: geminiSleep,
+            nowText: (lang) => {
+                try {
+                    return new Date().toLocaleString(lang === 'en' ? 'en-GB' : (lang === 'ru' ? 'ru-RU' : 'uk-UA'), {
+                        timeZone: process.env.GEMINI_TIMEZONE || 'Europe/Kyiv', dateStyle: 'full', timeStyle: 'short'
+                    });
+                } catch (e) { return new Date().toISOString(); }
+            },
+            loadMedia: async (relUrl) => {
+                const rec = await geminiGetMediaRecord(relUrl);
+                if (!rec || !(await ensureMediaOnDiskAsync(rec.id))) return null;
+                return { mime: rec.mime, data: fs.readFileSync(path.join(UPLOAD_DIR, rec.id)) };
+            }
+        });
+    }
+} catch (e) {
+    console.error('ChatGPT не запустився:', e && e.message);
+}
+// ===================== КІНЕЦЬ БЛОКУ CHATGPT =====================
+
+// =====================================================================
+// ===== @gemini / @chatgpt У ЧАТАХ =====
+// Застосунок надсилає ai_mention {asker, peer, provider, model, question, lang}. Відповідь приходить у чат
+// звичайним повідомленням від «gemini@kishka.ai» / «chatgpt@kishka.ai» ОБОМ учасникам розмови.
+// Gemini за замовчуванням відповідає на gemini-3.5-flash (MENTION_GEMINI_MODEL), модель можна обрати через @ після питання.
+// =====================================================================
+const AI_BOTS = {
+    gemini:  { email: 'gemini@kishka.ai',  name: 'Gemini' },
+    chatgpt: { email: 'chatgpt@kishka.ai', name: 'ChatGPT' }
+};
+const aiMentionBusy = new Set();
+
+async function aiPostBotMessage(provider, asker, peer, text, modelLabel) {
+    const bot = AI_BOTS[provider];
+    const ts = Date.now();
+    const body = `${bot.name}${modelLabel ? ' (' + modelLabel + ')' : ''}:\n${text}`.slice(0, 12000);
+    await serverDeliverMessage(
+        { id: 'ai_' + ts + '_' + crypto.randomBytes(4).toString('hex'), chatId: serverChatIdFor(asker, peer), senderEmail: bot.email, receiverEmail: asker, text: body, timestamp: ts, alsoFor: peer },
+        [asker, peer]
+    );
+}
+
+async function aiAnswerGemini(question, modelReq, lang, askerName) {
+    const catalog = await geminiGetCatalog();
+    const userChose = !!modelReq;
+    const wanted = userChose ? modelReq : (process.env.MENTION_GEMINI_MODEL || 'gemini-3.5-flash');
+    const systemText = 'Ти — Gemini у чаті месенджера Kishka. Відповідай по суті тією мовою, якою поставлено питання, без емодзі. ' +
+        `Зараз ${geminiNowText()}, рік — ${geminiCurrentYear()}. Для актуальних питань (новини, ціни, релізи, погода) скористайся пошуком Google.` +
+        (askerName ? ` Питання поставив(ла) ${askerName}.` : '');
+    const contents = [{ role: 'user', parts: [{ text: question }] }];
+
+    let picked = geminiPickModel(catalog, wanted);
+    if (picked.type !== 'text') throw Object.assign(new Error('MENTION_TEXT_ONLY'), {});
+    const run = async (model) => {
+        const job = geminiMakeJob();
+        const out = await callGeminiResilient(contents, systemText, model, catalog, job, { search: true, strict: true });
+        return { text: stripEmoji(out.text), model };
+    };
+    try {
+        return await run(picked);
+    } catch (err) {
+        // Моделі за замовчуванням може не бути для ключа — тоді відповідає основна модель; обрану користувачем не підміняємо
+        if (!userChose && (err.status === 404 || err.status === 403 || err.status === 400)) return run(geminiDefaultModel(catalog));
+        throw err;
+    }
+}
+
+io.on('connection', (socket) => {
+    socket.on('ai_mention', async (data, callback) => {
+        const cb = typeof callback === 'function' ? callback : () => {};
+        const asker = geminiCleanEmailEarly(data && data.asker);
+        const peer = geminiCleanEmailEarly(data && data.peer);
+        const provider = data && (data.provider === 'gemini' || data.provider === 'chatgpt') ? data.provider : null;
+        const question = String((data && data.question) || '').trim().slice(0, 4000);
+        const modelReq = typeof (data && data.model) === 'string' ? data.model.trim() : '';
+        const lang = geminiLang(data && data.lang);
+        const askerName = String((data && data.name) || '').trim().slice(0, 60);
+        if (!asker || !peer || !provider || !question) return cb({ success: false });
+
+        const key = asker + '|' + peer + '|' + provider;
+        if (aiMentionBusy.has(key)) return cb({ success: false, busy: true });
+        aiMentionBusy.add(key);
+        socket.join(asker);
+        cb({ success: true });
+        io.to(asker).to(peer).emit('ai_status', { chatId: serverChatIdFor(asker, peer), provider, state: 'thinking' });
+
+        let model = null;
+        try {
+            let result;
+            if (provider === 'gemini') {
+                result = await aiAnswerGemini(question, modelReq, lang, askerName);
+            } else {
+                if (!chatgptApi) throw Object.assign(new Error('NO_KEY'), {});
+                result = await chatgptApi.answerOnce({ text: question, model: modelReq, lang, name: askerName });
+            }
+            model = result.model;
+            await aiPostBotMessage(provider, asker, peer, result.text, model && model.label ? model.label : '');
+        } catch (err) {
+            console.error('ai_mention ' + provider + ':', err && err.message);
+            let text;
+            if (err && err.message === 'MENTION_TEXT_ONLY') {
+                text = lang === 'en' ? 'Only text models can answer inside a chat. Pick a text model after @.' : (lang === 'ru' ? 'В чате отвечают только текстовые модели. Выберите текстовую модель после @.' : 'У чаті відповідають лише текстові моделі. Оберіть текстову модель після @.');
+            } else if (err && err.message === 'ATTACH_MODEL') {
+                text = lang === 'en' ? 'Only text models can answer inside a chat. Pick a text model after @.' : (lang === 'ru' ? 'В чате отвечают только текстовые модели. Выберите текстовую модель после @.' : 'У чаті відповідають лише текстові моделі. Оберіть текстову модель після @.');
+            } else if (provider === 'gemini') {
+                text = geminiErrorText(err, null, lang);
+            } else {
+                text = chatgptApi ? chatgptApi.errorText(err, null, lang) : String(err && err.message);
+            }
+            try { await aiPostBotMessage(provider, asker, peer, text, ''); } catch (e) {}
+        } finally {
+            aiMentionBusy.delete(key);
+            io.to(asker).to(peer).emit('ai_status', { chatId: serverChatIdFor(asker, peer), provider, state: 'done' });
+        }
+    });
+});
+// ===================== КІНЕЦЬ БЛОКУ @gemini / @chatgpt =====================
 
 // Не даємо Render Free "заснути" (він вимикає сервіс після 15 хв без запитів) — сервер сам звертається до себе
 (function keepAlive() {
