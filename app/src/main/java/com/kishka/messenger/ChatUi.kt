@@ -41,6 +41,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.CallMade
+import androidx.compose.material.icons.filled.CallMissed
+import androidx.compose.material.icons.filled.CallReceived
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
@@ -451,6 +455,7 @@ fun KishkaBubble(
     time: String,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
+    ticks: Int = 0, // 0 = без галочок, 1 = надіслано (маленька сіра), 2 = побачено (дві фіолетові, як у Viber)
     content: @Composable ColumnScope.() -> Unit
 ) {
     val shape = if (isMe) {
@@ -478,12 +483,99 @@ fun KishkaBubble(
                 .padding(horizontal = 4.dp, vertical = 4.dp)
         ) {
             content()
-            Text(
-                time,
-                fontSize = 10.sp,
-                color = if (isMe) Color.White.copy(alpha = 0.7f) else Color.Gray,
-                modifier = Modifier.align(Alignment.End).padding(end = 8.dp, bottom = 2.dp)
+            Row(
+                modifier = Modifier.align(Alignment.End).padding(end = 8.dp, bottom = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    time,
+                    fontSize = 10.sp,
+                    color = if (isMe) Color.White.copy(alpha = 0.7f) else Color.Gray
+                )
+                if (isMe && ticks > 0) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    DeliveryTicks(seen = ticks >= 2)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Галочки доставки у світлій «таблетці» (на фіолетовій бульбашці вони інакше не було б видно):
+ * одна маленька сіра — надіслано, дві фіолетові (одна на одній) — співрозмовник побачив.
+ */
+@Composable
+fun DeliveryTicks(seen: Boolean) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(Color.White.copy(alpha = 0.92f))
+            .padding(horizontal = 4.dp, vertical = 1.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        if (seen) {
+            Box(modifier = Modifier.width(15.dp).height(10.dp)) {
+                Icon(
+                    Icons.Default.Check, contentDescription = null, tint = ViberPurple,
+                    modifier = Modifier.size(10.dp).align(Alignment.CenterStart)
+                )
+                Icon(
+                    Icons.Default.Check, contentDescription = null, tint = ViberPurple,
+                    modifier = Modifier.size(10.dp).align(Alignment.CenterEnd)
+                )
+            }
+        } else {
+            Icon(
+                Icons.Default.Check, contentDescription = null, tint = Color(0xFF9A9AA8),
+                modifier = Modifier.size(9.dp)
             )
+        }
+    }
+}
+
+/** Запис про дзвінок у чаті: значок, тип виклику, тривалість і час. */
+@Composable
+fun CallRecordRow(record: CallRecordInfo, outgoing: Boolean, time: String, lang: String) {
+    val bad = CallRecordText.isBad(record.status, outgoing)
+    val color = if (bad) Color(0xFFD93025) else ViberPurple
+    val icon = when {
+        record.status == "ended" && outgoing -> Icons.Default.CallMade
+        record.status == "ended" -> Icons.Default.CallReceived
+        bad -> Icons.Default.CallMissed
+        outgoing -> Icons.Default.CallMade
+        else -> Icons.Default.CallReceived
+    }
+    Box(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = Color.White,
+            shadowElevation = 1.dp
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier.size(30.dp).clip(CircleShape).background(color.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(18.dp))
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text(
+                        CallRecordText.label(lang, record.status, outgoing, record.seconds),
+                        color = if (bad) color else Color.Black,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(time, color = Color.Gray, fontSize = 11.sp)
+                }
+            }
         }
     }
 }
@@ -535,7 +627,14 @@ fun MessageMedia(url: String, type: String?, thumbUrl: String?, onOpen: () -> Un
 
 /** Картка файлу (документ) у бульбашці: значок, назва і кнопка завантаження. */
 @Composable
-fun MessageFile(name: String?, isMe: Boolean, lang: String, onDownload: () -> Unit) {
+fun MessageFile(
+    name: String?,
+    isMe: Boolean,
+    lang: String,
+    downloadProgress: Float? = null, // null = не завантажується; 0..1 = іде завантаження; -1 = розмір невідомий
+    downloaded: Boolean = false,
+    onDownload: () -> Unit
+) {
     Row(
         modifier = Modifier
             .padding(4.dp)
@@ -567,11 +666,34 @@ fun MessageFile(name: String?, isMe: Boolean, lang: String, onDownload: () -> Un
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
-            Text(
-                ChatStrings.get("download", lang),
-                color = if (isMe) Color.White.copy(alpha = 0.8f) else ViberPurple,
-                fontSize = 12.sp
-            )
+            val subColor = if (isMe) Color.White.copy(alpha = 0.8f) else ViberPurple
+            when {
+                downloadProgress != null -> {
+                    Text(
+                        if (downloadProgress >= 0f) "${(downloadProgress * 100).toInt()}%" else XStrings.get("file_downloading", lang) + "…",
+                        color = subColor,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.height(3.dp))
+                    if (downloadProgress >= 0f) {
+                        LinearProgressIndicator(
+                            progress = downloadProgress,
+                            modifier = Modifier.fillMaxWidth().height(3.dp),
+                            color = if (isMe) Color.White else ViberPurple,
+                            trackColor = if (isMe) Color.White.copy(alpha = 0.25f) else ViberLightPurple
+                        )
+                    } else {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth().height(3.dp),
+                            color = if (isMe) Color.White else ViberPurple,
+                            trackColor = if (isMe) Color.White.copy(alpha = 0.25f) else ViberLightPurple
+                        )
+                    }
+                }
+                downloaded -> Text(XStrings.get("file_open", lang), color = subColor, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                else -> Text(ChatStrings.get("download", lang), color = subColor, fontSize = 12.sp)
+            }
         }
     }
 }
