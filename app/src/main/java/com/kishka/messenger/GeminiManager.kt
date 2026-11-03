@@ -65,12 +65,12 @@ class GeminiCall(private val onCancel: () -> Unit) {
  * але НЕ змінює жодного існуючого методу логіну, обміну повідомленнями чи дзвінків.
  * Памʼять ШІ зберігається на сервері окремо для кожного акаунта (за email).
  */
-class GeminiManager(context: Context) {
+class GeminiManager(context: Context, val provider: String = "gemini") {
 
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
     private val prefs: SharedPreferences =
-        context.getSharedPreferences("kishka_gemini_prefs", Context.MODE_PRIVATE)
+        context.getSharedPreferences(if (provider == "gemini") "kishka_gemini_prefs" else "kishka_${provider}_prefs", Context.MODE_PRIVATE)
 
     private val socket get() = KishkaManager.getSocket()
 
@@ -85,7 +85,9 @@ class GeminiManager(context: Context) {
     // ---------- Моделі ----------
 
     /** Повний список моделей (як у Google AI Studio). Використовується, доки сервер не відповів. */
-    fun defaultModels(): List<GeminiModel> = listOf(
+    fun defaultModels(): List<GeminiModel> = if (provider == "chatgpt") chatgptDefaultModels() else geminiDefaultModels()
+
+    private fun geminiDefaultModels(): List<GeminiModel> = listOf(
         GeminiModel("gemini-4-argon", "Gemini 4 Argon", "text", true, "Найпотужніша модель"),
         GeminiModel("gemini-3.8-flash", "Gemini 3.8 Flash", "text", false, "Найрозумніша Flash-модель"),
         GeminiModel("gemini-3.6-flash", "Gemini 3.6 Flash", "text", true, "Попереднє покоління Flash"),
@@ -154,7 +156,7 @@ class GeminiManager(context: Context) {
     /** Завантажує з сервера актуальний список моделей. */
     fun loadModels(onResult: (models: List<GeminiModel>?, defaultModelId: String?) -> Unit) {
         ensureConnected()
-        socket.emit("gemini_get_models", io.socket.client.Ack { args ->
+        socket.emit("${provider}_get_models", io.socket.client.Ack { args ->
             var models: List<GeminiModel>? = null
             var defaultId: String? = null
             try {
@@ -248,7 +250,7 @@ class GeminiManager(context: Context) {
     fun loadHistory(email: String, onResult: (List<GeminiMessage>?) -> Unit) {
         ensureConnected()
         val cleanEmail = email.trim().lowercase()
-        socket.emit("gemini_get_history", cleanEmail, io.socket.client.Ack { args ->
+        socket.emit("${provider}_get_history", cleanEmail, io.socket.client.Ack { args ->
             var result: List<GeminiMessage>? = null
             try {
                 val obj = args.firstOrNull() as? JSONObject
@@ -286,7 +288,7 @@ class GeminiManager(context: Context) {
             put("text", text)
             put("model", modelId)
             put("lang", lang)
-            put("settings", AiSettings.geminiJson(appContext))
+            put("settings", if (provider == "chatgpt") ChatgptSettings.json(appContext) else AiSettings.geminiJson(appContext))
             if (attachment != null) {
                 put("attachment", JSONObject().apply {
                     put("url", KishkaManager.relativeUrl(attachment.url) ?: attachment.url)
@@ -299,7 +301,7 @@ class GeminiManager(context: Context) {
 
         val done = AtomicBoolean(false)
 
-        socket.emit("gemini_send", json, io.socket.client.Ack { args ->
+        socket.emit("${provider}_send", json, io.socket.client.Ack { args ->
             if (!done.compareAndSet(false, true)) return@Ack // вже зупинено користувачем
 
             val result = parseResult(args.firstOrNull() as? JSONObject)
@@ -309,7 +311,7 @@ class GeminiManager(context: Context) {
         return GeminiCall {
             if (done.compareAndSet(false, true)) {
                 // Повідомляємо сервер, щоб він перервав запит до Google
-                socket.emit("gemini_cancel", cleanEmail, io.socket.client.Ack { })
+                socket.emit("${provider}_cancel", cleanEmail, io.socket.client.Ack { })
                 mainHandler.post { onResult(GeminiResult(false, null, null, true)) }
             }
         }
@@ -349,11 +351,11 @@ class GeminiManager(context: Context) {
             mainHandler.post { onDone(result) }
         }
         doneListener = listener
-        socket.on("gemini_done", listener)
+        socket.on("${provider}_done", listener)
     }
 
     fun stopListeningDone() {
-        doneListener?.let { socket.off("gemini_done", it) }
+        doneListener?.let { socket.off("${provider}_done", it) }
         doneListener = null
     }
 
@@ -370,18 +372,18 @@ class GeminiManager(context: Context) {
             mainHandler.post { onNote(note) }
         }
         progressListener = listener
-        socket.on("gemini_progress", listener)
+        socket.on("${provider}_progress", listener)
     }
 
     fun stopListeningProgress() {
-        progressListener?.let { socket.off("gemini_progress", it) }
+        progressListener?.let { socket.off("${provider}_progress", it) }
         progressListener = null
     }
 
     /** Чи Gemini зараз відповідає на запит цього користувача (відновлення стану після перезапуску). */
     fun getStatus(email: String, onResult: (busy: Boolean, startedAt: Long) -> Unit) {
         ensureConnected()
-        socket.emit("gemini_get_status", email.trim().lowercase(), io.socket.client.Ack { args ->
+        socket.emit("${provider}_get_status", email.trim().lowercase(), io.socket.client.Ack { args ->
             val obj = args.firstOrNull() as? JSONObject
             val busy = obj?.optBoolean("busy", false) ?: false
             val startedAt = obj?.optLong("startedAt", 0L) ?: 0L
@@ -392,7 +394,7 @@ class GeminiManager(context: Context) {
     /** Зупиняє на сервері запит, що виконується (якщо локального GeminiCall вже немає). */
     fun cancelRemote(email: String) {
         ensureConnected()
-        socket.emit("gemini_cancel", email.trim().lowercase(), io.socket.client.Ack { })
+        socket.emit("${provider}_cancel", email.trim().lowercase(), io.socket.client.Ack { })
     }
 
     // ---------- Очищення памʼяті ----------
@@ -400,7 +402,7 @@ class GeminiManager(context: Context) {
     fun clearMemory(email: String, onResult: (Boolean) -> Unit) {
         ensureConnected()
         val cleanEmail = email.trim().lowercase()
-        socket.emit("gemini_clear", cleanEmail, io.socket.client.Ack { args ->
+        socket.emit("${provider}_clear", cleanEmail, io.socket.client.Ack { args ->
             val ok = (args.firstOrNull() as? JSONObject)?.optBoolean("success", false) ?: false
             if (ok) {
                 prefs.edit().remove(cacheKey(cleanEmail)).apply()
