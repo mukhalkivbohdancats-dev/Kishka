@@ -14,11 +14,11 @@ import androidx.compose.runtime.setValue
  *  - переходять в іншу вкладку і повертаються,
  *  - зʼєднання з сервером перепідключається (відповідь доходить подією gemini_done).
  */
-class GeminiSession(context: Context, val email: String) {
+class GeminiSession(context: Context, val email: String, val provider: String = "gemini") {
 
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
-    val manager = GeminiManager(appContext)
+    val manager = GeminiManager(appContext, provider)
 
     var lang: String = "uk"
 
@@ -42,7 +42,7 @@ class GeminiSession(context: Context, val email: String) {
 
     val selectedModel: GeminiModel
         get() = models.firstOrNull { it.id == selectedModelId }
-            ?: models.firstOrNull { it.id == "gemini-3.8-flash" }
+            ?: models.firstOrNull { it.id == (if (provider == "chatgpt") "gpt-6-luna" else "gemini-3.8-flash") }
             ?: models.firstOrNull { it.type == "text" && !it.paid }
             ?: models.first()
 
@@ -162,7 +162,7 @@ class GeminiSession(context: Context, val email: String) {
             if (draft.isEmpty()) draft = text
             if (pendingMedia == null) pendingMedia = media
             val message = if (result.cancelled) GeminiStrings.get("gemini_stopped", lang)
-            else (result.error ?: Strings.get("gemini_error", lang))
+            else (result.error ?: GeminiStrings.getFor(provider, "gemini_error", lang))
             toast(message)
         }
     }
@@ -178,7 +178,7 @@ class GeminiSession(context: Context, val email: String) {
         if (!result.success && !result.cancelled) {
             val lastLocal = messages.lastOrNull { it.id.startsWith("local_") && it.role == "user" }
             if (lastLocal != null && draft.isEmpty()) draft = lastLocal.text
-            toast(result.error ?: Strings.get("gemini_error", lang))
+            toast(result.error ?: GeminiStrings.getFor(provider, "gemini_error", lang))
         }
         loadHistory()
     }
@@ -229,7 +229,7 @@ class GeminiSession(context: Context, val email: String) {
                 messages = emptyList()
                 toast(Strings.get("gemini_cleared", lang))
             } else {
-                toast(Strings.get("gemini_error", lang))
+                toast(GeminiStrings.getFor(provider, "gemini_error", lang))
             }
         }
     }
@@ -240,8 +240,8 @@ object GeminiSessions {
     private val sessions = HashMap<String, GeminiSession>()
 
     @Synchronized
-    fun get(context: Context, email: String): GeminiSession {
+    fun get(context: Context, email: String, provider: String = "gemini"): GeminiSession {
         val key = email.trim().lowercase()
-        return sessions.getOrPut(key) { GeminiSession(context.applicationContext, key) }
+        return sessions.getOrPut("$provider|$key") { GeminiSession(context.applicationContext, key, provider) }
     }
 }
