@@ -8,6 +8,7 @@ import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
@@ -35,6 +36,8 @@ class CallService : Service() {
     private var cpuWakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private var ringtone: Ringtone? = null
+    private val tones = CallTones()
+    private var hadCall = false
     
     @Volatile
     private var isMuted = false
@@ -119,12 +122,22 @@ class CallService : Service() {
             }
             ACTION_OUTGOING -> {
                 stopped = false
+                hadCall = true
                 startFg(buildOngoingNotification(outgoing = true), microphone = true)
+                // Довгі гудки, як у телефоні, поки співрозмовник не відповів
+                enableHighQualityAudio()
+                applyAudioState()
+                tones.startRingback()
             }
             ACTION_START_CALL -> {
                 stopped = false
+                hadCall = true
                 stopRingtone()
-                CallSession.volume = currentVolumeFraction()
+                tones.stopRingback()
+                // Повзунок гучності — це підсилення поточного звуку (1.0 = гучність системи); системну гучність дзвінка
+                // піднімаємо щонайменше до 80%, щоб співрозмовника було добре чути
+                CallSession.volume = 1f
+                raiseCallStreamVolume()
                 startFg(buildOngoingNotification(outgoing = false), microphone = true)
                 enableHighQualityAudio()
                 applyAudioState()
@@ -168,12 +181,38 @@ class CallService : Service() {
         }
     }
 
-    private fun currentVolumeFraction(): Float {
-        return try {
+    private fun raiseCallStreamVolume() {
+        try {
             val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL).coerceAtLeast(1)
-            (audioManager.getStreamVolume(AudioManager.STREAM_VOICE_CALL).toFloat() / max).coerceIn(0.1f, 1f)
+            val target = Math.round(max * 0.8f).coerceAtLeast(1)
+            if (audioManager.getStreamVolume(AudioManager.STREAM_VOICE_CALL) < target) {
+                audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, target, 0)
+            }
         } catch (e: Exception) {
-            0.7f
+            e.printStackTrace()
+        }
+    }
+
+    /** Динамік / слухавка. На Android 12+ правильний спосіб — setCommunicationDevice (isSpeakerphoneOn там часто ігнорується). */
+    private fun routeSpeaker(on: Boolean) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (on) {
+                    val speaker = audioManager.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                    if (speaker != null) audioManager.setCommunicationDevice(speaker)
+                    else {
+                        @Suppress("DEPRECATION")
+                        audioManager.isSpeakerphoneOn = true
+                    }
+                } else {
+                    audioManager.clearCommunicationDevice()
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.isSpeakerphoneOn = on
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
@@ -185,16 +224,10 @@ class CallService : Service() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        routeSpeaker(CallSession.speakerOn)
+        // Гучність: повзунок справді змінює гучність співрозмовника (підсилення потоку звуку), а не лише число на екрані
         try {
-            @Suppress("DEPRECATION")
-            audioManager.isSpeakerphoneOn = CallSession.speakerOn
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-        try {
-            val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL).coerceAtLeast(1)
-            val index = Math.round(CallSession.volume * max).coerceIn(1, max)
-            audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, index, 0)
+            audioTrack?.setVolume(CallSession.volume.coerceIn(0f, 1f))
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -332,12 +365,12 @@ class CallService : Service() {
                         .setChannelMask(CHANNEL_CONFIG_OUT)
                         .build()
                 )
-                .setBufferSizeInBytes(maxOf(minBuf, frameBytes * 3))
+                .setBufferSizeInBytes(maxOf(minBuf, frameBytes * 4))
                 .setTransferMode(AudioTrack.MODE_STREAM)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
             }
-            builder.build()
+            builder.build().also { it.setVolume(CallSession.volume.coerceIn(0f, 1f)) }
         } catch (e: Exception) {
             e.printStackTrace()
             null
@@ -423,6 +456,9 @@ class CallService : Service() {
         var track: AudioTrack? = null
         var trackRate = 0
         var buffering = true
+        var lastPcm: ShortArray? = null
+        var concealed = false
+        var lastSkipAt = 0L
 
         try {
             while (isCallActive) {
@@ -437,18 +473,32 @@ class CallService : Service() {
 
                 val polled = audioQueue.poll(FRAME_MS * 3L, TimeUnit.MILLISECONDS)
                 if (polled == null) {
-                    // Дані не встигли дійти: накопичуємо буфер заново, щоб не було "рубання"
+                    // Дані не встигли дійти: один раз «дотягуємо» попередній кадр (тихіше), щоб не було клацання,
+                    // і накопичуємо буфер заново
+                    val last = lastPcm
+                    if (last != null && !concealed) {
+                        val soft = ShortArray(last.size) { (last[it] * 0.5f).toInt().toShort() }
+                        track?.write(soft, 0, soft.size)
+                        concealed = true
+                    }
                     buffering = true
                     continue
                 }
+                concealed = false
                 var packet: ByteArray = polled
 
-                // Після мережевого "залпу" пропускаємо застарілі пакети, щоб не наростала затримка
+                // Годинники телефонів розходяться, тому за 10+ хвилин у черзі збирається затримка. Наздоганяємо ПЛАВНО:
+                // не більше одного пакета раз на 0,4 с (непомітно), а при великому залпі — як і раніше, одразу.
+                val now = System.currentTimeMillis()
                 if (audioQueue.size > MAX_BACKLOG_FRAMES) {
-                    while (audioQueue.size > PREBUFFER_FRAMES) {
+                    while (audioQueue.size > PREBUFFER_FRAMES + 2) {
                         val newer = audioQueue.poll() ?: break
                         packet = newer
                     }
+                    lastSkipAt = now
+                } else if (audioQueue.size > PREBUFFER_FRAMES + 3 && now - lastSkipAt > 400L) {
+                    audioQueue.poll()?.let { packet = it }
+                    lastSkipAt = now
                 }
 
                 val rate = VoiceCodec.packetSampleRate(packet)
@@ -468,6 +518,7 @@ class CallService : Service() {
                 }
 
                 val pcm = VoiceCodec.decodePacket(packet) ?: continue
+                lastPcm = pcm
                 track?.write(pcm, 0, pcm.size)
             }
         } catch (e: InterruptedException) {
@@ -682,10 +733,15 @@ class CallService : Service() {
         stopped = true
         stopAudioStreaming()
         stopRingtone()
+        if (hadCall) {
+            tones.playHangup() // як у телефоні, коли кладуть слухавку
+            hadCall = false
+        } else {
+            tones.stopRingback()
+        }
         try {
+            routeSpeaker(false)
             audioManager.mode = AudioManager.MODE_NORMAL
-            @Suppress("DEPRECATION")
-            audioManager.isSpeakerphoneOn = false
             audioManager.isMicrophoneMute = false
         } catch (e: Exception) {
             e.printStackTrace()
