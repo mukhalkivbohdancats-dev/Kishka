@@ -2,4 +2,6 @@
 <paths>
     <!-- Завантажені APK-файли для вбудованого встановлювача -->
     <cache-path name="apk" path="apk/" />
+    <!-- Файли, завантажені з чату (відкриваються без виходу з програми) -->
+    <files-path name="downloads" path="downloads/" />
 </paths>
