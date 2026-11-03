@@ -34,6 +34,11 @@ object TypingState {
     val until = mutableStateMapOf<String, Long>()
 }
 
+/** Які чати зараз чекають на відповідь ШІ після @gemini / @chatgpt (chatId -> провайдер). */
+object AiMentionState {
+    val active = mutableStateMapOf<String, String>()
+}
+
 /** Контакти поточного акаунта (спільні для всіх екранів; зберігаються на пристрої та на сервері). */
 object ContactsRepo {
     var contacts by mutableStateOf(listOf<User>())
@@ -57,6 +62,7 @@ class KishkaManager(ctx: Context) {
         @Volatile private var currentActiveChatId: String? = null
         @Volatile private var currentChatCallback: ((List<Message>) -> Unit)? = null
         @Volatile private var activeOwner: String = ""
+        @Volatile private var currentActivePeer: String? = null
 
         const val SERVER_URL = "https://kishka.onrender.com"
         const val DEFAULT_AVATAR_URL = "https://raw.githubusercontent.com/mukhalkivbohdancats-dev/Kishka/main/app/src/main/res/drawable/ic_launcher.png"
@@ -110,6 +116,25 @@ class KishkaManager(ctx: Context) {
                 if (!chatId.isNullOrEmpty()) {
                     s.emit("join_chat", JSONObject().apply { put("chatId", chatId) })
                 }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        /** Каже серверу, що відкритий чат прочитано (лише коли застосунок на екрані): у співрозмовника зʼявляться 2 фіолетові галочки. */
+        fun sendSeenForActive() {
+            val me = identifiedEmail ?: return
+            val peer = currentActivePeer ?: return
+            val chatId = currentActiveChatId ?: return
+            if (!Presence.isForeground) return
+            try {
+                val s = socketInstance ?: return
+                if (!s.connected()) return
+                s.emit("messages_seen", JSONObject().apply {
+                    put("chatId", chatId)
+                    put("reader", me)
+                    put("peer", peer)
+                })
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -220,7 +245,8 @@ class KishkaManager(ctx: Context) {
             fileUrl = absoluteUrl(optNullable("fileUrl")),
             fileType = optNullable("fileType"),
             thumbUrl = absoluteUrl(optNullable("thumbUrl")),
-            fileName = optNullable("fileName")
+            fileName = optNullable("fileName"),
+            seenAt = if (obj.isNull("seenAt")) 0L else obj.optLong("seenAt", 0L)
         )
     }
 
@@ -372,14 +398,25 @@ class KishkaManager(ctx: Context) {
         ensureConnected()
         socket.emit("get_contacts", me, io.socket.client.Ack { args ->
             var server: List<User>? = null
+            var removed: List<String> = emptyList()
             val first = args.firstOrNull()
             if (first is JSONObject) {
-                if (first.optBoolean("success", false)) server = parseUsers(first.optJSONArray("contacts"))
+                if (first.optBoolean("success", false)) {
+                    server = parseUsers(first.optJSONArray("contacts"))
+                    val removedArray = first.optJSONArray("removed")
+                    if (removedArray != null) {
+                        removed = (0 until removedArray.length())
+                            .map { removedArray.optString(it, "").trim().lowercase() }
+                            .filter { it.isNotEmpty() }
+                    }
+                }
             } else if (first is JSONArray) {
                 server = parseUsers(first) // сумісність зі старою версією сервера
             }
 
             if (server != null) {
+                // Контакти, видалені на іншому пристрої цього акаунта, зникають і тут
+                removed.forEach { store.deleteContact(me, it) }
                 store.upsertContacts(me, server)
                 val local = store.getContacts(me)
 
@@ -488,6 +525,34 @@ class KishkaManager(ctx: Context) {
         socket.on("contact_updated") {
             identifiedEmail?.let { refreshContacts(it) }
         }
+
+        // Співрозмовник побачив повідомлення: на них зʼявляються дві фіолетові галочки
+        socket.on("messages_seen") { args ->
+            val obj = args.firstOrNull() as? JSONObject
+            val ids = obj?.optJSONArray("ids")
+            if (obj != null && ids != null) {
+                val list = mutableListOf<String>()
+                for (i in 0 until ids.length()) list.add(ids.optString(i, ""))
+                store.markSeen(list, obj.optLong("seenAt", System.currentTimeMillis()))
+                pushActiveChat()
+            }
+        }
+
+        // ШІ готує відповідь на @gemini / @chatgpt у чаті
+        socket.on("ai_status") { args ->
+            val obj = args.firstOrNull() as? JSONObject
+            if (obj != null) {
+                val chatId = obj.optString("chatId", "")
+                val provider = obj.optString("provider", "")
+                val state = obj.optString("state", "")
+                if (chatId.isNotEmpty()) {
+                    mainHandler.post {
+                        if (state == "thinking") AiMentionState.active[chatId] = provider
+                        else AiMentionState.active.remove(chatId)
+                    }
+                }
+            }
+        }
     }
 
     private fun handleIncoming(obj: JSONObject) {
@@ -506,17 +571,30 @@ class KishkaManager(ctx: Context) {
 
         if (added.isNotEmpty() || isMine) {
             val active = parsed.chatId == currentActiveChatId
-            if (!isMine && added.isNotEmpty() && !active) {
+            if (!isMine && added.isNotEmpty() && !active && shouldNotify(parsed)) {
                 showBackgroundMessageNotification(sender, previewText(parsed))
             }
             if (active) {
-                if (!isMine) store.markRead(me, parsed.chatId)
+                if (!isMine) {
+                    store.markRead(me, parsed.chatId)
+                    sendSeenForActive()
+                }
                 pushActiveChat()
             }
         }
     }
 
+    /** Записи про дзвінки, що завершились нормально, не потребують сповіщення; пропущені — потребують. */
+    private fun shouldNotify(m: Message): Boolean {
+        val record = parseCallRecord(m.text) ?: return true
+        return record.status == "missed" || record.status == "unavailable" || record.status == "cancelled"
+    }
+
     private fun previewText(m: Message): String = when {
+        parseCallRecord(m.text) != null -> {
+            val record = parseCallRecord(m.text)!!
+            CallRecordText.label(AuthManager.getSavedLanguage(context), record.status, m.senderEmail == identifiedEmail, record.seconds)
+        }
         m.text.isNotEmpty() -> m.text
         m.fileType == "video" -> AppText.tr(context, "label_video")
         m.fileType == "image" -> AppText.tr(context, "label_photo")
@@ -552,19 +630,23 @@ class KishkaManager(ctx: Context) {
                     .filter { it.chatId.isNotEmpty() }
                 val added = store.insertMessages(list)
                 list.filter { it.senderEmail == me }.forEach { store.markDelivered(it.id) }
+                store.applySeen(list)
                 prefs.edit().putLong("last_msg_sync_$me", startedAt).apply()
 
                 if (lastMsgSync == 0L) {
                     // Перший вхід на цьому пристрої: стара історія не є "непрочитаною"
                     list.map { it.chatId }.distinct().forEach { store.markRead(me, it) }
                 } else {
-                    added.filter { it.receiverEmail == me && it.senderEmail != me && it.chatId != currentActiveChatId }
+                    added.filter { it.receiverEmail == me && it.senderEmail != me && it.chatId != currentActiveChatId && shouldNotify(it) }
                         .groupBy { it.senderEmail }
                         .forEach { (sender, msgs) -> showBackgroundMessageNotification(sender, previewText(msgs.last())) }
                 }
                 pushActiveChat()
+                sendSeenForActive()
             }
         })
+
+        resendPendingContactDeletes(me)
 
         // 2) Що було видалено автором, поки пристрій був офлайн
         val lastDelSync = prefs.getLong("last_del_sync_$me", 0L)
@@ -624,6 +706,7 @@ class KishkaManager(ctx: Context) {
         val chatId = getChatId(senderEmail, receiverEmail)
         activeOwner = me
         currentActiveChatId = chatId
+        currentActivePeer = receiverEmail.trim().lowercase()
         activeChatForRejoin = chatId
         currentChatCallback = onMessagesUpdated
 
@@ -640,15 +723,18 @@ class KishkaManager(ctx: Context) {
                 // Лише ДОДАЄМО нові: локальна історія не затирається, навіть якщо сервер відповів порожнім списком
                 store.insertMessages(list)
                 list.filter { it.senderEmail == me }.forEach { store.markDelivered(it.id) }
+                store.applySeen(list)
                 if (currentActiveChatId == chatId) {
                     store.markRead(me, chatId)
                     pushActiveChat()
+                    sendSeenForActive()
                 }
             }
         }
 
         val joinData = JSONObject().apply { put("chatId", chatId) }
         socket.emit("join_chat", joinData)
+        sendSeenForActive()
     }
 
     private fun showBackgroundMessageNotification(senderEmail: String, text: String) {
@@ -773,6 +859,77 @@ class KishkaManager(ctx: Context) {
         }
     }
 
+    /**
+     * Видаляє контакт лише у мене (у співрозмовника він лишається). Якщо немає звʼязку, видалення відправиться
+     * при наступному підключенні й контакт не «воскресне».
+     */
+    fun deleteContact(myEmail: String, contactEmail: String) {
+        val me = myEmail.trim().lowercase()
+        val other = contactEmail.trim().lowercase()
+        if (me.isEmpty() || other.isEmpty()) return
+        store.deleteContact(me, other)
+        ContactsRepo.set(store.getContacts(me))
+
+        val key = "pending_contact_delete_$me"
+        val set = HashSet(prefs.getStringSet(key, emptySet()) ?: emptySet())
+        set.add(other)
+        prefs.edit().putStringSet(key, set).apply()
+        emitContactDelete(me, other)
+    }
+
+    private fun emitContactDelete(me: String, other: String) {
+        ensureConnected()
+        if (!socket.connected()) return
+        socket.emit("delete_contact", JSONObject().apply {
+            put("myEmail", me)
+            put("contactEmail", other)
+        }, io.socket.client.Ack { args ->
+            val ok = (args.firstOrNull() as? JSONObject)?.optBoolean("success", false) ?: false
+            if (ok) {
+                val key = "pending_contact_delete_$me"
+                val set = HashSet(prefs.getStringSet(key, emptySet()) ?: emptySet())
+                if (set.remove(other)) prefs.edit().putStringSet(key, set).apply()
+            }
+        })
+    }
+
+    private fun resendPendingContactDeletes(me: String) {
+        val set = HashSet(prefs.getStringSet("pending_contact_delete_$me", emptySet()) ?: emptySet())
+        set.forEach { emitContactDelete(me, it) }
+    }
+
+    /**
+     * Запитання до ШІ в чаті («@gemini питання @модель», «@chatgpt ...»). Відповідь надійде в чат повідомленням
+     * від бота обом учасникам розмови.
+     */
+    fun sendAiMention(
+        myEmail: String,
+        peerEmail: String,
+        provider: String,
+        model: String,
+        question: String,
+        lang: String,
+        displayName: String
+    ) {
+        val me = myEmail.trim().lowercase()
+        val peer = peerEmail.trim().lowercase()
+        val chatId = getChatId(me, peer)
+        ensureConnected()
+        mainHandler.post { AiMentionState.active[chatId] = provider }
+        socket.emit("ai_mention", JSONObject().apply {
+            put("asker", me)
+            put("peer", peer)
+            put("provider", provider)
+            put("model", model)
+            put("question", question)
+            put("lang", lang)
+            put("name", displayName)
+        }, io.socket.client.Ack { args ->
+            val ok = (args.firstOrNull() as? JSONObject)?.optBoolean("success", false) ?: false
+            if (!ok) mainHandler.post { AiMentionState.active.remove(chatId) }
+        })
+    }
+
     /** Контакти з пристрою (для вибору, кому переслати повідомлення). */
     fun cachedContacts(myEmail: String): List<User> = store.getContacts(myEmail.trim().lowercase())
 
@@ -835,6 +992,7 @@ class KishkaManager(ctx: Context) {
             socket.emit("leave_chat", chatId)
         }
         currentActiveChatId = null
+        currentActivePeer = null
         activeChatForRejoin = null
         currentChatCallback = null
         socket.off("load_history")
@@ -844,6 +1002,7 @@ class KishkaManager(ctx: Context) {
     fun resetSession() {
         identifiedEmail = null
         activeChatForRejoin = null
+        currentActivePeer = null
         currentActiveChatId = null
         currentChatCallback = null
         activeOwner = ""
