@@ -70,6 +70,7 @@ class KishkaConnectionService : Service() {
                 NotificationManager.IMPORTANCE_MIN
             )
             channel.setShowBadge(false)
+            channel.lockscreenVisibility = Notification.VISIBILITY_SECRET
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
         }
@@ -83,18 +84,41 @@ class KishkaConnectionService : Service() {
             this, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        // Android вимагає хоч якесь сповіщення для фонової служби, тож робимо його максимально непомітним:
+        // мінімальна важливість (без значка у статус-рядку), без тексту, без часу, приховане на екрані блокування,
+        // його можна змахнути (Android 14+) або вимкнути в налаштуваннях каналу — служба при цьому працює.
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(AppText.tr(this, "bg_notif_title"))
-            .setContentText(AppText.tr(this, "bg_notif_text"))
+            .setContentTitle("Kishka")
             .setSmallIcon(android.R.drawable.ic_dialog_email)
-            .setOngoing(true)
+            .setOngoing(false)
             .setSilent(true)
+            .setShowWhen(false)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setContentIntent(pendingIntent)
             .build()
     }
 
     companion object {
+        /** Android 14+: дозвіл показувати вхідний дзвінок на весь екран (один раз просимо відкрити налаштування). */
+        fun requestFullScreenIntent(context: Context) {
+            try {
+                if (Build.VERSION.SDK_INT < 34) return
+                val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                if (prefs.getBoolean("fsi_asked", false)) return
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                if (nm.canUseFullScreenIntent()) return
+                prefs.edit().putBoolean("fsi_asked", true).apply()
+                context.startActivity(
+                    Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:" + context.packageName))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
         private const val CHANNEL_ID = "KishkaBackgroundChannel"
         private const val NOTIFICATION_ID = 4711
         private const val PREFS = "kishka_service_prefs"
@@ -130,7 +154,10 @@ class KishkaConnectionService : Service() {
         fun requestBatteryExemption(context: Context) {
             try {
                 val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                if (prefs.getBoolean("battery_asked", false)) return
+                if (prefs.getBoolean("battery_asked", false)) {
+                    requestFullScreenIntent(context)
+                    return
+                }
                 prefs.edit().putBoolean("battery_asked", true).apply()
                 val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
                 if (!pm.isIgnoringBatteryOptimizations(context.packageName)) {
