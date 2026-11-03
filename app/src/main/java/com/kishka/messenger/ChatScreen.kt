@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -28,8 +29,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.SaveAlt
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Surface
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -85,9 +99,23 @@ fun ChatScreen(
     var showAttachDialog by remember { mutableStateOf(false) }
     var forwardTarget by remember { mutableStateOf<Message?>(null) }
 
+    var htmlViewer by remember { mutableStateOf<Message?>(null) }
+    var apkInstall by remember { mutableStateOf<Message?>(null) }
+
     val listState = rememberLazyListState()
     val context = LocalContext.current
     val saver = rememberGallerySaver(lang)
+
+    // Моделі для підказок після «@» (@gemini ... @модель, @chatgpt ... @модель)
+    val geminiManagerForMentions = remember { GeminiManager(context, "gemini") }
+    val chatgptManagerForMentions = remember { GeminiManager(context, "chatgpt") }
+    var geminiModels by remember { mutableStateOf(geminiManagerForMentions.getCachedModels()) }
+    var chatgptModels by remember { mutableStateOf(chatgptManagerForMentions.getCachedModels()) }
+    LaunchedEffect(Unit) {
+        geminiManagerForMentions.loadModels { loaded, _ -> if (loaded != null) geminiModels = loaded }
+        chatgptManagerForMentions.loadModels { loaded, _ -> if (loaded != null) chatgptModels = loaded }
+    }
+    val chatIdNow = KishkaManager.chatIdFor(currentEmail.trim().lowercase(), targetUser.email)
     val partnerTyping = isUserTyping(targetUser.email)
     LaunchedEffect(targetUser.email) { Presence.request() }
     val myEmail = currentEmail.trim().lowercase()
@@ -145,6 +173,21 @@ fun ChatScreen(
         }
     }
 
+    // Файл: HTML і APK відкриваються вбудованими вікнами; решта завантажується з відсотками й відкривається кнопкою «Відкрити»
+    fun openOrDownloadFile(msg: Message) {
+        val url = msg.fileUrl ?: return
+        if (FileKinds.isHtml(msg.fileName)) { htmlViewer = msg; return }
+        if (FileKinds.isApk(msg.fileName)) { apkInstall = msg; return }
+        if (FileDownloads.isDownloaded(context, url, msg.fileName)) {
+            val opened = FileDownloads.open(context, FileDownloads.localFile(context, url, msg.fileName), msg.fileName)
+            if (!opened) Toast.makeText(context, XStrings.get("file_no_app", lang), Toast.LENGTH_SHORT).show()
+            return
+        }
+        FileDownloads.start(context, url, msg.fileName) { file ->
+            if (file == null) Toast.makeText(context, XStrings.get("file_failed", lang), Toast.LENGTH_SHORT).show()
+        }
+    }
+
     fun cancelUpload() {
         uploadHandle?.cancel()
         uploadHandle = null
@@ -159,6 +202,13 @@ fun ChatScreen(
         if (media == null) {
             if (text.isNotEmpty()) {
                 manager.sendMessage(currentEmail, targetUser.email, text)
+                // «@gemini питання @модель» / «@chatgpt питання @модель» (будь-який регістр): відповідь прийде в чат
+                val mention = AiMention.parse(text) { provider ->
+                    (if (provider == "chatgpt") chatgptModels else geminiModels).filter { it.type == "text" }.map { it.id }
+                }
+                if (mention != null) {
+                    manager.sendAiMention(currentEmail, targetUser.email, mention.provider, mention.model, mention.question, lang, "")
+                }
                 textInput = ""
             }
             return
@@ -222,8 +272,6 @@ fun ChatScreen(
                                         color = if (presenceInfo?.online == true) Color(0xFF2E9E5B) else Color.Gray,
                                         maxLines = 1
                                     )
-                                } else {
-                                    Text(targetUser.email, fontSize = 11.sp, color = Color.Gray)
                                 }
                             }
                         }
@@ -244,26 +292,30 @@ fun ChatScreen(
             ) {
                 itemsIndexed(messages) { index, msg ->
                     val isMe = msg.senderEmail.trim().lowercase() == myEmail
+                    val callRecord = parseCallRecord(msg.text)
                     Column {
                         if (index == 0 || !isSameDay(messages[index - 1].timestamp, msg.timestamp)) {
                             DateChip(dayLabel(msg.timestamp, lang))
                         }
-                        Box {
+                        if (callRecord != null) {
+                            CallRecordRow(callRecord, isMe, formatMessageTime(msg.timestamp), lang)
+                        } else Box {
                             KishkaBubble(
                                 isMe = isMe,
                                 time = formatMessageTime(msg.timestamp),
-                                onLongClick = { menuMessage = msg }
+                                onLongClick = { menuMessage = msg },
+                                ticks = if (isMe && !msg.pending) (if (msg.seenAt > 0L) 2 else 1) else 0
                             ) {
                                 val fileUrl = msg.fileUrl
                                 if (fileUrl != null) {
                                     if (msg.fileType == "file") {
-                                        MessageFile(name = msg.fileName, isMe = isMe, lang = lang) {
-                                            val started = MediaUtils.downloadFile(context, fileUrl, msg.fileName)
-                                            Toast.makeText(
-                                                context,
-                                                cs(if (started) "download_started" else "download_failed"),
-                                                Toast.LENGTH_SHORT
-                                            ).show()
+                                        val progressNow = FileDownloads.progress[fileUrl]
+                                        val isDownloaded = remember(fileUrl, progressNow) { FileDownloads.isDownloaded(context, fileUrl, msg.fileName) }
+                                        MessageFile(
+                                            name = msg.fileName, isMe = isMe, lang = lang,
+                                            downloadProgress = progressNow, downloaded = isDownloaded
+                                        ) {
+                                            openOrDownloadFile(msg)
                                         }
                                     } else {
                                         MessageMedia(url = fileUrl, type = msg.fileType, thumbUrl = msg.thumbUrl) {
@@ -272,71 +324,64 @@ fun ChatScreen(
                                     }
                                 }
                                 if (msg.text.isNotEmpty()) {
-                                    Text(
-                                        text = msg.text,
-                                        color = if (isMe) Color.White else Color.Black,
-                                        fontSize = 15.sp,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    )
+                                    if (isAiBotEmail(msg.senderEmail)) {
+                                        // Відповідь Gemini / ChatGPT: **жирний**, `код`, списки
+                                        Text(
+                                            text = formatGeminiText(msg.text),
+                                            color = Color.Black,
+                                            fontSize = 15.sp,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    } else {
+                                        Text(
+                                            text = msg.text,
+                                            color = if (isMe) Color.White else Color.Black,
+                                            fontSize = 15.sp,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
                                 }
                             }
 
-                            DropdownMenu(
-                                expanded = menuMessage?.id == msg.id,
-                                onDismissRequest = { menuMessage = null }
-                            ) {
-                                if (msg.text.isNotEmpty()) {
-                                    DropdownMenuItem(
-                                        text = { Text(Strings.get("copy", lang)) },
-                                        onClick = {
-                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                            clipboard.setPrimaryClip(ClipData.newPlainText("Copied Text", msg.text))
-                                            Toast.makeText(context, Strings.get("message_copied", lang), Toast.LENGTH_SHORT).show()
-                                            menuMessage = null
-                                        }
-                                    )
-                                }
-                                val fileUrl = msg.fileUrl
-                                if (fileUrl != null && msg.fileType != "file") {
-                                    DropdownMenuItem(
-                                        text = { Text(cs("save_to_gallery")) },
-                                        onClick = {
-                                            menuMessage = null
-                                            saver.save(fileUrl)
-                                        }
-                                    )
-                                }
-                                if (fileUrl != null && msg.fileType == "file") {
-                                    DropdownMenuItem(
-                                        text = { Text(cs("download")) },
-                                        onClick = {
-                                            menuMessage = null
-                                            val started = MediaUtils.downloadFile(context, fileUrl, msg.fileName)
-                                            Toast.makeText(
-                                                context,
-                                                cs(if (started) "download_started" else "download_failed"),
-                                                Toast.LENGTH_SHORT
-                                            ).show()
-                                        }
-                                    )
-                                }
-                                DropdownMenuItem(
-                                    text = { Text(cs("forward")) },
-                                    onClick = {
-                                        forwardTarget = msg
-                                        menuMessage = null
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(Strings.get("delete", lang), color = Color.Red) },
-                                    onClick = {
-                                        deleteTarget = msg
-                                        menuMessage = null
-                                    }
-                                )
-                            }
                         }
                     }
+                }
+            }
+
+            val aiProvider = AiMentionState.active[chatIdNow]
+            if (aiProvider != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = ViberPurple)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        XStrings.get(if (aiProvider == "chatgpt") "ai_thinking_chatgpt" else "ai_thinking_gemini", lang),
+                        color = ViberPurple,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+
+            // Підказки після «@»: спершу gemini / chatgpt, потім (після питання) — моделі
+            val trailing = AiMention.trailingToken(textInput)
+            if (trailing != null && pendingMedia == null) {
+                val provider = AiMention.providerBeforeTrailing(textInput)
+                val suggestions: List<Pair<String, String>> = if (provider == null) {
+                    listOf("gemini" to "Gemini", "chatgpt" to "ChatGPT")
+                        .filter { it.first.startsWith(trailing, ignoreCase = true) && !it.first.equals(trailing, ignoreCase = true) }
+                } else {
+                    (if (provider == "chatgpt") chatgptModels else geminiModels)
+                        .filter { it.type == "text" && (trailing.isEmpty() || it.id.contains(trailing, true) || it.label.contains(trailing, true)) }
+                        .map { it.id to it.label }
+                }
+                if (suggestions.isNotEmpty()) {
+                    MentionSuggestions(
+                        title = XStrings.get(if (provider == null) "mention_providers" else "mention_models", lang),
+                        items = suggestions,
+                        onPick = { choice -> textInput = AiMention.replaceTrailing(textInput, choice) }
+                    )
                 }
             }
 
@@ -431,7 +476,7 @@ fun ChatScreen(
                         modifier = Modifier.fillMaxWidth().height(52.dp),
                         shape = RoundedCornerShape(14.dp)
                     ) {
-                        Text("📷  " + cs("attach_media"), color = ViberPurple, fontWeight = FontWeight.SemiBold)
+                        Text(cs("attach_media"), color = ViberPurple, fontWeight = FontWeight.SemiBold)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedButton(
@@ -442,7 +487,7 @@ fun ChatScreen(
                         modifier = Modifier.fillMaxWidth().height(52.dp),
                         shape = RoundedCornerShape(14.dp)
                     ) {
-                        Text("📎  " + cs("attach_file"), color = ViberPurple, fontWeight = FontWeight.SemiBold)
+                        Text(cs("attach_file"), color = ViberPurple, fontWeight = FontWeight.SemiBold)
                     }
                     Spacer(modifier = Modifier.height(4.dp))
                     TextButton(onClick = { showAttachDialog = false }, modifier = Modifier.fillMaxWidth()) {
@@ -516,5 +561,146 @@ fun ChatScreen(
         )
     }
 
+    // ---------- Красиве меню повідомлення (довге натискання) ----------
+    val menuMsg = menuMessage
+    if (menuMsg != null) {
+        val menuFileUrl = menuMsg.fileUrl
+        MessageActionsDialog(
+            preview = if (menuMsg.text.isNotEmpty()) menuMsg.text else (menuMsg.fileName ?: ""),
+            lang = lang,
+            onDismiss = { menuMessage = null },
+            actions = buildList {
+                if (menuMsg.text.isNotEmpty()) {
+                    add(MessageAction(Icons.Default.ContentCopy, Strings.get("copy", lang), false) {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Copied Text", menuMsg.text))
+                        Toast.makeText(context, Strings.get("message_copied", lang), Toast.LENGTH_SHORT).show()
+                    })
+                }
+                if (menuFileUrl != null && menuMsg.fileType != "file") {
+                    add(MessageAction(Icons.Default.SaveAlt, cs("save_to_gallery"), false) { saver.save(menuFileUrl) })
+                }
+                if (menuFileUrl != null && menuMsg.fileType == "file") {
+                    add(MessageAction(Icons.Default.Download, cs("download"), false) { openOrDownloadFile(menuMsg) })
+                }
+                add(MessageAction(Icons.Default.Share, cs("forward"), false) { forwardTarget = menuMsg })
+                add(MessageAction(Icons.Default.Delete, Strings.get("delete", lang), true) { deleteTarget = menuMsg })
+            }
+        )
+    }
+
+    // ---------- Вбудований переглядач HTML і встановлювач APK ----------
+    val html = htmlViewer
+    if (html != null && html.fileUrl != null) {
+        HtmlViewerDialog(url = html.fileUrl, name = html.fileName, lang = lang, onDismiss = { htmlViewer = null })
+    }
+    val apk = apkInstall
+    if (apk != null && apk.fileUrl != null) {
+        ApkInstallDialog(url = apk.fileUrl, name = apk.fileName, lang = lang, onDismiss = { apkInstall = null })
+    }
+
     GallerySavedDialog(saver)
+}
+
+class MessageAction(
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val label: String,
+    val danger: Boolean,
+    val onClick: () -> Unit
+)
+
+/** Меню повідомлення: заокруглена картка з коротким переглядом тексту і рядками дій зі значками. */
+@Composable
+fun MessageActionsDialog(
+    preview: String,
+    lang: String,
+    onDismiss: () -> Unit,
+    actions: List<MessageAction>,
+    dismissOnAction: Boolean = true
+) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(
+            shape = RoundedCornerShape(26.dp),
+            color = Color.White,
+            shadowElevation = 12.dp,
+            modifier = Modifier.fillMaxWidth(0.86f).widthIn(max = 380.dp)
+        ) {
+            Column(modifier = Modifier.padding(vertical = 10.dp)) {
+                if (preview.isNotBlank()) {
+                    Text(
+                        preview,
+                        color = Color.Gray,
+                        fontSize = 13.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                    )
+                    Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(1.dp).background(ViberLightPurple))
+                }
+                actions.forEach { action ->
+                    val color = if (action.danger) Color(0xFFD93025) else Color.Black
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                if (dismissOnAction) onDismiss()
+                                action.onClick()
+                            }
+                            .padding(horizontal = 20.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(if (action.danger) Color(0xFFFDECEA) else ViberLightPurple),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(action.icon, contentDescription = null, tint = if (action.danger) color else ViberPurple, modifier = Modifier.size(19.dp))
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Text(action.label, color = color, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Підказки над полем вводу після «@»: ШІ (gemini / chatgpt) або моделі. */
+@Composable
+fun MentionSuggestions(title: String, items: List<Pair<String, String>>, onPick: (String) -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = Color.White,
+        shadowElevation = 6.dp,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .heightIn(max = 230.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(vertical = 6.dp)
+        ) {
+            Text(
+                title,
+                color = ViberPurple,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
+            )
+            items.forEach { (id, label) ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPick(id) }
+                        .padding(horizontal = 14.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(label, fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                    Text("@$id", fontSize = 11.sp, color = Color.Gray, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 170.dp))
+                }
+            }
+        }
+    }
 }
