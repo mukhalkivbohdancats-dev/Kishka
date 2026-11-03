@@ -75,12 +75,12 @@ fun geminiHintKey(model: GeminiModel): String? = when {
 }
 
 /** Текст підказки про хід відповіді (ліміт Google, зміна моделі). */
-fun geminiNoteText(note: GeminiNote, lang: String): String = when (note.kind) {
-    "wait" -> String.format(GeminiStrings.get("gemini_note_wait", lang), note.seconds)
-    "busy" -> String.format(GeminiStrings.get("gemini_note_busy", lang), note.seconds)
-    "switch" -> String.format(GeminiStrings.get("gemini_note_switch", lang), note.model)
-    "thinking" -> GeminiStrings.get("gemini_note_thinking", lang)
-    "agent" -> GeminiStrings.get("gemini_note_agent", lang)
+fun geminiNoteText(note: GeminiNote, lang: String, provider: String = "gemini"): String = when (note.kind) {
+    "wait" -> String.format(GeminiStrings.getFor(provider, "gemini_note_wait", lang), note.seconds)
+    "busy" -> String.format(GeminiStrings.getFor(provider, "gemini_note_busy", lang), note.seconds)
+    "switch" -> String.format(GeminiStrings.getFor(provider, "gemini_note_switch", lang), note.model)
+    "thinking" -> GeminiStrings.getFor(provider, "gemini_note_thinking", lang)
+    "agent" -> GeminiStrings.getFor(provider, "gemini_note_agent", lang)
     else -> ""
 }
 
@@ -210,6 +210,14 @@ object GeminiStrings {
             ?: dictionary["uk"]?.get(key)
             ?: Strings.get(key, lang)
     }
+
+    /** Рядок для вкладки провайдера: для ChatGPT спершу шукаємо його власний текст (ChatgptStrings), потім загальний. */
+    fun getFor(provider: String, key: String, lang: String): String {
+        if (provider == "chatgpt") {
+            ChatgptStrings.find(key, lang)?.let { return it }
+        }
+        return get(key, lang)
+    }
 }
 
 
@@ -218,16 +226,18 @@ object GeminiStrings {
 fun GeminiTab(
     currentEmail: String,
     displayName: String,
-    lang: String
+    lang: String,
+    provider: String = "gemini"
 ) {
     val context = LocalContext.current
     // Увесь стан живе в GeminiSession: він переживає поворот екрана та перехід між вкладками
-    val session = remember(currentEmail) { GeminiSessions.get(context, currentEmail) }
+    val session = remember(currentEmail, provider) { GeminiSessions.get(context, currentEmail, provider) }
     session.lang = lang
 
     val saver = rememberGallerySaver(lang)
     val listState = rememberLazyListState()
-    val gs: (String) -> String = { key -> GeminiStrings.get(key, lang) }
+    val gs: (String) -> String = { key -> GeminiStrings.getFor(provider, key, lang) }
+    val aiTitle = Strings.get(if (provider == "chatgpt") "chatgpt" else "gemini", lang)
 
     var showClearDialog by remember { mutableStateOf(false) }
     var showModelPopup by remember { mutableStateOf(false) }
@@ -278,11 +288,11 @@ fun GeminiTab(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White),
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        GeminiAvatar(size = 38.dp)
+                        AiAvatar(provider = provider, size = 38.dp)
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                Strings.get("gemini", lang),
+                                aiTitle,
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = ViberPurple
@@ -328,17 +338,17 @@ fun GeminiTab(
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        GeminiAvatar(size = 84.dp)
+                        AiAvatar(provider = provider, size = 84.dp)
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            Strings.get("gemini", lang),
+                            aiTitle,
                             fontSize = 22.sp,
                             fontWeight = FontWeight.Bold,
                             color = ViberPurple
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            Strings.get("gemini_empty", lang),
+                            gs("gemini_empty"),
                             fontSize = 14.sp,
                             color = Color.Gray,
                             textAlign = TextAlign.Center
@@ -461,7 +471,7 @@ fun GeminiTab(
                                         }
                                         val progressNote = session.note
                                         if (progressNote != null && session.uploadProgress == null) {
-                                            val noteText = geminiNoteText(progressNote, lang)
+                                            val noteText = geminiNoteText(progressNote, lang, provider)
                                             if (noteText.isNotEmpty()) {
                                                 Spacer(modifier = Modifier.height(6.dp))
                                                 Text(noteText, color = ViberPurple, fontSize = 12.sp)
@@ -506,6 +516,16 @@ fun GeminiTab(
                     mediaPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
                 },
                 leading = {
+                    if (provider == "chatgpt") {
+                        // ChatGPT: по натисканню на модель відкривається вікно зі списком моделей і ВСІМА налаштуваннями
+                        ChatgptModelPill(
+                            selected = selectedModel,
+                            models = models,
+                            enabled = !session.isSending,
+                            lang = lang,
+                            onSelect = { m -> session.selectModel(m.id) }
+                        )
+                    } else {
                     GeminiModelPill(
                         selected = selectedModel,
                         models = models,
@@ -518,6 +538,7 @@ fun GeminiTab(
                             showModelPopup = false
                         }
                     )
+                    }
                 }
             )
         }
@@ -530,7 +551,7 @@ fun GeminiTab(
             shape = RoundedCornerShape(22.dp),
             containerColor = Color.White,
             title = { Text(Strings.get("gemini_clear", lang)) },
-            text = { Text(Strings.get("gemini_clear_confirm", lang)) },
+            text = { Text(gs("gemini_clear_confirm")) },
             confirmButton = {
                 Button(
                     onClick = {
@@ -752,6 +773,28 @@ private fun GeminiChip(text: String, background: Color, foreground: Color) {
             fontWeight = FontWeight.SemiBold,
             color = foreground,
             modifier = Modifier.padding(horizontal = 7.dp, vertical = 1.dp)
+        )
+    }
+}
+
+/** Аватарка вкладки ШІ: Gemini або ChatGPT (Assets/ChatGPT_logo.png) у білому колі. */
+@Composable
+fun AiAvatar(provider: String, size: Dp) {
+    if (provider != "chatgpt") {
+        GeminiAvatar(size)
+        return
+    }
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(Color.White),
+        contentAlignment = Alignment.Center
+    ) {
+        AsyncImage(
+            model = CHATGPT_LOGO_URL,
+            contentDescription = "ChatGPT",
+            modifier = Modifier.size(size * 0.7f)
         )
     }
 }
