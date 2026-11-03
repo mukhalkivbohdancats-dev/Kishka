@@ -14,7 +14,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -111,6 +113,7 @@ object Strings {
             "answer" to "Відповісти",
             "decline" to "Відхилити",
             "gemini" to "Gemini",
+            "chatgpt" to "ChatGPT",
             "gemini_subtitle" to "Штучний інтелект",
             "gemini_empty" to "Привіт! Я Gemini. Запитайте мене про що завгодно — я пам'ятаю нашу розмову.",
             "gemini_thinking" to "Gemini думає...",
@@ -169,6 +172,7 @@ object Strings {
             "answer" to "Ответить",
             "decline" to "Отклонить",
             "gemini" to "Gemini",
+            "chatgpt" to "ChatGPT",
             "gemini_subtitle" to "Искусственный интеллект",
             "gemini_empty" to "Привет! Я Gemini. Спросите меня о чём угодно — я помню наш разговор.",
             "gemini_thinking" to "Gemini думает...",
@@ -227,6 +231,7 @@ object Strings {
             "answer" to "Answer",
             "decline" to "Decline",
             "gemini" to "Gemini",
+            "chatgpt" to "ChatGPT",
             "gemini_subtitle" to "Artificial Intelligence",
             "gemini_empty" to "Hi! I'm Gemini. Ask me anything — I remember our conversation.",
             "gemini_thinking" to "Gemini is thinking...",
@@ -349,17 +354,19 @@ fun OfflineBanner(lang: String) {
     }
 }
 
-/** Вкладки: 0 Чати, 1 Дзвінки, 2 Gemini, 3 Кішка ШІ (Kishka AI), 4 Акаунт. */
+/** Вкладки: 0 Чати, 1 Дзвінки, 2 Gemini, 3 ChatGPT, 4 Кішка ШІ (Kishka AI), 5 Акаунт. */
 private const val TAB_CHATS = 0
 private const val TAB_CALLS = 1
 private const val TAB_GEMINI = 2
-private const val TAB_PREVIEW = 3
-private const val TAB_ACCOUNT = 4
+private const val TAB_CHATGPT = 3
+private const val TAB_PREVIEW = 4
+private const val TAB_ACCOUNT = 5
 
 private fun tabLabelKey(index: Int): String = when (index) {
     TAB_CHATS -> "chats"
     TAB_CALLS -> "calls"
     TAB_GEMINI -> "gemini"
+    TAB_CHATGPT -> "chatgpt"
     TAB_PREVIEW -> "ai_preview"
     else -> "account"
 }
@@ -370,6 +377,7 @@ private fun TabIcon(index: Int) {
         TAB_CHATS -> Icon(Icons.Default.Chat, contentDescription = null)
         TAB_CALLS -> Icon(Icons.Default.Call, contentDescription = null)
         TAB_GEMINI -> AsyncImage(model = GEMINI_LOGO_URL, contentDescription = null, modifier = Modifier.size(24.dp))
+        TAB_CHATGPT -> AsyncImage(model = CHATGPT_LOGO_URL, contentDescription = null, modifier = Modifier.size(24.dp))
         TAB_PREVIEW -> Icon(Icons.Default.Pets, contentDescription = null)
         else -> Icon(Icons.Default.Person, contentDescription = null)
     }
@@ -548,7 +556,7 @@ fun KishkaApp() {
 
             if (isWide) {
                 Row(modifier = Modifier.fillMaxSize()) {
-                    // Бічна панель прокручується, щоб усі 5 кнопок влазили навіть у низькому екрані
+                    // Бічна панель прокручується, щоб усі 6 кнопок влазили навіть у низькому екрані
                     Column(
                         modifier = Modifier
                             .width(84.dp)
@@ -558,7 +566,7 @@ fun KishkaApp() {
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Spacer(modifier = Modifier.height(8.dp))
-                        for (tab in 0..4) {
+                        for (tab in 0..TAB_ACCOUNT) {
                             NavigationRailItem(
                                 selected = selectedBottomTab == tab,
                                 onClick = { selectedBottomTab = tab },
@@ -601,7 +609,7 @@ fun KishkaApp() {
 
                 if (!(selectedUserForChat != null && selectedBottomTab == TAB_CHATS)) {
                     NavigationBar(containerColor = Color.White, tonalElevation = 8.dp) {
-                        for (tab in 0..4) {
+                        for (tab in 0..TAB_ACCOUNT) {
                             NavigationBarItem(
                                 selected = selectedBottomTab == tab,
                                 onClick = { selectedBottomTab = tab },
@@ -653,6 +661,12 @@ fun MainTabContent(
             currentEmail = currentUserEmail,
             displayName = currentDisplayName,
             lang = currentLanguage
+        )
+        TAB_CHATGPT -> GeminiTab(
+            currentEmail = currentUserEmail,
+            displayName = currentDisplayName,
+            lang = currentLanguage,
+            provider = "chatgpt"
         )
         TAB_PREVIEW -> PreviewTab(
             currentEmail = currentUserEmail,
@@ -822,14 +836,18 @@ fun LanguageSelector(currentLang: String, onLangSelected: (String) -> Unit) {
     }
 }
 
-private fun previewLine(lang: String, preview: ChatPreview): String = when {
+private fun previewLine(lang: String, preview: ChatPreview, me: String): String = when {
+    parseCallRecord(preview.lastText) != null -> {
+        val record = parseCallRecord(preview.lastText)!!
+        CallRecordText.label(lang, record.status, preview.lastSender.trim().lowercase() == me, record.seconds)
+    }
     preview.lastText.isNotEmpty() -> preview.lastText
     preview.lastFileType == "video" -> ChatStrings.get("video", lang)
     preview.lastFileType == "file" -> ChatStrings.get("file_label", lang)
     else -> ChatStrings.get("photo", lang)
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatsTab(
     manager: KishkaManager,
@@ -843,6 +861,7 @@ fun ChatsTab(
 
     var onlyUnread by remember { mutableStateOf(false) }
     var showAddContactDialog by remember { mutableStateOf(false) }
+    var contactToDelete by remember { mutableStateOf<User?>(null) }
     var newContactEmail by remember { mutableStateOf("") }
     var isAddingContact by remember { mutableStateOf(false) }
 
@@ -913,7 +932,12 @@ fun ChatsTab(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 12.dp, vertical = 4.dp)
-                                .clickable { onUserSelected(user) },
+                                .clip(RoundedCornerShape(18.dp))
+                                .combinedClickable(
+                                    onClick = { onUserSelected(user) },
+                                    // Затиснути контакт -> «Видалити»
+                                    onLongClick = { contactToDelete = user }
+                                ),
                             shape = RoundedCornerShape(18.dp),
                             color = Color.White,
                             shadowElevation = 1.dp
@@ -946,7 +970,7 @@ fun ChatsTab(
                                         TypingIndicator(text = ChatStrings.get("typing", lang), fontSize = 13.sp)
                                     } else {
                                         Text(
-                                            if (preview != null) previewLine(lang, preview) else user.email,
+                                            if (preview != null) previewLine(lang, preview, me) else "",
                                             color = if ((preview?.unread ?: 0) > 0) Color.Black else Color.Gray,
                                             fontSize = 13.sp,
                                             maxLines = 1,
@@ -989,6 +1013,41 @@ fun ChatsTab(
                     }
                 }
             }
+        }
+    }
+
+    val deleting = contactToDelete
+    if (deleting != null) {
+        // Меню контакту (затиснули): кнопка «Видалити» -> «Ви впевнені?» -> Ні / Так
+        var confirmStep by remember(deleting.email) { mutableStateOf(false) }
+        if (!confirmStep) {
+            MessageActionsDialog(
+                preview = deleting.name.ifEmpty { deleting.email },
+                lang = lang,
+                onDismiss = { contactToDelete = null },
+                dismissOnAction = false,
+                actions = listOf(
+                    MessageAction(Icons.Default.Delete, XStrings.get("contact_delete", lang), true) { confirmStep = true }
+                )
+            )
+        }
+        if (confirmStep) {
+            AlertDialog(
+                onDismissRequest = { contactToDelete = null },
+                shape = RoundedCornerShape(22.dp),
+                containerColor = Color.White,
+                title = { Text(XStrings.get("contact_delete_title", lang), fontWeight = FontWeight.Bold) },
+                text = { Text(XStrings.get("contact_delete_text", lang), color = Color.Gray) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        manager.deleteContact(currentEmail, deleting.email)
+                        contactToDelete = null
+                    }) { Text(XStrings.get("yes", lang), color = Color(0xFFD93025), fontWeight = FontWeight.Bold) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { contactToDelete = null }) { Text(XStrings.get("no", lang)) }
+                }
+            )
         }
     }
 
