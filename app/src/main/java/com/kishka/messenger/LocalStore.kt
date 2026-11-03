@@ -20,7 +20,7 @@ object StoreVersion {
 }
 
 /** Останнє повідомлення чату + кількість непрочитаних (для списку чатів). */
-data class ChatPreview(val lastText: String, val lastTime: Long, val unread: Int, val lastFileType: String?)
+data class ChatPreview(val lastText: String, val lastTime: Long, val unread: Int, val lastFileType: String?, val lastSender: String = "")
 
 /**
  * Постійне сховище на пристрої (SQLite): повідомлення, контакти, історія дзвінків.
@@ -28,7 +28,7 @@ data class ChatPreview(val lastText: String, val lastTime: Long, val unread: Int
  * Повідомлення видаляються лише за сигналом сервера (видалення автором) або кнопкою "Видалити в мене".
  */
 class LocalStore private constructor(context: Context) :
-    SQLiteOpenHelper(context.applicationContext, "kishka_local.db", null, 1) {
+    SQLiteOpenHelper(context.applicationContext, "kishka_local.db", null, 2) {
 
     companion object {
         @Volatile private var instance: LocalStore? = null
@@ -43,7 +43,7 @@ class LocalStore private constructor(context: Context) :
         db.execSQL(
             "CREATE TABLE messages (id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, sender TEXT, receiver TEXT, " +
                 "text TEXT, ts INTEGER NOT NULL, file_url TEXT, file_type TEXT, thumb_url TEXT, file_name TEXT, " +
-                "pending INTEGER NOT NULL DEFAULT 0)"
+                "pending INTEGER NOT NULL DEFAULT 0, seen_at INTEGER NOT NULL DEFAULT 0)"
         )
         db.execSQL("CREATE INDEX idx_messages_chat ON messages (chat_id, ts)")
         db.execSQL("CREATE TABLE hidden (owner TEXT NOT NULL, chat_id TEXT NOT NULL, msg_id TEXT NOT NULL, PRIMARY KEY (owner, msg_id))")
@@ -57,7 +57,14 @@ class LocalStore private constructor(context: Context) :
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Майбутні версії: додавати міграції тут, а не видаляти таблиці
+        // Міграції: нові колонки додаються, таблиці НЕ видаляються (повідомлення й контакти лишаються)
+        if (oldVersion < 2) {
+            try {
+                db.execSQL("ALTER TABLE messages ADD COLUMN seen_at INTEGER NOT NULL DEFAULT 0")
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     // ===================== ПОВІДОМЛЕННЯ =====================
@@ -74,6 +81,7 @@ class LocalStore private constructor(context: Context) :
         put("thumb_url", m.thumbUrl)
         put("file_name", m.fileName)
         put("pending", if (pending) 1 else 0)
+        put("seen_at", m.seenAt)
     }
 
     /** Додає повідомлення, яких ще немає. Повертає лише НОВІ (за ними показуємо сповіщення). */
@@ -128,8 +136,47 @@ class LocalStore private constructor(context: Context) :
             fileUrl = str("file_url"),
             fileType = str("file_type"),
             thumbUrl = str("thumb_url"),
-            fileName = str("file_name")
+            fileName = str("file_name"),
+            seenAt = c.getLong(c.getColumnIndexOrThrow("seen_at")),
+            pending = c.getInt(c.getColumnIndexOrThrow("pending")) == 1
         )
+    }
+
+    /** Співрозмовник побачив повідомлення (сигнал сервера): на них з'являються дві фіолетові галочки. */
+    @Synchronized
+    fun markSeen(ids: List<String>, at: Long) {
+        if (ids.isEmpty()) return
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for (id in ids) {
+                val values = ContentValues().apply { put("seen_at", at) }
+                db.update("messages", values, "id = ? AND seen_at = 0", arrayOf(id))
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        StoreVersion.bump()
+    }
+
+    /** Повідомлення з сервера вже мають позначку «побачено» — переносимо її на пристрій. */
+    @Synchronized
+    fun applySeen(list: List<Message>) {
+        val seen = list.filter { it.seenAt > 0L && it.id.isNotEmpty() }
+        if (seen.isEmpty()) return
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for (m in seen) {
+                val values = ContentValues().apply { put("seen_at", m.seenAt) }
+                db.update("messages", values, "id = ? AND seen_at = 0", arrayOf(m.id))
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        StoreVersion.bump()
     }
 
     /** Повідомлення чату, крім прихованих кнопкою "Видалити в мене" цим користувачем. */
@@ -178,9 +225,10 @@ class LocalStore private constructor(context: Context) :
         var lastText = ""
         var lastTime = 0L
         var lastType: String? = null
+        var lastSender = ""
         var found = false
         db.rawQuery(
-            "SELECT text, ts, file_type FROM messages WHERE chat_id = ? AND id NOT IN (SELECT msg_id FROM hidden WHERE owner = ?) ORDER BY ts DESC LIMIT 1",
+            "SELECT text, ts, file_type, sender FROM messages WHERE chat_id = ? AND id NOT IN (SELECT msg_id FROM hidden WHERE owner = ?) ORDER BY ts DESC LIMIT 1",
             arrayOf(chatId, owner)
         ).use { c ->
             if (c.moveToFirst()) {
@@ -188,6 +236,7 @@ class LocalStore private constructor(context: Context) :
                 lastText = c.getString(0) ?: ""
                 lastTime = c.getLong(1)
                 lastType = if (c.isNull(2)) null else c.getString(2)
+                lastSender = if (c.isNull(3)) "" else c.getString(3)
             }
         }
         if (!found) return null
@@ -197,10 +246,10 @@ class LocalStore private constructor(context: Context) :
         }
         var unread = 0
         db.rawQuery(
-            "SELECT COUNT(*) FROM messages WHERE chat_id = ? AND sender != ? AND ts > ? AND id NOT IN (SELECT msg_id FROM hidden WHERE owner = ?)",
+            "SELECT COUNT(*) FROM messages WHERE chat_id = ? AND sender != ? AND ts > ? AND text NOT LIKE '[[call:%' AND id NOT IN (SELECT msg_id FROM hidden WHERE owner = ?)",
             arrayOf(chatId, owner, lastRead.toString(), owner)
         ).use { c -> if (c.moveToFirst()) unread = c.getInt(0) }
-        return ChatPreview(lastText, lastTime, unread, lastType)
+        return ChatPreview(lastText, lastTime, unread, lastType, lastSender)
     }
 
     // ===================== КОНТАКТИ =====================
@@ -247,6 +296,13 @@ class LocalStore private constructor(context: Context) :
         } finally {
             db.endTransaction()
         }
+        StoreVersion.bump()
+    }
+
+    /** Видаляє контакт лише на цьому акаунті (історія повідомлень лишається на пристрої). */
+    @Synchronized
+    fun deleteContact(owner: String, email: String) {
+        writableDatabase.delete("contacts", "owner = ? AND email = ?", arrayOf(owner, email.trim().lowercase()))
         StoreVersion.bump()
     }
 
