@@ -85,7 +85,12 @@ object Presence {
     fun setForeground(value: Boolean) {
         foreground = value
         sendState()
+        // Повернулись у застосунок — відкритий чат знову «прочитаний» (галочки у співрозмовника)
+        if (value) KishkaManager.sendSeenForActive()
     }
+
+    /** Чи застосунок зараз на екрані (повідомлення вважаються прочитаними лише тоді). */
+    val isForeground: Boolean get() = foreground
 
     private fun sendState(forceActive: Boolean? = null) {
         val email = me ?: return
@@ -140,7 +145,7 @@ object PresenceText {
                 else -> "в мережі"
             }
         }
-        if (info.lastSeen <= 0L) return null
+        if (info.lastSeen <= 0L) return XStrings.get("last_seen_unknown", lang)
 
         val minutes = ((now - info.lastSeen) / 60000L).coerceAtLeast(0L)
         val today = isSameDay(info.lastSeen, now)
