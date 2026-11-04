@@ -20,8 +20,12 @@ import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.net.wifi.WifiManager
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.os.Process
+import android.os.VibrationEffect
+import android.os.Vibrator
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
 import java.util.concurrent.LinkedBlockingQueue
@@ -38,6 +42,17 @@ class CallService : Service() {
     private var ringtone: Ringtone? = null
     private val tones = CallTones()
     private var hadCall = false
+    private var vibrator: Vibrator? = null
+    private val ringHandler = Handler(Looper.getMainLooper())
+    private var usingMelody = false
+
+    // Які можливості потрібні службі, що працює на передньому плані (камера / запис екрана) — для типу сервісу
+    private var useCamera = false
+    private var useProjection = false
+
+    // Остання застосована система звуку: нічого не перемикаємо без потреби (інакше гучність «пливе»)
+    private var appliedSpeaker: Boolean? = null
+    private var appliedMuted: Boolean? = null
     
     @Volatile
     private var isMuted = false
@@ -77,6 +92,15 @@ class CallService : Service() {
         const val ACTION_APPLY_AUDIO = "ACTION_APPLY_AUDIO" // застосувати мікрофон / динамік / гучність
         const val ACTION_TOGGLE_MUTE = "ACTION_TOGGLE_MUTE"
         const val ACTION_TOGGLE_SPEAKER = "ACTION_TOGGLE_SPEAKER"
+
+        // Відео в дзвінку
+        const val ACTION_VIDEO_CAMERA = "ACTION_VIDEO_CAMERA"
+        const val ACTION_VIDEO_FLIP = "ACTION_VIDEO_FLIP"
+        const val ACTION_VIDEO_SCREEN = "ACTION_VIDEO_SCREEN"
+        const val ACTION_VIDEO_STOP = "ACTION_VIDEO_STOP"
+        const val EXTRA_VIDEO_FRONT = "EXTRA_VIDEO_FRONT"
+        const val EXTRA_PROJECTION_CODE = "EXTRA_PROJECTION_CODE"
+        const val EXTRA_PROJECTION_DATA = "EXTRA_PROJECTION_DATA"
 
         const val EXTRA_TARGET_NAME = "EXTRA_TARGET_NAME"
         const val EXTRA_TARGET_PHONE = "EXTRA_TARGET_PHONE"
@@ -126,6 +150,7 @@ class CallService : Service() {
                 startFg(buildOngoingNotification(outgoing = true), microphone = true)
                 // Довгі гудки, як у телефоні, поки співрозмовник не відповів
                 enableHighQualityAudio()
+                raiseCallStreamVolume()
                 applyAudioState()
                 tones.startRingback()
             }
@@ -134,9 +159,8 @@ class CallService : Service() {
                 hadCall = true
                 stopRingtone()
                 tones.stopRingback()
-                // Повзунок гучності — це підсилення поточного звуку (1.0 = гучність системи); системну гучність дзвінка
-                // піднімаємо щонайменше до 80%, щоб співрозмовника було добре чути
-                CallSession.volume = 1f
+                // Гучність розмови — це системна гучність дзвінка (повзунок і кнопки гучності змінюють її). На початку
+                // піднімаємо її щонайменше до 80%, щоб співрозмовника було добре чути; далі система не чіпається.
                 raiseCallStreamVolume()
                 startFg(buildOngoingNotification(outgoing = false), microphone = true)
                 enableHighQualityAudio()
@@ -144,6 +168,7 @@ class CallService : Service() {
                 acquireNetworkLocks()
                 startAudioStreaming()
                 updateProximity()
+                if (myEmail.isNotEmpty() && targetEmail.isNotEmpty()) CallVideo.attach(applicationContext, myEmail, targetEmail)
             }
             ACTION_END_CALL -> stopCall()
             ACTION_HANGUP -> {
@@ -151,6 +176,35 @@ class CallService : Service() {
             }
             ACTION_DECLINE -> {
                 if (CallSession.phase == CallPhase.INCOMING) CallCoordinator.decline() else stopCall()
+            }
+            ACTION_VIDEO_CAMERA -> {
+                if (CallSession.phase == CallPhase.ACTIVE && CallVideo.hasCameraPermission(this)) {
+                    useProjection = false
+                    useCamera = true
+                    startFg(buildOngoingNotification(outgoing = false), microphone = true)
+                    CallVideo.attach(applicationContext, myEmail, targetEmail)
+                    CallVideo.startCamera(intent.getBooleanExtra(EXTRA_VIDEO_FRONT, false))
+                }
+            }
+            ACTION_VIDEO_FLIP -> CallVideo.flipCamera()
+            ACTION_VIDEO_SCREEN -> {
+                @Suppress("DEPRECATION")
+                val projectionData = intent.getParcelableExtra<Intent>(EXTRA_PROJECTION_DATA)
+                val code = intent.getIntExtra(EXTRA_PROJECTION_CODE, Activity.RESULT_CANCELED)
+                if (CallSession.phase == CallPhase.ACTIVE && projectionData != null && code == Activity.RESULT_OK) {
+                    useCamera = false
+                    useProjection = true
+                    // Тип «запис екрана» має бути оголошений ДО отримання дозволу на трансляцію (вимога Android 10+)
+                    startFg(buildOngoingNotification(outgoing = false), microphone = true)
+                    CallVideo.attach(applicationContext, myEmail, targetEmail)
+                    CallVideo.startScreen(code, projectionData)
+                }
+            }
+            ACTION_VIDEO_STOP -> {
+                CallVideo.stopLocal()
+                useCamera = false
+                useProjection = false
+                if (CallSession.phase == CallPhase.ACTIVE) startFg(buildOngoingNotification(outgoing = false), microphone = true)
             }
             ACTION_APPLY_AUDIO -> applyAudioState()
             ACTION_TOGGLE_MUTE -> CallCoordinator.toggleMute()
@@ -161,15 +215,16 @@ class CallService : Service() {
 
     private fun startFg(notification: Notification, microphone: Boolean) {
         try {
-            when {
-                Build.VERSION.SDK_INT >= 30 -> {
-                    var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+            if (Build.VERSION.SDK_INT >= 29) {
+                var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+                if (Build.VERSION.SDK_INT >= 30) {
                     if (microphone) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                    startForeground(NOTIFICATION_ID, notification, type)
+                    if (useCamera) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
                 }
-                Build.VERSION.SDK_INT >= 29 ->
-                    startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
-                else -> startForeground(NOTIFICATION_ID, notification)
+                if (useProjection) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                startForeground(NOTIFICATION_ID, notification, type)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -216,20 +271,24 @@ class CallService : Service() {
         }
     }
 
-    /** Застосовує мікрофон, динамік і гучність із CallSession (єдине джерело правди). */
+    /**
+     * Застосовує мікрофон і динамік із CallSession (єдине джерело правди). Кожну зміну робимо ЛИШЕ коли значення справді
+     * змінилось: постійне перемикання маршруту звуку давало «пливучу» гучність. Гучність розмови — це системна гучність
+     * дзвінка, нею керують повзунок на екрані (CallCoordinator.setVolume) і кнопки гучності телефона.
+     */
     private fun applyAudioState() {
         isMuted = CallSession.muted
-        try {
-            audioManager.isMicrophoneMute = isMuted
-        } catch (e: Exception) {
-            e.printStackTrace()
+        if (appliedMuted != isMuted) {
+            appliedMuted = isMuted
+            try {
+                audioManager.isMicrophoneMute = isMuted
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
-        routeSpeaker(CallSession.speakerOn)
-        // Гучність: повзунок справді змінює гучність співрозмовника (підсилення потоку звуку), а не лише число на екрані
-        try {
-            audioTrack?.setVolume(CallSession.volume.coerceIn(0f, 1f))
-        } catch (e: Exception) {
-            e.printStackTrace()
+        if (appliedSpeaker != CallSession.speakerOn) {
+            appliedSpeaker = CallSession.speakerOn
+            routeSpeaker(CallSession.speakerOn)
         }
         updateProximity()
     }
@@ -247,22 +306,97 @@ class CallService : Service() {
         }
     }
 
+    /**
+     * Вхідний дзвінок: системний рингтон (з гучністю дзвінка), вібрація за налаштуваннями телефона; якщо рингтон
+     * недоступний — власна мелодія. У режимі "без звуку" — лише вібрація або тиша, як у звичайному телефоні.
+     */
     private fun startRingtone() {
+        stopRingtone()
+        val mode = try {
+            audioManager.ringerMode
+        } catch (e: Exception) {
+            AudioManager.RINGER_MODE_NORMAL
+        }
+        if (mode == AudioManager.RINGER_MODE_SILENT) return
+
+        startVibration()
+        if (mode != AudioManager.RINGER_MODE_NORMAL) return
+
+        var started = false
         try {
-            stopRingtone()
-            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-            ringtone = RingtoneManager.getRingtone(applicationContext, uri)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) ringtone?.isLooping = true
-            ringtone?.play()
+            val uri = RingtoneManager.getActualDefaultRingtoneUri(applicationContext, RingtoneManager.TYPE_RINGTONE)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            val r = if (uri != null) RingtoneManager.getRingtone(applicationContext, uri) else null
+            if (r != null) {
+                try {
+                    r.audioAttributes = AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) r.isLooping = true
+                r.play()
+                ringtone = r
+                started = true
+                if (started && Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+                    // На старих Android рингтон не вміє повторюватись — перезапускаємо, коли закінчився
+                    val loop = object : Runnable {
+                        override fun run() {
+                            val cur = ringtone ?: return
+                            try {
+                                if (!cur.isPlaying) cur.play()
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                            ringHandler.postDelayed(this, 1000)
+                        }
+                    }
+                    ringHandler.postDelayed(loop, 1000)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        if (!started) {
+            usingMelody = true
+            tones.startIncomingMelody()
+        }
+    }
+
+    private fun stopRingtone() {
+        ringHandler.removeCallbacksAndMessages(null)
+        try {
+            ringtone?.stop()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        ringtone = null
+        if (usingMelody) {
+            usingMelody = false
+            tones.stopIncomingMelody()
+        }
+        try {
+            vibrator?.cancel()
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
-    private fun stopRingtone() {
+    private fun startVibration() {
         try {
-            ringtone?.stop()
-            ringtone = null
+            val v = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator ?: return
+            vibrator = v
+            if (!v.hasVibrator()) return
+            val pattern = longArrayOf(0, 700, 900)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                v.vibrate(VibrationEffect.createWaveform(pattern, 0))
+            } else {
+                @Suppress("DEPRECATION")
+                v.vibrate(pattern, 0)
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -370,7 +504,7 @@ class CallService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
             }
-            builder.build().also { it.setVolume(CallSession.volume.coerceIn(0f, 1f)) }
+            builder.build().also { it.setVolume(1f) }
         } catch (e: Exception) {
             e.printStackTrace()
             null
@@ -728,17 +862,10 @@ class CallService : Service() {
         }
     }
 
-    private fun stopCall() {
-        if (stopped) return
-        stopped = true
-        stopAudioStreaming()
-        stopRingtone()
-        if (hadCall) {
-            tones.playHangup() // як у телефоні, коли кладуть слухавку
-            hadCall = false
-        } else {
-            tones.stopRingback()
-        }
+    /** Повертає звукові налаштування телефона після дзвінка (викликається після сигналів відбою). */
+    private fun restoreAudio() {
+        // Якщо за цей час уже почався новий дзвінок — нічого не чіпаємо
+        if (CallSession.phase != CallPhase.IDLE) return
         try {
             routeSpeaker(false)
             audioManager.mode = AudioManager.MODE_NORMAL
@@ -746,7 +873,6 @@ class CallService : Service() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
-
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
@@ -754,6 +880,24 @@ class CallService : Service() {
             focusRequest = null
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+    }
+
+    private fun stopCall() {
+        if (stopped) return
+        stopped = true
+        CallVideo.detach()
+        useCamera = false
+        useProjection = false
+        stopAudioStreaming()
+        stopRingtone()
+        if (hadCall) {
+            hadCall = false
+            // Короткі гудки «слухавку покладено»; звук телефона повертаємо вже після них
+            tones.playHangup { restoreAudio() }
+        } else {
+            tones.stopAll()
+            restoreAudio()
         }
 
         try {
