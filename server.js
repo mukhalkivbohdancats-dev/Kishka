@@ -1106,6 +1106,35 @@ io.on('connection', (socket) => {
         (voiceRoom.volatile || voiceRoom).emit(`voice_chunk_${cleanTarget}`, chunk);
     });
 
+    // ---------- Відео в дзвінку (камера / екран телефона): H.264 кадри бінарно, без перекодування на сервері ----------
+    // video_frame — кадри (volatile: застарілі кадри відкидаються, а не накопичуються, тож затримка не росте).
+    // video_ctl   — службові повідомлення: стан відео (увімк/вимк, розмір, поворот) і запит ключового кадра.
+    socket.on('video_frame', (data, ack) => {
+        // ack потрібен відправнику для контролю затору: він бачить, скільки кадрів ще «в дорозі», і знижує бітрейт, якщо мережа слабка
+        if (typeof ack === 'function') { try { ack(); } catch (e) {} }
+        const { targetEmail, chunk } = data || {};
+        if (!targetEmail || !chunk) return;
+        if (chunk.length !== undefined && chunk.length > 2 * 1024 * 1024) return;
+        const cleanTarget = String(targetEmail).trim().toLowerCase();
+        const room = io.to(cleanTarget);
+        (room.volatile || room).emit(`video_frame_${cleanTarget}`, chunk);
+    });
+
+    socket.on('video_ctl', (data) => {
+        const { targetEmail, ctl } = data || {};
+        if (!targetEmail || !ctl || typeof ctl !== 'object') return;
+        const cleanTarget = String(targetEmail).trim().toLowerCase();
+        const safe = {
+            type: String(ctl.type || '').slice(0, 16),
+            on: !!ctl.on,
+            source: ctl.source === 'screen' ? 'screen' : 'camera',
+            w: Math.max(0, Math.min(8192, parseInt(ctl.w, 10) || 0)),
+            h: Math.max(0, Math.min(8192, parseInt(ctl.h, 10) || 0)),
+            rot: [0, 90, 180, 270].includes(parseInt(ctl.rot, 10)) ? parseInt(ctl.rot, 10) : 0
+        };
+        io.to(cleanTarget).emit(`video_ctl_${cleanTarget}`, safe);
+    });
+
     socket.on('disconnect', () => {
         const email = socket.userEmail;
         // Видаляємо запис лише якщо він належить саме цьому сокету (після перепідключення там уже новий сокет)
@@ -1484,8 +1513,42 @@ function geminiCheckCancelled(job) {
     if (job && job.cancelled) throw new Error('CANCELLED');
 }
 
-// ---------- Низькорівневий HTTPS-запит до Gemini API (БЕЗ таймауту) ----------
+// ---------- ОДИН запит на повідомлення: рівномірний темп без «залпів» ----------
+// Помилки 429 від Google виникають, коли запити летять купою. Тому запити до однієї моделі йдуть по черзі з мінімальним проміжком
+// (GEMINI_MIN_GAP_MS, за замовчуванням 4000 мс; 0 вимикає). Лише службові POST до моделей; список моделей і опитування не чіпаємо.
+const GEMINI_MIN_GAP_MS = process.env.GEMINI_MIN_GAP_MS !== undefined && process.env.GEMINI_MIN_GAP_MS !== ''
+    ? Math.max(0, parseInt(process.env.GEMINI_MIN_GAP_MS, 10) || 0) : 4000;
+const GEMINI_MAX_RATE_RETRIES = process.env.GEMINI_RATE_RETRIES !== undefined && process.env.GEMINI_RATE_RETRIES !== ''
+    ? Math.max(0, parseInt(process.env.GEMINI_RATE_RETRIES, 10) || 0) : 2;
+const geminiGateNext = new Map();
+
+async function geminiGate(path, job) {
+    if (!GEMINI_MIN_GAP_MS) return;
+    const m = String(path).match(/models\/([^:/?]+)/);
+    const key = m ? m[1] : 'other';
+    const now = Date.now();
+    const at = Math.max(now, geminiGateNext.get(key) || 0);
+    geminiGateNext.set(key, at + GEMINI_MIN_GAP_MS);
+    while (Date.now() < at) {
+        if (job && job.cancelled) throw new Error('CANCELLED');
+        await new Promise((r) => setTimeout(r, Math.min(500, Math.max(50, at - Date.now()))));
+    }
+    if (job && job.cancelled) throw new Error('CANCELLED');
+}
+
 function geminiRequest(method, path, bodyObj, job, timeoutMs) {
+    if (method === 'POST' && !/\/cancel$/.test(path)) {
+        return geminiGate(path, job).then(() => geminiRequestRaw(method, path, bodyObj, job, timeoutMs));
+    }
+    return geminiRequestRaw(method, path, bodyObj, job, timeoutMs);
+}
+
+function geminiStreamRequest(path, bodyObj, job, onThought) {
+    return geminiGate(path, job).then(() => geminiStreamRequestRaw(path, bodyObj, job, onThought));
+}
+
+// ---------- Низькорівневий HTTPS-запит до Gemini API (БЕЗ таймауту) ----------
+function geminiRequestRaw(method, path, bodyObj, job, timeoutMs) {
     return new Promise((resolve, reject) => {
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) return reject(new Error('NO_KEY'));
@@ -1530,7 +1593,7 @@ function geminiRequest(method, path, bodyObj, job, timeoutMs) {
 // ---------- Потокова генерація (SSE) ----------
 // Під час довгих міркувань зʼєднання не «мовчить»: Gemini надсилає шматки відповіді, тому Google не обриває запит за часом.
 // Результат збираємо в таку саму структуру, як у звичайного generateContent.
-function geminiStreamRequest(path, bodyObj, job, onThought) {
+function geminiStreamRequestRaw(path, bodyObj, job, onThought) {
     return new Promise((resolve, reject) => {
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) return reject(new Error('NO_KEY'));
@@ -1938,14 +2001,6 @@ async function callGemini(contents, systemText, model, job, opts) {
             geminiNoSearchModels.add(model.id);
             geminiCapsSave(model.id, 'no_search');
             res = await geminiGenerate(model, body, job);
-        } else if (res.status === 429) {
-            // Ліміт пошуку Google окремий від ліміту моделі: якщо вичерпано саме його — відповідаємо без пошуку
-            const q = geminiQuotaInfo(res.json);
-            const blob = JSON.stringify(res.json || {});
-            if (/ground|google_search|search_tool/i.test(blob)) {
-                const retry = await geminiGenerate(model, body, job);
-                if (retry.status === 200) res = retry;
-            }
         }
     } else {
         res = await geminiGenerate(model, body, job);
@@ -2048,10 +2103,12 @@ async function geminiRunChain(chain, runner, job, strict) {
                 continue;
             }
             if (s === 429) {
+                // Мінутний ліміт: чекаємо рівно стільки, скільки просить Google, і повторюємо ТІЄЮ САМОЮ моделлю
+                // не більше GEMINI_RATE_RETRIES разів (без шторму запитів і без перебору інших моделей).
                 rateWaits++;
-                if (rateWaits >= 3 && list.length > 1) { advance(); continue; }
-                const wait = Math.min(Math.max(err.retryMs || 0, 4000 * rateWaits), 70000) + 500;
-                console.error(`Gemini ${model.id}: ліміт запитів, чекаю ${Math.round(wait / 1000)} с`);
+                if (rateWaits > GEMINI_MAX_RATE_RETRIES) throw firstError;
+                const wait = Math.min(Math.max(err.retryMs || 0, 6000), 65000) + 1000;
+                console.error(`Gemini ${model.id}: ліміт запитів, один повтор через ${Math.round(wait / 1000)} с (${rateWaits}/${GEMINI_MAX_RATE_RETRIES})`);
                 await geminiWait(wait, job, model, 'wait');
                 continue;
             }
