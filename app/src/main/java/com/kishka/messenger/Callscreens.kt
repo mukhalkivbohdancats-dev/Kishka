@@ -244,6 +244,7 @@ fun CallScreen(lang: String) {
     Surface(modifier = Modifier.fillMaxSize(), color = if (videoMode) Color.Black else ViberPurple) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val viewportHeight = maxHeight
+            val viewportWidth = maxWidth
             val compact = maxHeight < 520.dp || maxWidth < 340.dp
             val tablet = maxWidth >= 600.dp && maxHeight >= 520.dp
             val avatarSize: Dp = if (compact) 84.dp else if (tablet) 170.dp else 120.dp
@@ -398,7 +399,7 @@ fun CallScreen(lang: String) {
 
                         // Кнопки вміщуються і на вузькому телефоні, і на планшеті: широкий екран — один рядок, вузький — по 3
                         val perRow = when {
-                            maxWidth >= 640.dp -> buttons.size
+                            viewportWidth >= 640.dp -> buttons.size
                             buttons.size <= 4 -> buttons.size
                             else -> 3
                         }
