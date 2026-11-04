@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -31,7 +32,11 @@ object CallSession {
     var startedAt by mutableStateOf(0L)
     var muted by mutableStateOf(false)
     var speakerOn by mutableStateOf(false)
+    /** Гучність розмови 0..1 = рівень системної гучності дзвінка (кнопки гучності телефона теж її змінюють). */
     var volume by mutableStateOf(0.7f)
+
+    /** Користувач тягне повзунок: у цей час слідкуємо лише за пальцем, а не за системою (інакше повзунок «стрибає»). */
+    @Volatile var volumeDragging = false
 
     /** Екран дзвінка згорнуто в смужку зверху (дзвінок триває). */
     var minimized by mutableStateOf(false)
@@ -198,10 +203,85 @@ object CallCoordinator {
         applyAudio()
     }
 
+    private fun audioManager(): AudioManager? =
+        try {
+            ctx?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        } catch (e: Exception) {
+            null
+        }
+
+    /** Кількість кроків системної гучності розмови (зазвичай 5-7). */
+    fun volumeMax(): Int =
+        try {
+            (audioManager()?.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL) ?: 7).coerceAtLeast(1)
+        } catch (e: Exception) {
+            7
+        }
+
+    /**
+     * Повзунок гучності змінює РЕАЛЬНУ системну гучність розмови. Запис іде лише тоді, коли значення справді змінилось, і
+     * ніяких додаткових перемикань звуку (раніше кожен рух повзунка перемикав маршрут звуку — гучність «плигала» безкінечно).
+     */
     fun setVolume(value: Float) {
-        CallSession.volume = value.coerceIn(0f, 1f)
-        applyAudio()
+        val am = audioManager() ?: return
+        val max = volumeMax()
+        val index = Math.round(value.coerceIn(0f, 1f) * max).coerceIn(0, max)
+        CallSession.volume = index.toFloat() / max
+        try {
+            if (am.getStreamVolume(AudioManager.STREAM_VOICE_CALL) != index) {
+                am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, index, 0)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
+
+    /** Повзунок слідкує за кнопками гучності телефона. Лише читання, без запису назад — зациклення неможливе. */
+    fun syncVolume() {
+        if (CallSession.volumeDragging) return
+        val am = audioManager() ?: return
+        try {
+            val max = volumeMax()
+            val value = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL).toFloat() / max
+            if (Math.abs(value - CallSession.volume) > 0.001f) CallSession.volume = value
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    // ===================== Відео в дзвінку =====================
+
+    private fun videoIntent(action: String, block: (Intent) -> Unit = {}) {
+        val context = ctx ?: return
+        if (CallSession.phase != CallPhase.ACTIVE) return
+        val intent = Intent(context, CallService::class.java).apply {
+            this.action = action
+            putExtra(CallService.EXTRA_TARGET_NAME, CallSession.peerName)
+            putExtra(CallService.EXTRA_TARGET_PHONE, CallSession.peerEmail)
+            putExtra(CallService.EXTRA_MY_EMAIL, myEmail)
+            block(this)
+        }
+        try {
+            ContextCompat.startForegroundService(context, intent)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    /** Камера: за замовчуванням задня. Дозвіл CAMERA має бути вже наданий (екран дзвінка питає його перед викликом). */
+    fun startCamera(front: Boolean = false) = videoIntent(CallService.ACTION_VIDEO_CAMERA) {
+        it.putExtra(CallService.EXTRA_VIDEO_FRONT, front)
+    }
+
+    fun flipCamera() = videoIntent(CallService.ACTION_VIDEO_FLIP)
+
+    /** Трансляція екрана телефона; resultCode і data дає системне вікно дозволу на запис екрана. */
+    fun startScreen(resultCode: Int, data: Intent) = videoIntent(CallService.ACTION_VIDEO_SCREEN) {
+        it.putExtra(CallService.EXTRA_PROJECTION_CODE, resultCode)
+        it.putExtra(CallService.EXTRA_PROJECTION_DATA, data)
+    }
+
+    fun stopVideo() = videoIntent(CallService.ACTION_VIDEO_STOP)
 
     private fun applyAudio() {
         val context = ctx ?: return
