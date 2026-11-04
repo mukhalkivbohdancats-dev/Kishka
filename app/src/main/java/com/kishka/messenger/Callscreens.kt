@@ -1,9 +1,16 @@
 package com.kishka.messenger
 
+import android.app.Activity
+import android.content.Context
+import android.media.projection.MediaProjectionManager
+import android.Manifest
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,13 +25,19 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.FlipCameraAndroid
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.ScreenShare
+import androidx.compose.material.icons.filled.StopScreenShare
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.VolumeDown
 import androidx.compose.material.icons.filled.VolumeUp
@@ -45,6 +58,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -71,7 +85,13 @@ object CallStrings {
             "outgoing_log" to "Вихідний",
             "incoming_log" to "Вхідний",
             "clear" to "Очистити історію",
-            "clear_confirm" to "Видалити всю історію дзвінків на цьому пристрої?"
+            "clear_confirm" to "Видалити всю історію дзвінків на цьому пристрої?",
+            "camera" to "Камера",
+            "screen" to "Екран",
+            "flip" to "Повернути камеру",
+            "sharing" to "Ви показуєте свій екран",
+            "camera_denied" to "Немає дозволу на камеру. Дозвольте її в налаштуваннях телефона",
+            "video_failed" to "Не вдалося увімкнути відео"
         ),
         "ru" to mapOf(
             "incoming" to "Входящий звонок",
@@ -88,7 +108,13 @@ object CallStrings {
             "outgoing_log" to "Исходящий",
             "incoming_log" to "Входящий",
             "clear" to "Очистить историю",
-            "clear_confirm" to "Удалить всю историю звонков на этом устройстве?"
+            "clear_confirm" to "Удалить всю историю звонков на этом устройстве?",
+            "camera" to "Камера",
+            "screen" to "Экран",
+            "flip" to "Повернуть камеру",
+            "sharing" to "Вы показываете свой экран",
+            "camera_denied" to "Нет разрешения на камеру. Разрешите её в настройках телефона",
+            "video_failed" to "Не удалось включить видео"
         ),
         "en" to mapOf(
             "incoming" to "Incoming call",
@@ -105,7 +131,13 @@ object CallStrings {
             "outgoing_log" to "Outgoing",
             "incoming_log" to "Incoming",
             "clear" to "Clear history",
-            "clear_confirm" to "Delete the whole call history on this device?"
+            "clear_confirm" to "Delete the whole call history on this device?",
+            "camera" to "Camera",
+            "screen" to "Screen",
+            "flip" to "Flip camera",
+            "sharing" to "You are sharing your screen",
+            "camera_denied" to "No camera permission. Allow it in the phone settings",
+            "video_failed" to "Could not turn on the video"
         )
     )
 
@@ -140,20 +172,76 @@ private fun rememberCallStatus(lang: String): String {
     }
 }
 
+private class CallButton(
+    val icon: ImageVector,
+    val label: String,
+    val active: Boolean,
+    val solid: Color?,
+    val onClick: () -> Unit
+)
+
 /**
  * Єдиний повноекранний екран дзвінка (вхідний / вихідний / розмова).
- * Адаптується під телефон і планшет, прокручується, якщо екран низький. Кнопка зверху згортає дзвінок у смужку.
+ * Без відео: аватар співрозмовника посередині. Коли співрозмовник вмикає камеру чи екран — його відео на весь екран,
+ * а коли вимикає — знову аватар посередині. Кнопка повороту камери зверху справа зʼявляється лише коли моя камера увімкнена.
  */
 @Composable
 fun CallScreen(lang: String) {
     val phase = CallSession.phase
     val status = rememberCallStatus(lang)
     var showVolume by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    val videoMode = phase == CallPhase.ACTIVE && CallVideo.remoteOn
+    val camOn = CallVideo.localOn && CallVideo.localSource == "camera"
+    val screenOn = CallVideo.localOn && CallVideo.localSource == "screen"
 
     // Системна кнопка "Назад" згортає дзвінок, а не вимикає
     BackHandler(enabled = true) { CallCoordinator.minimize() }
 
-    Surface(modifier = Modifier.fillMaxSize(), color = ViberPurple) {
+    // Повзунок слідкує за системною гучністю (кнопки гучності телефона)
+    LaunchedEffect(Unit) {
+        while (true) {
+            CallCoordinator.syncVolume()
+            delay(500)
+        }
+    }
+
+    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) CallCoordinator.startCamera(false)
+        else Notice.show(CallStrings.get("camera_denied", lang))
+    }
+    val projection = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val data = result.data
+        if (result.resultCode == Activity.RESULT_OK && data != null) {
+            CallCoordinator.startScreen(result.resultCode, data)
+        }
+    }
+
+    val onCamera: () -> Unit = {
+        if (camOn) {
+            CallCoordinator.stopVideo()
+        } else if (CallVideo.hasCameraPermission(context)) {
+            CallCoordinator.startCamera(false) // задня камера за замовчуванням
+        } else {
+            cameraPermission.launch(Manifest.permission.CAMERA)
+        }
+    }
+    val onScreen: () -> Unit = {
+        if (screenOn) {
+            CallCoordinator.stopVideo()
+        } else {
+            try {
+                val mpm = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                projection.launch(mpm.createScreenCaptureIntent())
+            } catch (e: Exception) {
+                e.printStackTrace()
+                Notice.show(CallStrings.get("video_failed", lang))
+            }
+        }
+    }
+
+    Surface(modifier = Modifier.fillMaxSize(), color = if (videoMode) Color.Black else ViberPurple) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val viewportHeight = maxHeight
             val compact = maxHeight < 520.dp || maxWidth < 340.dp
@@ -161,6 +249,11 @@ fun CallScreen(lang: String) {
             val avatarSize: Dp = if (compact) 84.dp else if (tablet) 170.dp else 120.dp
             val buttonSize: Dp = if (compact) 56.dp else if (tablet) 80.dp else 64.dp
             val iconSize: Dp = buttonSize * 0.45f
+
+            // Відео співрозмовника — на весь екран, під кнопками
+            if (videoMode) {
+                RemoteVideoView(modifier = Modifier.fillMaxSize())
+            }
 
             Column(
                 modifier = Modifier
@@ -171,7 +264,7 @@ fun CallScreen(lang: String) {
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                // Згорнути
+                // Верхній рядок: згорнути | (ім'я і таймер при відео) | повернути камеру (лише при увімкненій камері)
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
                         onClick = { CallCoordinator.minimize() },
@@ -180,32 +273,67 @@ fun CallScreen(lang: String) {
                         Icon(Icons.Default.KeyboardArrowDown, contentDescription = CallStrings.get("minimize", lang), tint = Color.White)
                     }
                     Spacer(modifier = Modifier.width(10.dp))
-                    Text(CallStrings.get("minimize", lang), color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp)
+                    Column(modifier = Modifier.weight(1f)) {
+                        if (videoMode) {
+                            Text(
+                                CallSession.peerName.ifEmpty { CallSession.peerEmail },
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(status, color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+                        } else {
+                            Text(CallStrings.get("minimize", lang), color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp)
+                        }
+                    }
+                    if (camOn) {
+                        IconButton(
+                            onClick = { CallCoordinator.flipCamera() },
+                            modifier = Modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.28f))
+                        ) {
+                            Icon(Icons.Default.FlipCameraAndroid, contentDescription = CallStrings.get("flip", lang), tint = Color.White)
+                        }
+                    }
                 }
 
-                // Співрозмовник
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    AsyncImage(
-                        model = CallSession.peerAvatar?.takeIf { it.isNotEmpty() } ?: DEFAULT_AVATAR_URL,
-                        contentDescription = null,
-                        modifier = Modifier.size(avatarSize).clip(CircleShape)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        CallSession.peerName.ifEmpty { CallSession.peerEmail },
-                        fontSize = if (tablet) 28.sp else 22.sp,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(status, fontSize = if (tablet) 20.sp else 16.sp, color = Color.White.copy(alpha = 0.85f))
+                // Посередині: аватар (коли нема відео) або порожньо (відео на весь екран)
+                if (videoMode) {
+                    Spacer(modifier = Modifier.height(1.dp))
+                } else {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        AsyncImage(
+                            model = CallSession.peerAvatar?.takeIf { it.isNotEmpty() } ?: DEFAULT_AVATAR_URL,
+                            contentDescription = null,
+                            modifier = Modifier.size(avatarSize).clip(CircleShape)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            CallSession.peerName.ifEmpty { CallSession.peerEmail },
+                            fontSize = if (tablet) 28.sp else 22.sp,
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(status, fontSize = if (tablet) 20.sp else 16.sp, color = Color.White.copy(alpha = 0.85f))
+                        if (screenOn) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(CallStrings.get("sharing", lang), fontSize = 13.sp, color = Color.White.copy(alpha = 0.85f))
+                        }
+                    }
                 }
 
                 // Кнопки
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = if (videoMode) {
+                        Modifier.clip(RoundedCornerShape(24.dp)).background(Color.Black.copy(alpha = 0.38f)).padding(vertical = 10.dp, horizontal = 6.dp)
+                    } else Modifier
+                ) {
                     if (phase == CallPhase.INCOMING) {
                         Row(
                             modifier = Modifier.fillMaxWidth().widthIn(max = 520.dp),
@@ -220,6 +348,7 @@ fun CallScreen(lang: String) {
                         }
                     } else {
                         if (showVolume) {
+                            val max = CallCoordinator.volumeMax()
                             Row(
                                 modifier = Modifier.fillMaxWidth().widthIn(max = 520.dp).padding(bottom = 14.dp),
                                 verticalAlignment = Alignment.CenterVertically
@@ -227,7 +356,12 @@ fun CallScreen(lang: String) {
                                 Icon(Icons.Default.VolumeDown, contentDescription = null, tint = Color.White)
                                 Slider(
                                     value = CallSession.volume,
-                                    onValueChange = { CallCoordinator.setVolume(it) },
+                                    onValueChange = {
+                                        CallSession.volumeDragging = true
+                                        CallCoordinator.setVolume(it)
+                                    },
+                                    onValueChangeFinished = { CallSession.volumeDragging = false },
+                                    steps = (max - 1).coerceAtLeast(0),
                                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                                     colors = SliderDefaults.colors(
                                         thumbColor = Color.White,
@@ -238,27 +372,70 @@ fun CallScreen(lang: String) {
                                 Icon(Icons.Default.VolumeUp, contentDescription = null, tint = Color.White)
                             }
                         }
-                        Row(
-                            modifier = Modifier.fillMaxWidth().widthIn(max = 560.dp),
-                            horizontalArrangement = Arrangement.SpaceEvenly,
-                            verticalAlignment = Alignment.Top
-                        ) {
-                            CallControl(
-                                if (CallSession.muted) Icons.Default.MicOff else Icons.Default.Mic,
-                                CallStrings.get("mic", lang), CallSession.muted, buttonSize, iconSize
-                            ) { CallCoordinator.toggleMute() }
-                            CallControl(
-                                Icons.Default.Speaker, CallStrings.get("speaker", lang), CallSession.speakerOn, buttonSize, iconSize
-                            ) { CallCoordinator.toggleSpeaker() }
-                            CallControl(
-                                Icons.Default.VolumeUp, CallStrings.get("volume", lang), showVolume, buttonSize, iconSize
-                            ) { showVolume = !showVolume }
-                            CallControl(
-                                Icons.Default.CallEnd, CallStrings.get("end", lang), false, buttonSize, iconSize, Color.Red
-                            ) { CallCoordinator.end() }
+
+                        val buttons = ArrayList<CallButton>()
+                        buttons.add(CallButton(
+                            if (CallSession.muted) Icons.Default.MicOff else Icons.Default.Mic,
+                            CallStrings.get("mic", lang), CallSession.muted, null
+                        ) { CallCoordinator.toggleMute() })
+                        buttons.add(CallButton(Icons.Default.Speaker, CallStrings.get("speaker", lang), CallSession.speakerOn, null) {
+                            CallCoordinator.toggleSpeaker()
+                        })
+                        buttons.add(CallButton(Icons.Default.VolumeUp, CallStrings.get("volume", lang), showVolume, null) {
+                            showVolume = !showVolume
+                        })
+                        if (phase == CallPhase.ACTIVE) {
+                            buttons.add(CallButton(
+                                if (camOn) Icons.Default.Videocam else Icons.Default.VideocamOff,
+                                CallStrings.get("camera", lang), camOn, null, onCamera
+                            ))
+                            buttons.add(CallButton(
+                                if (screenOn) Icons.Default.StopScreenShare else Icons.Default.ScreenShare,
+                                CallStrings.get("screen", lang), screenOn, null, onScreen
+                            ))
+                        }
+                        buttons.add(CallButton(Icons.Default.CallEnd, CallStrings.get("end", lang), false, Color.Red) { CallCoordinator.end() })
+
+                        // Кнопки вміщуються і на вузькому телефоні, і на планшеті: широкий екран — один рядок, вузький — по 3
+                        val perRow = when {
+                            maxWidth >= 640.dp -> buttons.size
+                            buttons.size <= 4 -> buttons.size
+                            else -> 3
+                        }
+                        buttons.chunked(perRow).forEachIndexed { rowIndex, rowButtons ->
+                            if (rowIndex > 0) Spacer(modifier = Modifier.height(10.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth().widthIn(max = 640.dp),
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                rowButtons.forEach { b ->
+                                    CallControl(b.icon, b.label, b.active, buttonSize, iconSize, b.solid, b.onClick)
+                                }
+                            }
                         }
                     }
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
+            }
+
+            // Маленьке вікно «я» (лише камера) — зверху справа під кнопкою повороту
+            if (camOn) {
+                val rotated = CallVideo.localRot % 180 != 0
+                val aspect = if (rotated) CallVideo.localH.toFloat() / CallVideo.localW.toFloat()
+                else CallVideo.localW.toFloat() / CallVideo.localH.toFloat()
+                val longSide: Dp = if (tablet) 220.dp else 150.dp
+                val pipW: Dp = if (aspect < 1f) longSide * aspect else longSide
+                val pipH: Dp = if (aspect < 1f) longSide else longSide / aspect
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 76.dp, end = 14.dp)
+                        .size(pipW, pipH)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color.Black)
+                ) {
+                    LocalPreviewView(modifier = Modifier.fillMaxSize())
                 }
             }
         }
@@ -279,7 +456,7 @@ private fun CallControl(
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.widthIn(min = size, max = size + 28.dp)) {
         val background = solid ?: if (active) Color.White else Color.White.copy(alpha = 0.2f)
         val tint = if (solid != null) Color.White else if (active) ViberPurple else Color.White
-        androidx.compose.foundation.layout.Box(
+        Box(
             modifier = Modifier.size(size).clip(CircleShape).background(background).clickable { onClick() },
             contentAlignment = Alignment.Center
         ) {
