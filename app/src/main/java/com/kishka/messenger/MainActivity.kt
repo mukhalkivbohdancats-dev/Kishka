@@ -13,6 +13,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -26,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallMade
@@ -46,7 +48,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -354,21 +358,29 @@ fun OfflineBanner(lang: String) {
     }
 }
 
-/** Вкладки: 0 Чати, 1 Дзвінки, 2 Gemini, 3 ChatGPT, 4 Кішка ШІ (Kishka AI), 5 Акаунт. */
+/** Вкладки: 0 Чати, 1 Дзвінки, 2 Gemini, 3 ChatGPT, 4 Кішка ШІ (Kishka AI), 5 KishkaBlox, 6 Акаунт, 7 Admin (лише для адміністратора). */
 private const val TAB_CHATS = 0
 private const val TAB_CALLS = 1
 private const val TAB_GEMINI = 2
 private const val TAB_CHATGPT = 3
 private const val TAB_PREVIEW = 4
-private const val TAB_ACCOUNT = 5
+private const val TAB_BLOX = 5
+private const val TAB_ACCOUNT = 6
+private const val TAB_ADMIN = 7
 
-private fun tabLabelKey(index: Int): String = when (index) {
-    TAB_CHATS -> "chats"
-    TAB_CALLS -> "calls"
-    TAB_GEMINI -> "gemini"
-    TAB_CHATGPT -> "chatgpt"
-    TAB_PREVIEW -> "ai_preview"
-    else -> "account"
+/** Список вкладок: вкладка Admin є лише в адміністратора (пошта mukhalkivbohdancats@gmail.com). */
+private fun visibleTabs(isAdmin: Boolean): List<Int> =
+    if (isAdmin) (TAB_CHATS..TAB_ADMIN).toList() else (TAB_CHATS..TAB_ACCOUNT).toList()
+
+private fun tabLabel(index: Int, lang: String): String = when (index) {
+    TAB_CHATS -> Strings.get("chats", lang)
+    TAB_CALLS -> Strings.get("calls", lang)
+    TAB_GEMINI -> Strings.get("gemini", lang)
+    TAB_CHATGPT -> Strings.get("chatgpt", lang)
+    TAB_PREVIEW -> Strings.get("ai_preview", lang)
+    TAB_BLOX -> BloxStrings.get("tab", lang)
+    TAB_ADMIN -> AdminStrings.get("tab", lang)
+    else -> Strings.get("account", lang)
 }
 
 @Composable
@@ -378,7 +390,21 @@ private fun TabIcon(index: Int) {
         TAB_CALLS -> Icon(Icons.Default.Call, contentDescription = null)
         TAB_GEMINI -> AsyncImage(model = GEMINI_LOGO_URL, contentDescription = null, modifier = Modifier.size(24.dp))
         TAB_CHATGPT -> AsyncImage(model = CHATGPT_LOGO_URL, contentDescription = null, modifier = Modifier.size(24.dp))
-        TAB_PREVIEW -> Icon(Icons.Default.Pets, contentDescription = null)
+        // Аватарка Кішки ШІ: res/drawable-nodpi/logo_watermark.png
+        TAB_PREVIEW -> Image(
+            painter = painterResource(R.drawable.logo_watermark),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.size(26.dp).clip(CircleShape)
+        )
+        // Аватарка KishkaBlox: Assets/Kishkablox.png
+        TAB_BLOX -> AsyncImage(
+            model = KISHKABLOX_LOGO_URL,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.size(26.dp).clip(RoundedCornerShape(7.dp))
+        )
+        TAB_ADMIN -> Icon(Icons.Default.AdminPanelSettings, contentDescription = null)
         else -> Icon(Icons.Default.Person, contentDescription = null)
     }
 }
@@ -403,6 +429,8 @@ fun KishkaApp() {
 
     var selectedUserForChat by remember { mutableStateOf<User?>(null) }
     var selectedBottomTab by rememberSaveable { mutableStateOf(TAB_CHATS) }
+    // Вкладка Admin є лише в адміністратора
+    val isAdmin = AdminConfig.isAdmin(currentUserEmail)
 
     val configuration = LocalConfiguration.current
     // Планшет або телефон у горизонтальному положенні: бічна панель і дві колонки
@@ -430,14 +458,28 @@ fun KishkaApp() {
             if (savedNameInAuth.isNotEmpty()) currentDisplayName = savedNameInAuth
             if (!savedPhotoInAuth.isNullOrEmpty()) avatarUrl = savedPhotoInAuth
 
-            manager.getUserProfile(currentUserEmail) { user ->
-                val nameToSave = if (user != null && user.name.isNotEmpty()) user.name else if (currentDisplayName.isNotEmpty()) currentDisplayName else currentUserEmail.substringBefore("@")
-                val photoToSave = if (user != null && !user.avatarUrl.isNullOrEmpty()) user.avatarUrl else avatarUrl
+            // Перевірка бану (сервер ще й сам надішле стан прав після підключення)
+            BanCheck.check(currentUserEmail) { banned -> if (banned == true) Access.markBanned() }
 
-                currentDisplayName = nameToSave
-                if (!photoToSave.isNullOrEmpty()) avatarUrl = photoToSave
+            val emailPrefix = currentUserEmail.substringBefore("@")
+            manager.getUserProfile(currentUserEmail) { user, fromServer ->
+                val serverName = user?.name.orEmpty()
+                // «Заглушка» сервера — це початок пошти; справжнє ім'я береться з акаунта, якщо воно там є
+                val realName = when {
+                    serverName.isNotEmpty() && serverName != emailPrefix -> serverName
+                    savedNameInAuth.isNotEmpty() -> savedNameInAuth
+                    serverName.isNotEmpty() -> serverName
+                    currentDisplayName.isNotEmpty() -> currentDisplayName
+                    else -> emailPrefix
+                }
+                // Стандартну аватарку за справжню не вважаємо, щоб не затерти збережену на сервері
+                val photo = user?.avatarUrl?.takeIf { it.isNotEmpty() && it != DEFAULT_AVATAR_URL }
+                    ?: savedPhotoInAuth?.takeIf { it.isNotEmpty() }
 
-                manager.registerOrUpdateUserInDb(currentUserEmail, nameToSave, photoToSave)
+                currentDisplayName = realName
+                if (photo != null) avatarUrl = photo
+                // На сервер ім'я йде лише після відповіді сервера (не з порожнього кешу)
+                if (fromServer) manager.registerOrUpdateUserInDb(currentUserEmail, realName, photo)
                 isDataLoading = false
             }
         } else {
@@ -472,6 +514,7 @@ fun KishkaApp() {
 
     val doLogout: () -> Unit = {
         Presence.stop()
+        Access.reset()
         CallCoordinator.reset()
         KishkaConnectionService.stop(context)
         manager.resetSession()
@@ -486,6 +529,14 @@ fun KishkaApp() {
     val onLangChanged: (String) -> Unit = { lang ->
         currentLanguage = lang
         AuthManager.saveLanguage(context, lang)
+    }
+
+    // Адміністратор забанив цей акаунт: вихід з акаунта і повідомлення «акаунт забанено» (на всіх мовах)
+    LaunchedEffect(Access.banned, currentUserEmail) {
+        if (Access.banned && currentUserEmail.isNotEmpty()) {
+            doLogout()
+            Notice.show(AdminStrings.get("banned_login", currentLanguage))
+        }
     }
 
     val onProfileUpdated: (String, String?) -> Unit = { newName, newAvatarUrl ->
@@ -527,7 +578,7 @@ fun KishkaApp() {
         } else {
             val tabContent: @Composable () -> Unit = {
                 MainTabContent(
-                    selectedBottomTab = selectedBottomTab,
+                    selectedBottomTab = if (selectedBottomTab == TAB_ADMIN && !isAdmin) TAB_CHATS else selectedBottomTab,
                     manager = manager,
                     currentUserEmail = currentUserEmail,
                     currentDisplayName = currentDisplayName,
@@ -537,16 +588,19 @@ fun KishkaApp() {
                     onUserSelected = { selectedUserForChat = it },
                     onStartCall = startCallAction,
                     onProfileUpdated = onProfileUpdated,
-                    onLogout = doLogout
+                    onLogout = doLogout,
+                    isAdmin = isAdmin
                 )
             }
             val chatContent: @Composable () -> Unit = {
                 val chatUser = selectedUserForChat
                 if (chatUser != null) {
+                    // Свіже ім'я та аватарка контакту (після зміни профілю вони оновлюються і в відкритому чаті)
+                    val liveUser = ContactsRepo.contacts.firstOrNull { it.email == chatUser.email } ?: chatUser
                     ChatScreen(
                         manager = manager,
                         currentEmail = currentUserEmail,
-                        targetUser = chatUser,
+                        targetUser = liveUser,
                         lang = currentLanguage,
                         onBack = { selectedUserForChat = null },
                         onStartCall = { email -> startCallAction(email) }
@@ -566,13 +620,13 @@ fun KishkaApp() {
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Spacer(modifier = Modifier.height(8.dp))
-                        for (tab in 0..TAB_ACCOUNT) {
+                        for (tab in visibleTabs(isAdmin)) {
                             NavigationRailItem(
                                 selected = selectedBottomTab == tab,
                                 onClick = { selectedBottomTab = tab },
                                 icon = { TabIcon(tab) },
                                 label = {
-                                    Text(Strings.get(tabLabelKey(tab), currentLanguage), fontSize = 10.sp, maxLines = 2, lineHeight = 11.sp, textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis)
+                                    Text(tabLabel(tab, currentLanguage), fontSize = 10.sp, maxLines = 2, lineHeight = 11.sp, textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis)
                                 },
                                 alwaysShowLabel = true
                             )
@@ -609,13 +663,13 @@ fun KishkaApp() {
 
                 if (!(selectedUserForChat != null && selectedBottomTab == TAB_CHATS)) {
                     NavigationBar(containerColor = Color.White, tonalElevation = 8.dp) {
-                        for (tab in 0..TAB_ACCOUNT) {
+                        for (tab in visibleTabs(isAdmin)) {
                             NavigationBarItem(
                                 selected = selectedBottomTab == tab,
                                 onClick = { selectedBottomTab = tab },
                                 icon = { TabIcon(tab) },
                                 label = {
-                                    Text(Strings.get(tabLabelKey(tab), currentLanguage), fontSize = 10.sp, maxLines = 2, lineHeight = 11.sp, textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis)
+                                    Text(tabLabel(tab, currentLanguage), fontSize = 10.sp, maxLines = 2, lineHeight = 11.sp, textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis)
                                 },
                                 alwaysShowLabel = true
                             )
@@ -642,7 +696,8 @@ fun MainTabContent(
     onUserSelected: (User) -> Unit,
     onStartCall: (String) -> Unit,
     onProfileUpdated: (String, String?) -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    isAdmin: Boolean = false
 ) {
     when (selectedBottomTab) {
         TAB_CHATS -> ChatsTab(
@@ -657,22 +712,28 @@ fun MainTabContent(
             lang = currentLanguage,
             onStartCall = onStartCall
         )
-        TAB_GEMINI -> GeminiTab(
-            currentEmail = currentUserEmail,
-            displayName = currentDisplayName,
-            lang = currentLanguage
-        )
-        TAB_CHATGPT -> GeminiTab(
-            currentEmail = currentUserEmail,
-            displayName = currentDisplayName,
-            lang = currentLanguage,
-            provider = "chatgpt"
-        )
+        TAB_GEMINI -> if (Access.gemini) {
+            GeminiTab(
+                currentEmail = currentUserEmail,
+                displayName = currentDisplayName,
+                lang = currentLanguage
+            )
+        } else AccessBlockedScreen("Gemini", currentLanguage)
+        TAB_CHATGPT -> if (Access.chatgpt) {
+            GeminiTab(
+                currentEmail = currentUserEmail,
+                displayName = currentDisplayName,
+                lang = currentLanguage,
+                provider = "chatgpt"
+            )
+        } else AccessBlockedScreen("ChatGPT", currentLanguage)
         TAB_PREVIEW -> PreviewTab(
             currentEmail = currentUserEmail,
             displayName = currentDisplayName,
             lang = currentLanguage
         )
+        TAB_BLOX -> KishkabloxTab(lang = currentLanguage)
+        TAB_ADMIN -> if (isAdmin) AdminTab(adminEmail = currentUserEmail, lang = currentLanguage) else Box(Modifier.fillMaxSize()) {}
         else -> AccountTab(
             manager = manager,
             displayName = currentDisplayName,
@@ -1169,11 +1230,13 @@ fun AccountTab(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
+                // Відступ зверху: підпис поля не обрізається, коли поле прокручується до самого верху з клавіатурою
                 OutlinedTextField(
                     value = nameInput,
                     onValueChange = { nameInput = it },
-                    label = { Text(Strings.get("your_name", currentLang)) },
-                    modifier = Modifier.fillMaxWidth()
+                    label = { Text(Strings.get("your_name", currentLang), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 4.dp)
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -1184,10 +1247,11 @@ fun AccountTab(
                 Button(
                     onClick = {
                         isLoading = true
-                        manager.updateUserProfile(email, nameInput, selectedPhotoUri) { success, newUrl ->
+                        manager.updateUserProfile(email, nameInput.trim().ifEmpty { displayName }, selectedPhotoUri) { success, newUrl ->
                             isLoading = false
                             if (success) {
-                                onProfileUpdated(nameInput, newUrl)
+                                onProfileUpdated(nameInput.trim().ifEmpty { displayName }, newUrl)
+                                selectedPhotoUri = null
                                 Notice.show(AppText.get("profile_updated", currentLang))
                             } else {
                                 Notice.show(AppText.get("save_error", currentLang))
@@ -1263,44 +1327,73 @@ fun CallsTab(
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
                 items(callLogs, key = { it.id }) { log ->
+                    val outgoing = log.direction == "out"
+                    val status = log.status.ifEmpty { if (log.isMissed) "missed" else "ended" }
+                    val bad = CallRecordText.isBad(status, outgoing)
+                    val statusText = CallRecordText.label(lang, status, outgoing, 0L)
+                    val avatar = ContactsRepo.contacts.firstOrNull { it.email == log.callerEmail }?.avatarUrl
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp, vertical = 4.dp)
                             .clickable { onStartCall(log.callerEmail) },
                         shape = RoundedCornerShape(16.dp),
-                        color = Color.White
+                        color = Color.White,
+                        shadowElevation = 1.dp
                     ) {
                         Row(
                             modifier = Modifier.padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                when {
-                                    log.isMissed -> Icons.Default.CallMissed
-                                    log.direction == "in" -> Icons.Default.CallReceived
-                                    else -> Icons.Default.CallMade
-                                },
+                            AsyncImage(
+                                model = if (avatar.isNullOrEmpty()) DEFAULT_AVATAR_URL else avatar,
                                 contentDescription = null,
-                                tint = if (log.isMissed) Color.Red else ViberPurple
+                                modifier = Modifier.size(48.dp).clip(CircleShape)
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     log.callerName,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (log.isMissed) Color.Red else Color.Unspecified,
+                                    fontSize = 16.sp,
+                                    color = if (bad) Color(0xFFD93025) else Color.Unspecified,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
-                                val kind = when {
-                                    log.isMissed -> CallStrings.get("missed", lang)
-                                    log.direction == "in" -> CallStrings.get("incoming_log", lang)
-                                    else -> CallStrings.get("outgoing_log", lang)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        when {
+                                            bad && !outgoing -> Icons.Default.CallMissed
+                                            outgoing -> Icons.Default.CallMade
+                                            else -> Icons.Default.CallReceived
+                                        },
+                                        contentDescription = null,
+                                        tint = if (bad) Color(0xFFD93025) else Color(0xFF2E9E5B),
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    val durationText = if (status == "ended" && log.durationSec > 0) " · " + formatCallTimer(log.durationSec) else ""
+                                    Text(
+                                        statusText + durationText,
+                                        color = Color.Gray,
+                                        fontSize = 12.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
                                 }
-                                val whenText = dayLabel(log.startedAt, lang) + ", " + formatMessageTime(log.startedAt)
-                                val durationText = if (!log.isMissed && log.durationSec > 0) "  -  " + formatCallTimer(log.durationSec) else ""
-                                Text("$kind  -  $whenText$durationText", color = Color.Gray, fontSize = 12.sp, maxLines = 2)
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    if (isSameDay(log.startedAt, System.currentTimeMillis())) formatMessageTime(log.startedAt)
+                                    else dayLabel(log.startedAt, lang),
+                                    color = Color.Gray,
+                                    fontSize = 11.sp,
+                                    maxLines = 1
+                                )
+                                if (!isSameDay(log.startedAt, System.currentTimeMillis())) {
+                                    Text(formatMessageTime(log.startedAt), color = Color.Gray, fontSize = 11.sp, maxLines = 1)
+                                }
                             }
                             IconButton(onClick = { onStartCall(log.callerEmail) }) {
                                 Icon(Icons.Default.Call, contentDescription = null, tint = ViberPurple)
@@ -1400,7 +1493,7 @@ fun AuthScreen(
                     value = email,
                     onValueChange = { email = it.trim() },
                     label = { Text(Strings.get("enter_email", currentLang)) },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
                 )
