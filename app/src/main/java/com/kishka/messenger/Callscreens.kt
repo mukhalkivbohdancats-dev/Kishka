@@ -193,8 +193,11 @@ fun CallScreen(lang: String) {
     val context = LocalContext.current
 
     val videoMode = phase == CallPhase.ACTIVE && CallVideo.remoteOn
-    val camOn = CallVideo.localOn && CallVideo.localSource == "camera"
-    val screenOn = CallVideo.localOn && CallVideo.localSource == "screen"
+    // Кнопки камери й екрана доступні і ДО відповіді: натиснута кнопка вмикається автоматично, коли співрозмовник відповів
+    val beforeAnswer = phase == CallPhase.OUTGOING || phase == CallPhase.INCOMING
+    val camOn = (CallVideo.localOn && CallVideo.localSource == "camera") || CallSession.pendingVideo == "camera"
+    val screenOn = (CallVideo.localOn && CallVideo.localSource == "screen") || CallSession.pendingVideo == "screen"
+    val camLive = CallVideo.localOn && CallVideo.localSource == "camera"
 
     // Системна кнопка "Назад" згортає дзвінок, а не вимикає
     BackHandler(enabled = true) { CallCoordinator.minimize() }
@@ -289,7 +292,7 @@ fun CallScreen(lang: String) {
                             Text(CallStrings.get("minimize", lang), color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp)
                         }
                     }
-                    if (camOn) {
+                    if (camLive) {
                         IconButton(
                             onClick = { CallCoordinator.flipCamera() },
                             modifier = Modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.28f))
@@ -347,6 +350,20 @@ fun CallScreen(lang: String) {
                                 CallCoordinator.accept()
                             }
                         }
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth().widthIn(max = 520.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            CallControl(
+                                if (camOn) Icons.Default.Videocam else Icons.Default.VideocamOff,
+                                CallStrings.get("camera", lang), camOn, buttonSize, iconSize, null, onCamera
+                            )
+                            CallControl(
+                                if (screenOn) Icons.Default.StopScreenShare else Icons.Default.ScreenShare,
+                                CallStrings.get("screen", lang), screenOn, buttonSize, iconSize, null, onScreen
+                            )
+                        }
                     } else {
                         if (showVolume) {
                             val max = CallCoordinator.volumeMax()
@@ -385,16 +402,14 @@ fun CallScreen(lang: String) {
                         buttons.add(CallButton(Icons.Default.VolumeUp, CallStrings.get("volume", lang), showVolume, null) {
                             showVolume = !showVolume
                         })
-                        if (phase == CallPhase.ACTIVE) {
-                            buttons.add(CallButton(
-                                if (camOn) Icons.Default.Videocam else Icons.Default.VideocamOff,
-                                CallStrings.get("camera", lang), camOn, null, onCamera
-                            ))
-                            buttons.add(CallButton(
-                                if (screenOn) Icons.Default.StopScreenShare else Icons.Default.ScreenShare,
-                                CallStrings.get("screen", lang), screenOn, null, onScreen
-                            ))
-                        }
+                        buttons.add(CallButton(
+                            if (camOn) Icons.Default.Videocam else Icons.Default.VideocamOff,
+                            CallStrings.get("camera", lang), camOn, null, onCamera
+                        ))
+                        buttons.add(CallButton(
+                            if (screenOn) Icons.Default.StopScreenShare else Icons.Default.ScreenShare,
+                            CallStrings.get("screen", lang), screenOn, null, onScreen
+                        ))
                         buttons.add(CallButton(Icons.Default.CallEnd, CallStrings.get("end", lang), false, Color.Red) { CallCoordinator.end() })
 
                         // Кнопки вміщуються і на вузькому телефоні, і на планшеті: широкий екран — один рядок, вузький — по 3
@@ -421,7 +436,7 @@ fun CallScreen(lang: String) {
             }
 
             // Маленьке вікно «я» (лише камера) — зверху справа під кнопкою повороту
-            if (camOn) {
+            if (camLive) {
                 val rotated = CallVideo.localRot % 180 != 0
                 val aspect = if (rotated) CallVideo.localH.toFloat() / CallVideo.localW.toFloat()
                 else CallVideo.localW.toFloat() / CallVideo.localH.toFloat()
