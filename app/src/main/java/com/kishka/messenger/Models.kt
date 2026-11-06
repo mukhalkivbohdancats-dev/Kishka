@@ -49,7 +49,9 @@ data class CallLogItem(
     val isMissed: Boolean = false,
     val direction: String = "out",
     val startedAt: Long = 0L,
-    val durationSec: Long = 0L
+    val durationSec: Long = 0L,
+    /** ended | missed | declined | cancelled | unavailable (порожньо у старих записів). */
+    val status: String = ""
 )
 
 data class CallSignal(
