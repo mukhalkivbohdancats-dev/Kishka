@@ -94,7 +94,16 @@ object AuthManager {
                 if (task.isSuccessful) {
                     val user = auth.currentUser
                     if (user != null && user.isEmailVerified) {
-                        onResult(true, t("auth_login_ok", lang))
+                        // Забанений адміністратором акаунт у застосунок не пускаємо
+                        BanCheck.check(cleanEmail) { banned ->
+                            if (banned == true) {
+                                auth.signOut()
+                                lastErrorCode = "banned"
+                                onResult(false, AdminStrings.get("banned_login", lang))
+                            } else {
+                                onResult(true, t("auth_login_ok", lang))
+                            }
+                        }
                     } else {
                         auth.signOut()
                         lastErrorCode = "unverified"
