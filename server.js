@@ -633,15 +633,26 @@ io.on('connection', (socket) => {
         socket.join(cleanEmail);
 
         const cleanName = name || cleanEmail.split('@')[0];
+        // Стандартна аватарка НЕ перезаписує справжню (раніше після зміни імені аватарка скидалась на стандартну)
+        const cleanAvatar = (typeof avatarUrl === 'string' && avatarUrl && !/\/res\/drawable\/ic_launcher\.png$/.test(avatarUrl)) ? avatarUrl : null;
 
-        db.run(
-            `INSERT INTO users (email, name, avatar_url) VALUES (?, ?, ?)
-             ON CONFLICT(email) DO UPDATE SET name = excluded.name, avatar_url = COALESCE(excluded.avatar_url, users.avatar_url)`,
-            [cleanEmail, cleanName, avatarUrl || null],
-            (err) => {
-                if (err) console.error('Помилка збереження профілю:', err.message);
-            }
-        );
+        db.get('SELECT name, avatar_url AS "avatarUrl" FROM users WHERE email = ?', [cleanEmail], (getErr, old) => {
+            db.run(
+                `INSERT INTO users (email, name, avatar_url) VALUES (?, ?, ?)
+                 ON CONFLICT(email) DO UPDATE SET name = excluded.name, avatar_url = COALESCE(excluded.avatar_url, users.avatar_url)`,
+                [cleanEmail, cleanName, cleanAvatar],
+                (err) => {
+                    if (err) return console.error('Помилка збереження профілю:', err.message);
+                    // Ім'я чи аватарка змінились — контакти одразу бачать нове
+                    const changed = old && (old.name !== cleanName || (cleanAvatar && old.avatarUrl !== cleanAvatar));
+                    if (changed) {
+                        db.all('SELECT owner_email FROM contacts WHERE contact_email = ?', [cleanEmail], (e2, rows) => {
+                            (rows || []).forEach((r) => io.to(r.owner_email).emit('contact_updated'));
+                        });
+                    }
+                }
+            );
+        });
         // Щоб у контактів завжди був «останній раз у мережі» (а не порожньо)
         geminiDbRun('INSERT OR IGNORE INTO user_presence (email, last_seen, online, updated) VALUES (?, ?, 0, ?)', [cleanEmail, Date.now(), Date.now()]).catch(() => {});
     });
@@ -2855,6 +2866,9 @@ if (initKishkaAI) initKishkaAI({
     cancelJob: geminiCancelJob,
     checkCancelled: geminiCheckCancelled,
     sleep: geminiSleep,
+    // Загальний бекенд: Кішка ШІ відповідає на будь-яке питання і малює будь-яке зображення (див. kishkaGeneral* нижче)
+    generalAnswer: kishkaBackendOn() ? kishkaGeneralAnswer : null,
+    generalImage: kishkaBackendOn() ? kishkaGeneralImage : null,
     tz: process.env.GEMINI_TIMEZONE || 'Europe/Kyiv',
     nowText: (lang) => {
         try {
@@ -3001,6 +3015,309 @@ io.on('connection', (socket) => {
     });
 });
 // ===================== КІНЕЦЬ БЛОКУ @gemini / @chatgpt =====================
+
+// =====================================================================
+// ===== АДМІНІСТРАТОР: бан акаунтів і доступ до Gemini / ChatGPT / «@» =====
+// Адміністратор — ADMIN_EMAIL (за замовчуванням mukhalkivbohdancats@gmail.com). Усі запити адміністратора підтверджуються
+// токеном Firebase (його підпис перевіряється ключами Google, без жодних додаткових налаштувань): підробити пошту не вийде.
+// Події сокета: admin_get_user, admin_set_flag, admin_list. HTTP: GET /ban-status?email=...
+// Сервер надсилає користувачу user_flags {banned, noGemini, noChatgpt, noMention} і account_banned.
+// =====================================================================
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'mukhalkivbohdancats@gmail.com').trim().toLowerCase();
+const userFlags = new Map(); // email -> { banned, noGemini, noChatgpt, noMention }
+let flagsResolve = null;
+const flagsReady = new Promise((resolve) => { flagsResolve = resolve; });
+
+function flagsOf(email) {
+    const f = userFlags.get(String(email || '').trim().toLowerCase());
+    return f || { banned: false, noGemini: false, noChatgpt: false, noMention: false };
+}
+function flagsPayload(email) {
+    const f = flagsOf(email);
+    return { banned: !!f.banned, noGemini: !!f.noGemini, noChatgpt: !!f.noChatgpt, noMention: !!f.noMention };
+}
+
+db.serialize(() => {
+    db.run(`CREATE TABLE IF NOT EXISTS user_flags (
+        email TEXT PRIMARY KEY,
+        banned INTEGER NOT NULL DEFAULT 0,
+        no_gemini INTEGER NOT NULL DEFAULT 0,
+        no_chatgpt INTEGER NOT NULL DEFAULT 0,
+        no_mention INTEGER NOT NULL DEFAULT 0,
+        updated INTEGER NOT NULL DEFAULT 0
+    )`, () => {
+        db.all('SELECT email, banned, no_gemini, no_chatgpt, no_mention FROM user_flags', [], (err, rows) => {
+            if (err) console.error('user_flags:', err.message);
+            (rows || []).forEach((r) => {
+                userFlags.set(r.email, { banned: !!r.banned, noGemini: !!r.no_gemini, noChatgpt: !!r.no_chatgpt, noMention: !!r.no_mention });
+            });
+            flagsResolve();
+        });
+    });
+});
+
+async function saveFlags(email, f) {
+    await geminiDbRun(
+        `INSERT INTO user_flags (email, banned, no_gemini, no_chatgpt, no_mention, updated) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(email) DO UPDATE SET banned = excluded.banned, no_gemini = excluded.no_gemini,
+             no_chatgpt = excluded.no_chatgpt, no_mention = excluded.no_mention, updated = excluded.updated`,
+        [email, f.banned ? 1 : 0, f.noGemini ? 1 : 0, f.noChatgpt ? 1 : 0, f.noMention ? 1 : 0, Date.now()]
+    );
+}
+
+// Застосунок перевіряє бан перед входом
+app.get('/ban-status', async (req, res) => {
+    await Promise.race([flagsReady, new Promise((r) => setTimeout(r, 3000))]);
+    const email = String(req.query.email || '').trim().toLowerCase();
+    res.set('Cache-Control', 'no-store');
+    res.json({ banned: !!flagsOf(email).banned });
+});
+
+// ---------- Перевірка токена Firebase (RS256, ключі Google) ----------
+const FIREBASE_PROJECT_ID = (() => {
+    if (process.env.FIREBASE_PROJECT_ID) return process.env.FIREBASE_PROJECT_ID.trim();
+    try {
+        const gs = JSON.parse(fs.readFileSync(path.join(__dirname, 'app', 'google-services.json'), 'utf8'));
+        return (gs.project_info && gs.project_info.project_id) || '';
+    } catch (e) { return ''; }
+})();
+let firebaseCerts = { at: 0, certs: {} };
+
+function fetchFirebaseCerts() {
+    return new Promise((resolve, reject) => {
+        https.get('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com', (res) => {
+            const chunks = [];
+            res.on('data', (c) => chunks.push(c));
+            res.on('end', () => {
+                try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch (e) { reject(e); }
+            });
+        }).on('error', reject);
+    });
+}
+
+function b64urlToBuffer(s) {
+    return Buffer.from(String(s).replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+}
+
+async function verifyFirebaseToken(idToken) {
+    try {
+        if (!FIREBASE_PROJECT_ID || typeof idToken !== 'string') return null;
+        const parts = idToken.split('.');
+        if (parts.length !== 3) return null;
+        const header = JSON.parse(b64urlToBuffer(parts[0]).toString('utf8'));
+        const payload = JSON.parse(b64urlToBuffer(parts[1]).toString('utf8'));
+        if (header.alg !== 'RS256' || !header.kid) return null;
+        if (payload.aud !== FIREBASE_PROJECT_ID || payload.iss !== 'https://securetoken.google.com/' + FIREBASE_PROJECT_ID) return null;
+        if (!payload.sub || !payload.exp || payload.exp * 1000 < Date.now()) return null;
+
+        if (!firebaseCerts.certs[header.kid] || Date.now() - firebaseCerts.at > 3600 * 1000) {
+            firebaseCerts = { at: Date.now(), certs: await fetchFirebaseCerts() };
+        }
+        const cert = firebaseCerts.certs[header.kid];
+        if (!cert) return null;
+        const verifier = crypto.createVerify('RSA-SHA256');
+        verifier.update(parts[0] + '.' + parts[1]);
+        if (!verifier.verify(cert, b64urlToBuffer(parts[2]))) return null;
+        return payload;
+    } catch (e) {
+        console.error('verifyFirebaseToken:', e && e.message);
+        return null;
+    }
+}
+
+async function requireAdmin(data) {
+    const claimed = String((data && data.adminEmail) || '').trim().toLowerCase();
+    if (claimed !== ADMIN_EMAIL) return false;
+    const payload = await verifyFirebaseToken(data && data.idToken);
+    if (!payload) return false;
+    return String(payload.email || '').trim().toLowerCase() === ADMIN_EMAIL && payload.email_verified !== false;
+}
+
+function forbiddenText(lang, name) {
+    const l = geminiLang(lang);
+    if (l === 'en') return `The administrator turned off your access to ${name}`;
+    if (l === 'ru') return `Администратор отключил вам доступ к ${name}`;
+    return `Адміністратор вимкнув вам доступ до ${name}`;
+}
+
+async function adminUserView(email) {
+    const rows = await geminiDbAll('SELECT email, name FROM users WHERE email = ?', [email]);
+    const row = rows && rows[0];
+    return { exists: !!row, user: Object.assign({ email, name: row ? row.name : '' }, flagsPayload(email)) };
+}
+
+const ID_FIELDS = ['email', 'senderEmail', 'myEmail', 'callerEmail', 'asker', 'from', 'requesterEmail', 'reader'];
+function claimedEmails(socket, packet) {
+    const out = new Set();
+    if (socket.userEmail) out.add(socket.userEmail);
+    for (let i = 1; i < packet.length; i++) {
+        const d = packet[i];
+        if (typeof d === 'string' && d.includes('@')) out.add(d.trim().toLowerCase());
+        else if (d && typeof d === 'object') {
+            ID_FIELDS.forEach((k) => { if (typeof d[k] === 'string' && d[k].includes('@')) out.add(d[k].trim().toLowerCase()); });
+        }
+    }
+    return Array.from(out);
+}
+
+const FLAG_EVENTS = new Set(['identify', 'register_or_update_user', 'get_user_profile', 'get_contacts']);
+
+io.on('connection', (socket) => {
+    socket.on('error', () => {}); // пакети, відхилені нижче, не повинні валити сервер
+    const announced = new Set();
+
+    // Єдине місце перевірки: забанений нічого не може; вимкнений доступ до ШІ відхиляє відповідні запити
+    socket.use((packet, next) => {
+        try {
+            const ev = packet[0];
+            // Запити адміністратора перевіряються окремо (в них email — це ціль, а не відправник)
+            if (typeof ev === 'string' && ev.startsWith('admin_')) return next();
+            const last = packet[packet.length - 1];
+            const ack = typeof last === 'function' ? last : null;
+            const data = packet[1];
+            const emails = claimedEmails(socket, packet);
+
+            if (emails.some((e) => flagsOf(e).banned)) {
+                socket.emit('account_banned');
+                if (ack) { try { ack({ success: false, banned: true, error: 'banned' }); } catch (e) {} }
+                return; // пакет відкинуто
+            }
+
+            // Користувач щойно назвався — повідомляємо його права (для вкладок Gemini / ChatGPT і «@»)
+            if (FLAG_EVENTS.has(ev) && emails.length) {
+                emails.forEach((e) => {
+                    if (!announced.has(e)) { announced.add(e); socket.emit('user_flags', flagsPayload(e)); }
+                });
+            }
+
+            const who = (data && typeof data === 'object') ? String(data.email || data.asker || '').trim().toLowerCase() : '';
+            const deny = (name) => {
+                if (ack) { try { ack({ success: false, forbidden: true, error: forbiddenText(data && data.lang, name) }); } catch (e) {} }
+            };
+            if (ev === 'gemini_send' && flagsOf(who).noGemini) return deny('Gemini');
+            if (ev === 'chatgpt_send' && flagsOf(who).noChatgpt) return deny('ChatGPT');
+            if (ev === 'ai_mention') {
+                const f = flagsOf(who);
+                if (f.noMention) return deny('@');
+                if (data && data.provider === 'gemini' && f.noGemini) return deny('Gemini');
+                if (data && data.provider === 'chatgpt' && f.noChatgpt) return deny('ChatGPT');
+            }
+        } catch (e) {
+            console.error('socket.use:', e && e.message);
+        }
+        next();
+    });
+
+    socket.on('admin_get_user', async (data, callback) => {
+        const cb = typeof callback === 'function' ? callback : () => {};
+        try {
+            if (!(await requireAdmin(data))) return cb({ success: false, code: 'forbidden' });
+            const email = geminiCleanEmailEarly(data && data.email);
+            if (!email || !email.includes('@')) return cb({ success: false, code: 'invalid' });
+            const view = await adminUserView(email);
+            cb({ success: true, exists: view.exists, user: view.user });
+        } catch (e) {
+            console.error('admin_get_user:', e && e.message);
+            cb({ success: false });
+        }
+    });
+
+    socket.on('admin_set_flag', async (data, callback) => {
+        const cb = typeof callback === 'function' ? callback : () => {};
+        try {
+            if (!(await requireAdmin(data))) return cb({ success: false, code: 'forbidden' });
+            const email = geminiCleanEmailEarly(data && data.email);
+            const flag = data && data.flag;
+            const value = !!(data && data.value);
+            if (!email || !email.includes('@') || !['banned', 'noGemini', 'noChatgpt', 'noMention'].includes(flag)) {
+                return cb({ success: false, code: 'invalid' });
+            }
+            if (flag === 'banned' && value && email === ADMIN_EMAIL) return cb({ success: false, code: 'self' });
+
+            const f = Object.assign({}, flagsOf(email));
+            f[flag] = value;
+            userFlags.set(email, f);
+            await saveFlags(email, f);
+
+            if (f.banned) {
+                // Забанений: розриваємо дзвінок (якщо був) і від'єднуємо всі його пристрої
+                const peer = activeCalls.get(email);
+                if (peer) {
+                    finishCall(email, peer);
+                    io.to(peer).emit(`call_ended_${peer}`, {});
+                }
+                io.to(email).emit('account_banned');
+                io.in(email).disconnectSockets(true);
+            } else {
+                io.to(email).emit('user_flags', flagsPayload(email));
+            }
+            const view = await adminUserView(email);
+            cb({ success: true, user: view.user });
+        } catch (e) {
+            console.error('admin_set_flag:', e && e.message);
+            cb({ success: false });
+        }
+    });
+
+    socket.on('admin_list', async (data, callback) => {
+        const cb = typeof callback === 'function' ? callback : () => {};
+        try {
+            if (!(await requireAdmin(data))) return cb({ success: false, code: 'forbidden' });
+            const rows = await geminiDbAll(
+                `SELECT f.email AS email, u.name AS name FROM user_flags f LEFT JOIN users u ON u.email = f.email
+                 WHERE f.banned = 1 OR f.no_gemini = 1 OR f.no_chatgpt = 1 OR f.no_mention = 1 ORDER BY f.updated DESC LIMIT 200`,
+                []
+            );
+            cb({ success: true, users: rows.map((r) => Object.assign({ email: r.email, name: r.name || '' }, flagsPayload(r.email))) });
+        } catch (e) {
+            console.error('admin_list:', e && e.message);
+            cb({ success: false });
+        }
+    });
+});
+// ===================== КІНЕЦЬ БЛОКУ АДМІНІСТРАТОРА =====================
+
+// =====================================================================
+// ===== КІШКА ШІ: загальний бекенд (відповіді на будь-які питання і будь-які зображення) =====
+// Власний рушій Kishka-1 не знає всього на світі. Коли він не знає відповіді (або просять намалювати) — питання йде сюди.
+// Використовується той самий ключ, що й для вкладки Gemini (GEMINI_API_KEY); користувач бачить лише «Кішка ШІ».
+// KISHKA_AI_BACKEND=off — вимкнути (Кішка ШІ знову відповідає лише своїм рушієм).
+// =====================================================================
+function kishkaBackendOn() {
+    return (process.env.KISHKA_AI_BACKEND || 'auto').toLowerCase() !== 'off' && !!process.env.GEMINI_API_KEY;
+}
+
+async function kishkaGeneralAnswer(opts) {
+    const lang = geminiLang(opts.lang);
+    const catalog = await geminiGetCatalog();
+    const picked = geminiPickModel(catalog, process.env.KISHKA_AI_MODEL || '');
+    const system = 'Ти — Кішка ШІ (Kishka AI), помічниця месенджера Kishka. Ніколи не називай себе Gemini, Google чи іншою моделлю — ти Кішка ШІ. ' +
+        'Відповідай на будь-яке питання по суті, зрозуміло й доброзичливо, тією мовою, якою пише користувач (' +
+        (lang === 'en' ? 'англійська' : (lang === 'ru' ? 'російська' : 'українська')) + ' за замовчуванням), без емодзі. ' +
+        `Зараз ${geminiNowText()}, рік — ${geminiCurrentYear()}. Для актуальних питань скористайся пошуком Google.`;
+    const contents = [];
+    (opts.history || []).forEach((m) => {
+        const role = m.role === 'model' ? 'model' : 'user';
+        const text = String(m.text || '').trim();
+        if (!text) return;
+        if (contents.length && contents[contents.length - 1].role === role) contents[contents.length - 1].parts[0].text += '\n' + text;
+        else contents.push({ role, parts: [{ text }] });
+    });
+    if (!contents.length || contents[contents.length - 1].role !== 'user') {
+        contents.push({ role: 'user', parts: [{ text: String(opts.question || '') }] });
+    }
+    const out = await callGeminiResilient(contents, system, picked, catalog, opts.job, { search: true });
+    return stripEmoji(out.text);
+}
+
+async function kishkaGeneralImage(prompt, job) {
+    const catalog = await geminiGetCatalog();
+    const picked = catalog.find((m) => m.type === 'image' && !m.paid) || catalog.find((m) => m.type === 'image');
+    if (!picked) throw new Error('NO_IMAGE_MODEL');
+    const img = await callGeminiImageResilient(prompt, picked, catalog, job, null, false);
+    return { mime: img.mime, data: Buffer.from(img.data, 'base64') };
+}
+// ===================== КІНЕЦЬ БЛОКУ KISHKA AI (загальний бекенд) =====================
 
 // Не даємо Render Free "заснути" (він вимикає сервіс після 15 хв без запитів) — сервер сам звертається до себе
 (function keepAlive() {
