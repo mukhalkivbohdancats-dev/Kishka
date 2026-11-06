@@ -28,7 +28,7 @@ data class ChatPreview(val lastText: String, val lastTime: Long, val unread: Int
  * Повідомлення видаляються лише за сигналом сервера (видалення автором) або кнопкою "Видалити в мене".
  */
 class LocalStore private constructor(context: Context) :
-    SQLiteOpenHelper(context.applicationContext, "kishka_local.db", null, 2) {
+    SQLiteOpenHelper(context.applicationContext, "kishka_local.db", null, 3) {
 
     companion object {
         @Volatile private var instance: LocalStore? = null
@@ -50,7 +50,7 @@ class LocalStore private constructor(context: Context) :
         db.execSQL("CREATE TABLE contacts (owner TEXT NOT NULL, email TEXT NOT NULL, name TEXT, avatar TEXT, PRIMARY KEY (owner, email))")
         db.execSQL(
             "CREATE TABLE calls (id TEXT PRIMARY KEY, owner TEXT NOT NULL, peer_email TEXT NOT NULL, peer_name TEXT, " +
-                "direction TEXT NOT NULL, started INTEGER NOT NULL, duration INTEGER NOT NULL, missed INTEGER NOT NULL)"
+                "direction TEXT NOT NULL, started INTEGER NOT NULL, duration INTEGER NOT NULL, missed INTEGER NOT NULL, status TEXT)"
         )
         db.execSQL("CREATE INDEX idx_calls_owner ON calls (owner, started)")
         db.execSQL("CREATE TABLE read_state (owner TEXT NOT NULL, chat_id TEXT NOT NULL, last_read INTEGER NOT NULL, PRIMARY KEY (owner, chat_id))")
@@ -61,6 +61,14 @@ class LocalStore private constructor(context: Context) :
         if (oldVersion < 2) {
             try {
                 db.execSQL("ALTER TABLE messages ADD COLUMN seen_at INTEGER NOT NULL DEFAULT 0")
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        if (oldVersion < 3) {
+            // Статус дзвінка (відхилений / скасований / пропущений ...) для нормальної історії дзвінків
+            try {
+                db.execSQL("ALTER TABLE calls ADD COLUMN status TEXT")
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -322,7 +330,7 @@ class LocalStore private constructor(context: Context) :
     // ===================== ІСТОРІЯ ДЗВІНКІВ =====================
 
     @Synchronized
-    fun insertCall(owner: String, peerEmail: String, peerName: String, direction: String, started: Long, durationSec: Long, missed: Boolean) {
+    fun insertCall(owner: String, peerEmail: String, peerName: String, direction: String, started: Long, durationSec: Long, missed: Boolean, status: String = "") {
         val values = ContentValues().apply {
             put("id", "call_${started}_${(Math.random() * 1_000_000).toInt()}")
             put("owner", owner)
@@ -332,6 +340,7 @@ class LocalStore private constructor(context: Context) :
             put("started", started)
             put("duration", durationSec)
             put("missed", if (missed) 1 else 0)
+            put("status", status.ifEmpty { if (missed) "missed" else "ended" })
         }
         writableDatabase.insertWithOnConflict("calls", null, values, SQLiteDatabase.CONFLICT_IGNORE)
         StoreVersion.bump()
@@ -356,7 +365,8 @@ class LocalStore private constructor(context: Context) :
                         isMissed = c.getInt(c.getColumnIndexOrThrow("missed")) == 1,
                         direction = c.getString(c.getColumnIndexOrThrow("direction")) ?: "out",
                         startedAt = started,
-                        durationSec = dur
+                        durationSec = dur,
+                        status = c.getString(c.getColumnIndexOrThrow("status")) ?: ""
                     )
                 )
             }
