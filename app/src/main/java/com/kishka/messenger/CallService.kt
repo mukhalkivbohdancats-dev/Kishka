@@ -45,6 +45,7 @@ class CallService : Service() {
     private var vibrator: Vibrator? = null
     private val ringHandler = Handler(Looper.getMainLooper())
     private var usingMelody = false
+    private var volumeInitDone = false
 
     // Які можливості потрібні службі, що працює на передньому плані (камера / запис екрана) — для типу сервісу
     private var useCamera = false
@@ -107,10 +108,14 @@ class CallService : Service() {
         const val EXTRA_MY_EMAIL = "EXTRA_MY_EMAIL"
 
         // HD-голос: пробуємо 24 кГц, якщо телефон не підтримує — 16 кГц. Пакети по 40 мс.
-        private val CAPTURE_RATES = intArrayOf(24000, 16000)
+        // 16 кГц — стандарт «HD-голосу» (wideband) і єдина частота, яку без перетворень вміють усі мікрофони телефонів:
+        // на 24 кГц багато телефонів перераховують звук програмно, звідси «шипіння»
+        private val CAPTURE_RATES = intArrayOf(16000, 24000)
         private const val FRAME_MS = 40
-        private const val PREBUFFER_FRAMES = 3      // 120 мс буфера від мережевих "ривків"
-        private const val MAX_BACKLOG_FRAMES = 10   // якщо назбиралося більше 400 мс — наздоганяємо
+        private const val RING_START_VOLUME = 0.12f
+        private const val RING_MAX_VOLUME = 0.6f
+        private const val MIN_PREBUFFER_FRAMES = 3  // 120 мс буфера від мережевих "ривків" (мінімум; далі сам підлаштовується)
+        private const val MAX_PREBUFFER_FRAMES = 9  // до 360 мс на поганій мережі
         private const val CHANNEL_CONFIG_IN = AudioFormat.CHANNEL_IN_MONO
         private const val CHANNEL_CONFIG_OUT = AudioFormat.CHANNEL_OUT_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
@@ -150,7 +155,7 @@ class CallService : Service() {
                 startFg(buildOngoingNotification(outgoing = true), microphone = true)
                 // Довгі гудки, як у телефоні, поки співрозмовник не відповів
                 enableHighQualityAudio()
-                raiseCallStreamVolume()
+                setMinimumCallVolume()
                 applyAudioState()
                 tones.startRingback()
             }
@@ -159,11 +164,11 @@ class CallService : Service() {
                 hadCall = true
                 stopRingtone()
                 tones.stopRingback()
-                // Гучність розмови — це системна гучність дзвінка (повзунок і кнопки гучності змінюють її). На початку
-                // піднімаємо її щонайменше до 80%, щоб співрозмовника було добре чути; далі система не чіпається.
-                raiseCallStreamVolume()
+                // Гучність розмови — це системна гучність дзвінка (повзунок і кнопки гучності змінюють її).
+                // На початку вона мінімальна (щоб звук не було чути на весь дім); далі користувач піднімає її повзунком.
                 startFg(buildOngoingNotification(outgoing = false), microphone = true)
                 enableHighQualityAudio()
+                setMinimumCallVolume()
                 applyAudioState()
                 acquireNetworkLocks()
                 startAudioStreaming()
@@ -236,13 +241,19 @@ class CallService : Service() {
         }
     }
 
-    private fun raiseCallStreamVolume() {
+    /** Стартова гучність розмови — мінімальна (але чутна). Один раз на дзвінок: далі гучністю керує користувач. */
+    private fun setMinimumCallVolume() {
+        if (volumeInitDone) return
+        volumeInitDone = true
         try {
             val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL).coerceAtLeast(1)
-            val target = Math.round(max * 0.8f).coerceAtLeast(1)
-            if (audioManager.getStreamVolume(AudioManager.STREAM_VOICE_CALL) < target) {
-                audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, target, 0)
-            }
+            val min = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                audioManager.getStreamMinVolume(AudioManager.STREAM_VOICE_CALL)
+            } else 0
+            val target = maxOf(1, min).coerceAtMost(max)
+            audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, target, 0)
+            CallSession.softGain = 1f
+            CallSession.volume = target.toFloat() / max
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -336,10 +347,19 @@ class CallService : Service() {
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) r.isLooping = true
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    r.isLooping = true
+                    // Рингтон починається тихо і плавно наростає (до 60%), а не «на весь дім»
+                    try {
+                        r.volume = RING_START_VOLUME
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
                 r.play()
                 ringtone = r
                 started = true
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) startRingRamp()
                 if (started && Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
                     // На старих Android рингтон не вміє повторюватись — перезапускаємо, коли закінчився
                     val loop = object : Runnable {
@@ -364,6 +384,25 @@ class CallService : Service() {
             usingMelody = true
             tones.startIncomingMelody()
         }
+    }
+
+    /** Плавне наростання гучності рингтона: від мінімуму до 60% за кілька секунд. */
+    private fun startRingRamp() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
+        var level = RING_START_VOLUME
+        val step = object : Runnable {
+            override fun run() {
+                val cur = ringtone ?: return
+                level = (level + 0.06f).coerceAtMost(RING_MAX_VOLUME)
+                try {
+                    cur.volume = level
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                if (level < RING_MAX_VOLUME) ringHandler.postDelayed(this, 900)
+            }
+        }
+        ringHandler.postDelayed(step, 900)
     }
 
     private fun stopRingtone() {
@@ -485,6 +524,8 @@ class CallService : Service() {
         return try {
             val minBuf = AudioTrack.getMinBufferSize(rate, CHANNEL_CONFIG_OUT, AUDIO_FORMAT)
             val frameBytes = rate * FRAME_MS / 1000 * 2
+            // Великий буфер і звичайний режим (не LOW_LATENCY): швидкий режим не перераховує частоту якісно і «тріщить»
+            // при найменшому запізненні пакета
             val builder = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
@@ -499,12 +540,9 @@ class CallService : Service() {
                         .setChannelMask(CHANNEL_CONFIG_OUT)
                         .build()
                 )
-                .setBufferSizeInBytes(maxOf(minBuf, frameBytes * 4))
+                .setBufferSizeInBytes(maxOf(minBuf, frameBytes * 12))
                 .setTransferMode(AudioTrack.MODE_STREAM)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
-            }
-            builder.build().also { it.setVolume(1f) }
+            builder.build().also { it.setVolume(CallSession.softGain) }
         } catch (e: Exception) {
             e.printStackTrace()
             null
@@ -536,7 +574,7 @@ class CallService : Service() {
         }
     }
 
-    /** Мікрофон -> ADPCM-пакети по 40 мс -> сервер. */
+    /** Мікрофон -> шумозаглушення -> ADPCM-пакети по 40 мс -> сервер. */
     private fun runCapture() {
         try {
             Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
@@ -553,6 +591,12 @@ class CallService : Service() {
         val pcm = ShortArray(samplesPerFrame)
         val encoderState = VoiceCodec.EncoderState()
         var sequence = 0
+
+        // Шумозаглушення (gate): у паузах між словами глушимо тихий шум мікрофона — саме він і чувся як «шипіння».
+        // Рівень шуму оцінюється сам (повільно підлаштовується під найтихіші кадри).
+        var noiseFloor = 250.0
+        var gain = 1.0
+        var hold = 0
 
         while (isCallActive) {
             var read = 0
@@ -572,6 +616,28 @@ class CallService : Service() {
             if (read < samplesPerFrame) continue
 
             if (!isMuted && targetEmail.isNotEmpty()) {
+                var sum = 0.0
+                for (i in 0 until samplesPerFrame) {
+                    val v = pcm[i].toDouble()
+                    sum += v * v
+                }
+                val rms = Math.sqrt(sum / samplesPerFrame)
+                noiseFloor = if (rms < noiseFloor) noiseFloor * 0.85 + rms * 0.15 else noiseFloor * 1.003 + 0.05
+                noiseFloor = noiseFloor.coerceIn(15.0, 1200.0)
+
+                val speaking = rms > noiseFloor * 2.4 + 90.0
+                if (speaking) hold = 8 else if (hold > 0) hold--
+                val target = if (speaking || hold > 0) 1.0 else 0.10
+                val next = if (target > gain) minOf(1.0, gain + 0.6) else maxOf(target, gain - 0.12)
+                if (gain != 1.0 || next != 1.0) {
+                    // Плавна зміна підсилення в межах кадру — без клацання
+                    for (i in 0 until samplesPerFrame) {
+                        val g = gain + (next - gain) * (i.toDouble() / samplesPerFrame)
+                        pcm[i] = (pcm[i] * g).toInt().coerceIn(-32768, 32767).toShort()
+                    }
+                }
+                gain = next
+
                 val packet = VoiceCodec.encodePacket(rateCode, sequence and 0xFFFF, pcm, samplesPerFrame, encoderState)
                 sequence++
                 manager.sendVoiceChunk(targetEmail, packet)
@@ -579,7 +645,7 @@ class CallService : Service() {
         }
     }
 
-    /** Мережа -> буфер від "ривків" -> декодування -> динамік. */
+    /** Мережа -> адаптивний буфер від "ривків" -> декодування -> динамік. */
     private fun runPlayback() {
         try {
             Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
@@ -594,10 +660,15 @@ class CallService : Service() {
         var concealed = false
         var lastSkipAt = 0L
 
+        // Розмір буфера підлаштовується сам: після кожного «провалу» мережі росте, на стабільній мережі повільно зменшується.
+        // Раніше буфер був фіксованим і звук «розривався» щоразу, коли пакети запізнювались.
+        var prebuffer = MIN_PREBUFFER_FRAMES + 1
+        var lastUnderrunAt = System.currentTimeMillis()
+
         try {
             while (isCallActive) {
                 if (buffering) {
-                    if (audioQueue.size >= PREBUFFER_FRAMES) {
+                    if (audioQueue.size >= prebuffer) {
                         buffering = false
                     } else {
                         Thread.sleep(8)
@@ -608,29 +679,37 @@ class CallService : Service() {
                 val polled = audioQueue.poll(FRAME_MS * 3L, TimeUnit.MILLISECONDS)
                 if (polled == null) {
                     // Дані не встигли дійти: один раз «дотягуємо» попередній кадр (тихіше), щоб не було клацання,
-                    // і накопичуємо буфер заново
+                    // збільшуємо буфер і накопичуємо його заново
                     val last = lastPcm
                     if (last != null && !concealed) {
-                        val soft = ShortArray(last.size) { (last[it] * 0.5f).toInt().toShort() }
+                        val soft = ShortArray(last.size) { (last[it] * 0.4f).toInt().toShort() }
                         track?.write(soft, 0, soft.size)
                         concealed = true
                     }
+                    prebuffer = minOf(prebuffer + 1, MAX_PREBUFFER_FRAMES)
+                    lastUnderrunAt = System.currentTimeMillis()
                     buffering = true
                     continue
                 }
                 concealed = false
                 var packet: ByteArray = polled
 
-                // Годинники телефонів розходяться, тому за 10+ хвилин у черзі збирається затримка. Наздоганяємо ПЛАВНО:
-                // не більше одного пакета раз на 0,4 с (непомітно), а при великому залпі — як і раніше, одразу.
                 val now = System.currentTimeMillis()
-                if (audioQueue.size > MAX_BACKLOG_FRAMES) {
-                    while (audioQueue.size > PREBUFFER_FRAMES + 2) {
+                // На стабільній мережі буфер повільно зменшується (менша затримка розмови)
+                if (prebuffer > MIN_PREBUFFER_FRAMES && now - lastUnderrunAt > 20_000L) {
+                    prebuffer--
+                    lastUnderrunAt = now
+                }
+
+                // Годинники телефонів розходяться, тому за 10+ хвилин у черзі збирається затримка. Наздоганяємо ПЛАВНО:
+                // не більше одного пакета раз на 0,4 с (непомітно), а при великому залпі — одразу.
+                if (audioQueue.size > prebuffer + 7) {
+                    while (audioQueue.size > prebuffer + 2) {
                         val newer = audioQueue.poll() ?: break
                         packet = newer
                     }
                     lastSkipAt = now
-                } else if (audioQueue.size > PREBUFFER_FRAMES + 3 && now - lastSkipAt > 400L) {
+                } else if (audioQueue.size > prebuffer + 3 && now - lastSkipAt > 400L) {
                     audioQueue.poll()?.let { packet = it }
                     lastSkipAt = now
                 }
@@ -653,6 +732,12 @@ class CallService : Service() {
 
                 val pcm = VoiceCodec.decodePacket(packet) ?: continue
                 lastPcm = pcm
+                // Програмна гучність (діє, лише якщо телефон не дав змінити системну)
+                try {
+                    track?.setVolume(CallSession.softGain)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
                 track?.write(pcm, 0, pcm.size)
             }
         } catch (e: InterruptedException) {
@@ -886,6 +971,7 @@ class CallService : Service() {
     private fun stopCall() {
         if (stopped) return
         stopped = true
+        volumeInitDone = false
         CallVideo.detach()
         useCamera = false
         useProjection = false
