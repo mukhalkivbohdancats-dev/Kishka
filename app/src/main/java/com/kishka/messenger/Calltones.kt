@@ -200,7 +200,8 @@ class CallTones {
             }
             melodyTrack = track
             try {
-                track.setVolume(1f)
+                // Запасна мелодія — тихіше, а не «на весь дім»
+                track.setVolume(0.35f)
                 track.play()
                 while (melodyOn) {
                     for (part in arrayOf(a, pause, b, pause, a, pause, c, long)) {
