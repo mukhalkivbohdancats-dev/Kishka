@@ -11,8 +11,10 @@
 //                   невелика база знань, жарти, факти, поради.
 //   kishka-image  — генерація зображень власним алгоритмом (файл kishkaimage.js).
 //
-// Чесно: це не велика нейромережа. Вона не знає всього на світі й не вигадує відповідей: коли не знає — каже про це
-// і пропонує навчити її. Для складних питань і пошуку в інтернеті є вкладка Gemini.
+// Чесно: власний рушій Kishka-1 — це не велика нейромережа, тому на «будь-яке» питання і «будь-яке» зображення він сам
+// відповісти не може. Щоб Кішка ШІ відповідала на ВСЕ й малювала ВСЕ, сервер (server.js) підключає загальний ШІ-бекенд
+// через ctx.generalAnswer / ctx.generalImage: коли власний рушій не знає відповіді, питання йде туди, а відповідь
+// подається від імені Кішки ШІ. Вимкнути це можна змінною KISHKA_AI_BACKEND=off (тоді Кішка ШІ знову працює лише сама).
 //
 // Події сокета: kai_get_models, kai_get_history, kai_get_status, kai_get_facts, kai_clear_facts, kai_send,
 //               kai_cancel, kai_clear.
@@ -1063,6 +1065,8 @@ function makeMemoryStore() {
 // ---------------------------------------------------------------------
 function initKishkaAI(ctx) {
     const { io, db, dbRun, dbAll, cleanEmail, langOf, makeJob, cancelJob, checkCancelled, tz } = ctx;
+    const generalAnswer = typeof ctx.generalAnswer === 'function' ? ctx.generalAnswer : null;
+    const generalImage = typeof ctx.generalImage === 'function' ? ctx.generalImage : null;
 
     db.serialize(() => {
         db.run(`CREATE TABLE IF NOT EXISTS kai_messages (
@@ -1187,8 +1191,10 @@ function initKishkaAI(ctx) {
             if (jobs.has(clean)) return ackCb({ success: false, error: t('busy', uiLang) });
 
             // Яка модель: kishka-image малює, kishka-1 відповідає текстом. Старі версії застосунку передають mode = "image".
-            const drawing = model === 'kishka-image' || (!model && mode === 'image');
-            if (drawing && !imageEngine) return ackCb({ success: false, error: t('image_off', uiLang) });
+            // Якщо підключено загальний бекенд, Кішка малює і тоді, коли її просять намалювати текстом (модель kishka-1)
+            const drawing = model === 'kishka-image' || (!model && mode === 'image')
+                || (!!generalImage && IMAGE_INTENT.test(cleanText));
+            if (drawing && !imageEngine && !generalImage) return ackCb({ success: false, error: t('image_off', uiLang) });
 
             socket.join(clean);
             const job = makeJob();
@@ -1213,7 +1219,20 @@ function initKishkaAI(ctx) {
                 if (drawing) {
                     await new Promise((resolve) => setImmediate(resolve));
                     checkCancelled(job);
-                    const img = imageEngine.render(cleanText, { style: settings.imageStyle, size: settings.imageSize });
+                    let img = null;
+                    if (generalImage) {
+                        // Будь-яке зображення за описом
+                        try {
+                            img = await generalImage(cleanText, job);
+                        } catch (e) {
+                            if (e && e.message === 'CANCELLED') throw e;
+                            console.error('Kishka AI: загальна генерація зображень не вдалася:', e && e.message);
+                        }
+                    }
+                    checkCancelled(job);
+                    // Запасний варіант — власний малювальник Kishka-image
+                    if (!img && imageEngine) img = imageEngine.render(cleanText, { style: settings.imageStyle, size: settings.imageSize });
+                    if (!img) throw new Error('NO_IMAGE');
                     checkCancelled(job);
                     const imageId = crypto.randomBytes(16).toString('hex');
                     await dbRun('INSERT INTO gemini_images (id, email, mime, data, timestamp) VALUES (?, ?, ?, ?, ?)',
@@ -1222,7 +1241,25 @@ function initKishkaAI(ctx) {
                 } else {
                     const result = await answer(store, clean, cleanText, lang, settings, { tz });
                     checkCancelled(job);
-                    reply = { text: applyStyle(result, lang, settings), model: 'kishka-1', imageId: null };
+                    let replyText = null;
+                    // Власний рушій не знає відповіді — питання йде в загальний бекенд (відповідь від імені Кішки ШІ)
+                    if (generalAnswer && (result.skill === 'unknown' || result.skill === 'hint')) {
+                        try {
+                            const rows = await dbAll(
+                                `SELECT role, text FROM (
+                                    SELECT role, text, timestamp FROM kai_messages
+                                    WHERE email = ? AND text <> '' ORDER BY timestamp DESC LIMIT 14
+                                 ) AS recent ORDER BY timestamp ASC`,
+                                [clean]
+                            );
+                            replyText = await generalAnswer({ question: cleanText, lang, history: rows, job });
+                        } catch (e) {
+                            if (e && e.message === 'CANCELLED') throw e;
+                            console.error('Kishka AI: загальна відповідь не вдалася:', e && e.message);
+                        }
+                    }
+                    checkCancelled(job);
+                    reply = { text: replyText ? replyText : applyStyle(result, lang, settings), model: 'kishka-1', imageId: null };
                 }
 
                 const replyId = `k_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
