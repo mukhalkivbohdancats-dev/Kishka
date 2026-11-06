@@ -280,21 +280,23 @@ class KishkaManager(ctx: Context) {
         val json = JSONObject().apply {
             put("email", cleanEmail)
             put("name", name)
-            put("avatarUrl", avatarUrl ?: DEFAULT_AVATAR_URL)
+            // Стандартну аватарку НЕ надсилаємо: інакше вона затирала б справжню, збережену на сервері
+            if (!avatarUrl.isNullOrEmpty() && avatarUrl != DEFAULT_AVATAR_URL) put("avatarUrl", avatarUrl)
         }
         socket.emit("register_or_update_user", json)
     }
 
-    fun getUserProfile(email: String, onResult: (User?) -> Unit) {
+    /** onResult(користувач, true якщо відповів сервер). Спочатку приходить кеш (false), потім відповідь сервера (true). */
+    fun getUserProfile(email: String, onResult: (User?, Boolean) -> Unit) {
         val cleanEmail = email.trim().lowercase()
         if (cleanEmail.isEmpty()) {
-            onResult(null)
+            onResult(null, false)
             return
         }
 
         val cachedName = prefs.getString("profile_name_$cleanEmail", cleanEmail.substringBefore("@")) ?: cleanEmail.substringBefore("@")
         val cachedAvatar = prefs.getString("profile_avatar_$cleanEmail", DEFAULT_AVATAR_URL) ?: DEFAULT_AVATAR_URL
-        onResult(User(uid = cleanEmail, email = cleanEmail, name = cachedName, avatarUrl = cachedAvatar))
+        onResult(User(uid = cleanEmail, email = cleanEmail, name = cachedName, avatarUrl = cachedAvatar), false)
 
         ensureConnected()
 
@@ -305,7 +307,7 @@ class KishkaManager(ctx: Context) {
                     val name = obj.optString("name", cachedName)
                     val avatar = if (obj.isNull("avatarUrl")) cachedAvatar else obj.optString("avatarUrl", cachedAvatar)
                     prefs.edit().putString("profile_name_$cleanEmail", name).putString("profile_avatar_$cleanEmail", avatar).apply()
-                    onResult(User(uid = cleanEmail, email = cleanEmail, name = name, avatarUrl = avatar))
+                    onResult(User(uid = cleanEmail, email = cleanEmail, name = name, avatarUrl = avatar), true)
                 }
             }
         })
@@ -524,6 +526,19 @@ class KishkaManager(ctx: Context) {
 
         socket.on("contact_updated") {
             identifiedEmail?.let { refreshContacts(it) }
+        }
+
+        // Права, які виставив адміністратор (бан, доступ до Gemini / ChatGPT / «@»)
+        socket.on("user_flags") { args ->
+            (args.firstOrNull() as? JSONObject)?.let { Access.applyFlags(it) }
+        }
+        socket.on("account_banned") {
+            Access.markBanned()
+            try {
+                FirebaseAuth.getInstance().signOut()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
 
         // Співрозмовник побачив повідомлення: на них зʼявляються дві фіолетові галочки
