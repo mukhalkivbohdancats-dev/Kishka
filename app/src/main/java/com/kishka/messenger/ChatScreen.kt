@@ -98,6 +98,7 @@ fun ChatScreen(
     var uploadHandle by remember { mutableStateOf<UploadHandle?>(null) }
     var showAttachDialog by remember { mutableStateOf(false) }
     var forwardTarget by remember { mutableStateOf<Message?>(null) }
+    var showAvatar by remember { mutableStateOf(false) }
 
     var htmlViewer by remember { mutableStateOf<Message?>(null) }
     var apkInstall by remember { mutableStateOf<Message?>(null) }
@@ -206,7 +207,12 @@ fun ChatScreen(
                 val mention = AiMention.parse(text) { provider ->
                     (if (provider == "chatgpt") chatgptModels else geminiModels).filter { it.type == "text" }.map { it.id }
                 }
-                if (mention != null) {
+                // «@» можна вимкнути адміністратором; також окремо Gemini / ChatGPT
+                val mentionAllowed = Access.mention &&
+                    (mention == null || (if (mention.provider == "chatgpt") Access.chatgpt else Access.gemini))
+                if (mention != null && !mentionAllowed) {
+                    Notice.show(String.format(AdminStrings.get("off_text", lang), if (mention.provider == "chatgpt") "ChatGPT" else "Gemini"))
+                } else if (mention != null) {
                     manager.sendAiMention(currentEmail, targetUser.email, mention.provider, mention.model, mention.question, lang, "")
                 }
                 textInput = ""
@@ -245,17 +251,21 @@ fun ChatScreen(
                 },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Натиснути на аватарку — відкрити її на весь екран
                         AsyncImage(
                             model = if (targetUser.avatarUrl.isNullOrEmpty()) DEFAULT_AVATAR_URL else targetUser.avatarUrl,
                             contentDescription = "Avatar",
-                            modifier = Modifier.size(40.dp).clip(CircleShape)
+                            modifier = Modifier.size(40.dp).clip(CircleShape).clickable { showAvatar = true }
                         )
                         Spacer(modifier = Modifier.width(10.dp))
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 targetUser.name.ifEmpty { targetUser.email },
                                 fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold
+                                lineHeight = 20.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             if (partnerTyping) {
                                 // Біля аватарки: "пише" з анімованими крапками та слайдером
@@ -285,6 +295,9 @@ fun ChatScreen(
             )
         }
     ) { padding ->
+        if (showAvatar) {
+            AvatarViewer(url = targetUser.avatarUrl, name = targetUser.name.ifEmpty { targetUser.email }, onClose = { showAvatar = false })
+        }
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             LazyColumn(
                 state = listState,
