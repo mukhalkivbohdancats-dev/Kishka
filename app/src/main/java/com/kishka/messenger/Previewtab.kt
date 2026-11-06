@@ -571,10 +571,11 @@ private fun KaiModelPill(
 
 @Composable
 fun PreviewAvatar(size: Int) {
-    Box(
-        modifier = Modifier.size(size.dp).clip(CircleShape).background(ViberPurple),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(Icons.Default.Pets, contentDescription = null, tint = Color.White, modifier = Modifier.size((size * 0.55f).dp))
-    }
+    // Аватарка Кішки ШІ: res/drawable-nodpi/logo_watermark.png
+    androidx.compose.foundation.Image(
+        painter = painterResource(R.drawable.logo_watermark),
+        contentDescription = null,
+        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+        modifier = Modifier.size(size.dp).clip(CircleShape)
+    )
 }
