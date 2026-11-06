@@ -40,6 +40,14 @@ object CallSession {
 
     /** Екран дзвінка згорнуто в смужку зверху (дзвінок триває). */
     var minimized by mutableStateOf(false)
+
+    /** Камера / екран, увімкнені ще ДО відповіді: вмикаються самі, щойно розмова почалась. "camera" | "screen" | null */
+    var pendingVideo by mutableStateOf<String?>(null)
+    var pendingProjectionCode: Int = 0
+    var pendingProjectionData: Intent? = null
+
+    /** Програмна гучність (0..1): діє лише якщо телефон не дав змінити системну гучність розмови. */
+    @Volatile var softGain: Float = 1f
 }
 
 /**
@@ -163,12 +171,13 @@ object CallCoordinator {
         CallSession.minimized = false
         CallSession.phase = CallPhase.ACTIVE
         startService(CallService.ACTION_START_CALL)
+        applyPendingVideo()
     }
 
     fun decline() {
         if (CallSession.phase != CallPhase.INCOMING) return
         manager?.rejectCall(CallSession.peerEmail, myEmail)
-        logCall(missed = true)
+        logCall(missed = true, status = "declined")
         finishLocal()
     }
 
@@ -179,7 +188,7 @@ object CallCoordinator {
             CallPhase.INCOMING -> decline()
             else -> {
                 manager?.endCall(myEmail, CallSession.peerEmail)
-                logCall(missed = !wasAnswered)
+                logCall(missed = !wasAnswered, status = if (wasAnswered) "ended" else "cancelled")
                 finishLocal()
             }
         }
@@ -234,6 +243,13 @@ object CallCoordinator {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        // Якщо система не прийняла значення (деякі телефони), гучність змінюється програмно — повзунок працює завжди
+        val applied = try {
+            am.getStreamVolume(AudioManager.STREAM_VOICE_CALL)
+        } catch (e: Exception) {
+            index
+        }
+        CallSession.softGain = if (applied == index) 1f else (CallSession.volume.coerceIn(0.03f, 1f))
     }
 
     /** Повзунок слідкує за кнопками гучності телефона. Лише читання, без запису назад — зациклення неможливе. */
@@ -243,6 +259,8 @@ object CallCoordinator {
         try {
             val max = volumeMax()
             val value = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL).toFloat() / max
+            // Програмна гучність (система не дала змінити свою): повзунок лишається там, де його поставили
+            if (CallSession.softGain < 1f) return
             if (Math.abs(value - CallSession.volume) > 0.001f) CallSession.volume = value
         } catch (e: Exception) {
             e.printStackTrace()
@@ -268,20 +286,65 @@ object CallCoordinator {
         }
     }
 
-    /** Камера: за замовчуванням задня. Дозвіл CAMERA має бути вже наданий (екран дзвінка питає його перед викликом). */
-    fun startCamera(front: Boolean = false) = videoIntent(CallService.ACTION_VIDEO_CAMERA) {
-        it.putExtra(CallService.EXTRA_VIDEO_FRONT, front)
+    private fun beforeAnswer(): Boolean =
+        CallSession.phase == CallPhase.OUTGOING || CallSession.phase == CallPhase.INCOMING
+
+    /**
+     * Камера: за замовчуванням задня. Дозвіл CAMERA має бути вже наданий (екран дзвінка питає його перед викликом).
+     * Якщо співрозмовник ще не відповів — камера вмикається автоматично, щойно він відповість.
+     */
+    fun startCamera(front: Boolean = false) {
+        if (beforeAnswer()) {
+            CallSession.pendingProjectionData = null
+            CallSession.pendingVideo = "camera"
+            return
+        }
+        videoIntent(CallService.ACTION_VIDEO_CAMERA) {
+            it.putExtra(CallService.EXTRA_VIDEO_FRONT, front)
+        }
     }
 
     fun flipCamera() = videoIntent(CallService.ACTION_VIDEO_FLIP)
 
     /** Трансляція екрана телефона; resultCode і data дає системне вікно дозволу на запис екрана. */
-    fun startScreen(resultCode: Int, data: Intent) = videoIntent(CallService.ACTION_VIDEO_SCREEN) {
-        it.putExtra(CallService.EXTRA_PROJECTION_CODE, resultCode)
-        it.putExtra(CallService.EXTRA_PROJECTION_DATA, data)
+    fun startScreen(resultCode: Int, data: Intent) {
+        if (beforeAnswer()) {
+            CallSession.pendingProjectionCode = resultCode
+            CallSession.pendingProjectionData = data
+            CallSession.pendingVideo = "screen"
+            return
+        }
+        videoIntent(CallService.ACTION_VIDEO_SCREEN) {
+            it.putExtra(CallService.EXTRA_PROJECTION_CODE, resultCode)
+            it.putExtra(CallService.EXTRA_PROJECTION_DATA, data)
+        }
     }
 
-    fun stopVideo() = videoIntent(CallService.ACTION_VIDEO_STOP)
+    fun stopVideo() {
+        if (CallSession.pendingVideo != null) {
+            clearPendingVideo()
+            return
+        }
+        videoIntent(CallService.ACTION_VIDEO_STOP)
+    }
+
+    private fun clearPendingVideo() {
+        CallSession.pendingVideo = null
+        CallSession.pendingProjectionData = null
+        CallSession.pendingProjectionCode = 0
+    }
+
+    /** Розмова почалась: вмикаємо камеру / екран, які користувач натиснув до відповіді. */
+    private fun applyPendingVideo() {
+        val kind = CallSession.pendingVideo ?: return
+        val data = CallSession.pendingProjectionData
+        val code = CallSession.pendingProjectionCode
+        clearPendingVideo()
+        when (kind) {
+            "camera" -> startCamera(false)
+            "screen" -> if (data != null) startScreen(code, data)
+        }
+    }
 
     private fun applyAudio() {
         val context = ctx ?: return
@@ -319,7 +382,7 @@ object CallCoordinator {
         startService(CallService.ACTION_INCOMING)
         scheduleTimeout {
             if (CallSession.phase == CallPhase.INCOMING) {
-                logCall(missed = true)
+                logCall(missed = true, status = "missed")
                 showMissedNotification()
                 finishLocal()
             }
@@ -333,12 +396,13 @@ object CallCoordinator {
         CallSession.startedAt = System.currentTimeMillis()
         CallSession.phase = CallPhase.ACTIVE
         startService(CallService.ACTION_START_CALL)
+        applyPendingVideo()
     }
 
     private fun onRejected() {
         val context = ctx ?: return
         if (CallSession.phase != CallPhase.OUTGOING) return
-        logCall(missed = true)
+        logCall(missed = true, status = "declined")
         finishLocal()
         Notice.show(AppText.tr(context, "call_declined_by_peer"))
     }
@@ -348,17 +412,17 @@ object CallCoordinator {
         when (CallSession.phase) {
             CallPhase.IDLE -> return
             CallPhase.INCOMING -> {
-                logCall(missed = true)
+                logCall(missed = true, status = "cancelled")
                 showMissedNotification()
                 finishLocal()
             }
             CallPhase.OUTGOING -> {
-                logCall(missed = true)
+                logCall(missed = true, status = "missed")
                 finishLocal()
                 if (reason == "no_answer") Notice.show(AppText.tr(context, "call_no_answer"))
             }
             CallPhase.ACTIVE -> {
-                logCall(missed = false)
+                logCall(missed = false, status = "ended")
                 finishLocal()
             }
         }
@@ -374,7 +438,7 @@ object CallCoordinator {
     private fun onUnavailable() {
         val context = ctx ?: return
         if (CallSession.phase != CallPhase.OUTGOING) return
-        logCall(missed = true)
+        logCall(missed = true, status = "unavailable")
         finishLocal()
         Notice.show(AppText.tr(context, "call_offline"))
     }
@@ -408,7 +472,7 @@ object CallCoordinator {
         timeoutRunnable = null
     }
 
-    private fun logCall(missed: Boolean) {
+    private fun logCall(missed: Boolean, status: String) {
         val context = ctx ?: return
         if (CallSession.peerEmail.isEmpty() || myEmail.isEmpty()) return
         val started = if (wasAnswered && CallSession.startedAt > 0L) CallSession.startedAt else ringStartedWall
@@ -417,7 +481,7 @@ object CallCoordinator {
         } else 0L
         try {
             LocalStore.get(context).insertCall(
-                myEmail, CallSession.peerEmail, CallSession.peerName, direction, started, duration, missed
+                myEmail, CallSession.peerEmail, CallSession.peerName, direction, started, duration, missed, status
             )
         } catch (e: Exception) {
             e.printStackTrace()
@@ -435,6 +499,8 @@ object CallCoordinator {
         CallSession.peerEmail = ""
         CallSession.peerName = ""
         CallSession.peerAvatar = null
+        CallSession.softGain = 1f
+        clearPendingVideo()
         wasAnswered = false
         if (context != null) {
             try {
