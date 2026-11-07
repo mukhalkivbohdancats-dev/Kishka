@@ -2,6 +2,7 @@ package com.kishka.messenger
 
 import android.os.Handler
 import android.os.Looper
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,12 +24,15 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -117,6 +121,8 @@ object AdminStrings {
     private val dictionary = mapOf(
         "uk" to mapOf(
             "tab" to "Адмін",
+            "back" to "Назад",
+            "entry_desc" to "Бан і доступ до Gemini, ChatGPT та «@»",
             "title" to "Адміністратор",
             "email" to "Пошта користувача",
             "check" to "Перевірити",
@@ -147,6 +153,8 @@ object AdminStrings {
         ),
         "ru" to mapOf(
             "tab" to "Админ",
+            "back" to "Назад",
+            "entry_desc" to "Бан и доступ к Gemini, ChatGPT и «@»",
             "title" to "Администратор",
             "email" to "Почта пользователя",
             "check" to "Проверить",
@@ -177,6 +185,8 @@ object AdminStrings {
         ),
         "en" to mapOf(
             "tab" to "Admin",
+            "back" to "Back",
+            "entry_desc" to "Ban and access to Gemini, ChatGPT and \"@\"",
             "title" to "Administrator",
             "email" to "User email",
             "check" to "Check",
@@ -316,11 +326,39 @@ private fun adminRequest(event: String, payload: JSONObject, onResult: (JSONObje
     }
 }
 
-/** Вкладка Admin: бан за поштою + керування доступом до Gemini, ChatGPT і «@». Показується лише адміністратору. */
+/**
+ * Рядок «Адмін» у вкладці Акаунт (видно лише адміністратору). Натискання відкриває окремий екран AdminScreen.
+ */
+@Composable
+fun AdminEntry(lang: String, onOpen: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = ViberLightPurple,
+        modifier = Modifier.fillMaxWidth().clickable { onOpen() }
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Default.AdminPanelSettings, contentDescription = null, tint = ViberPurple)
+            Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
+                Text(AdminStrings.get("tab", lang), fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(AdminStrings.get("entry_desc", lang), fontSize = 12.sp, color = Color.Gray, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Icon(Icons.Default.KeyboardArrowRight, contentDescription = null, tint = ViberPurple)
+        }
+    }
+}
+
+/**
+ * Окремий екран Admin (відкривається з вкладки Акаунт, лише для адміністратора): бан за поштою + керування доступом
+ * до Gemini, ChatGPT і «@». Вийти з нього можна стрілкою зверху зліва (або системною кнопкою «Назад»).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AdminTab(adminEmail: String, lang: String) {
+fun AdminScreen(adminEmail: String, lang: String, onBack: () -> Unit) {
     val a: (String) -> String = { key -> AdminStrings.get(key, lang) }
+    BackHandler(onBack = onBack)
 
     var emailInput by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
@@ -409,6 +447,11 @@ fun AdminTab(adminEmail: String, lang: String) {
                         Icon(Icons.Default.AdminPanelSettings, contentDescription = null, tint = ViberPurple)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(a("title"), fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = a("back"))
                     }
                 }
             )
