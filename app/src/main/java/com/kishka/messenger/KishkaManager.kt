@@ -151,6 +151,7 @@ class KishkaManager(ctx: Context) {
                         reconnectionDelay = 500 // Прискорено повторне підключення (0.5с)
                         reconnectionDelayMax = 3000
                         timeout = 10000 // Зменшено таймаут до 10с для швидкого реагування
+                        rememberUpgrade = true // після першого вдалого WebSocket наступні підключення одразу йдуть через нього (голос не «рветься» на запасному каналі)
                     }
                     socketInstance = IO.socket(SERVER_URL, options)
                     socketInstance?.on(Socket.EVENT_CONNECT) {
