@@ -114,8 +114,9 @@ class CallService : Service() {
         private const val FRAME_MS = 40
         private const val RING_START_VOLUME = 0.12f
         private const val RING_MAX_VOLUME = 0.6f
-        private const val MIN_PREBUFFER_FRAMES = 3  // 120 мс буфера від мережевих "ривків" (мінімум; далі сам підлаштовується)
-        private const val MAX_PREBUFFER_FRAMES = 9  // до 360 мс на поганій мережі
+        private const val MIN_TARGET_MS = 100       // мінімальний запас звуку в динаміку від мережевих "ривків"
+        private const val MAX_TARGET_MS = 400       // до 400 мс на поганій мережі (запас росте сам після кожного "провалу")
+        private const val CATCHUP_EXTRA_MS = 200    // скільки зайвого запасу терпимо, перш ніж наздоганяти
         private const val CHANNEL_CONFIG_IN = AudioFormat.CHANNEL_IN_MONO
         private const val CHANNEL_CONFIG_OUT = AudioFormat.CHANNEL_OUT_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
@@ -592,9 +593,10 @@ class CallService : Service() {
         val encoderState = VoiceCodec.EncoderState()
         var sequence = 0
 
-        // Шумозаглушення (gate): у паузах між словами глушимо тихий шум мікрофона — саме він і чувся як «шипіння».
-        // Рівень шуму оцінюється сам (повільно підлаштовується під найтихіші кадри).
-        var noiseFloor = 250.0
+        // М'яке шумозаглушення: у паузах між словами шум приглушується (до 35%), а мова НІКОЛИ не глушиться.
+        // Раніше «підлога шуму» росла під час розмови, тихі слова опинялись нижче порога й звук «рвався».
+        // Тепер рівень шуму оцінюється лише в паузах і під час мови заморожений.
+        var noiseFloor = 120.0
         var gain = 1.0
         var hold = 0
 
@@ -622,13 +624,17 @@ class CallService : Service() {
                     sum += v * v
                 }
                 val rms = Math.sqrt(sum / samplesPerFrame)
-                noiseFloor = if (rms < noiseFloor) noiseFloor * 0.85 + rms * 0.15 else noiseFloor * 1.003 + 0.05
-                noiseFloor = noiseFloor.coerceIn(15.0, 1200.0)
 
-                val speaking = rms > noiseFloor * 2.4 + 90.0
-                if (speaking) hold = 8 else if (hold > 0) hold--
-                val target = if (speaking || hold > 0) 1.0 else 0.10
-                val next = if (target > gain) minOf(1.0, gain + 0.6) else maxOf(target, gain - 0.12)
+                val speaking = rms > noiseFloor * 2.0 + 60.0
+                if (!speaking && hold == 0) {
+                    // Пауза: підлаштовуємо рівень шуму (швидко вниз, повільно вгору)
+                    noiseFloor = if (rms < noiseFloor) noiseFloor * 0.85 + rms * 0.15 else noiseFloor * 1.01 + 0.2
+                    noiseFloor = noiseFloor.coerceIn(15.0, 600.0)
+                }
+                if (speaking) hold = 15 else if (hold > 0) hold--
+                val target = if (speaking || hold > 0) 1.0 else 0.35
+                // Початок слова — одразу на повну гучність, затухання — плавно
+                val next = if (target > gain) 1.0 else maxOf(target, gain - 0.08)
                 if (gain != 1.0 || next != 1.0) {
                     // Плавна зміна підсилення в межах кадру — без клацання
                     for (i in 0 until samplesPerFrame) {
@@ -645,7 +651,15 @@ class CallService : Service() {
         }
     }
 
-    /** Мережа -> адаптивний буфер від "ривків" -> декодування -> динамік. */
+    /**
+     * Мережа -> адаптивний запас звуку -> декодування -> динамік.
+     * Запас міряємо по ТРЕКУ (скільки мілісекунд звуку ще не програно), а не по черзі пакетів: трек сам вміщує до 480 мс,
+     * тож черга майже завжди порожня, і старий підрахунок по черзі не бачив ні «провалів», ні накопиченої затримки.
+     *  - запас закінчується (пакет запізнився) -> дотягуємо попередній кадр затухаючи, запас росте на 40 мс;
+     *  - після «провалу» перед наступним словом додаємо трохи тиші, щоб одразу не «провалитись» знову;
+     *  - стабільна мережа -> запас повільно зменшується (менша затримка розмови);
+     *  - накопичилось зайве (залп пакетів після «провалу») -> пропускаємо кадри (пакети самодостатні, клацання нема).
+     */
     private fun runPlayback() {
         try {
             Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
@@ -655,65 +669,53 @@ class CallService : Service() {
 
         var track: AudioTrack? = null
         var trackRate = 0
-        var buffering = true
+        var written = 0L          // скільки семплів записано в поточний трек
+        var playing = false       // трек запущено (стартовий запас накопичено)
         var lastPcm: ShortArray? = null
-        var concealed = false
+        var concealed = 0
+        var ranDry = false
+        var targetMs = MIN_TARGET_MS
+        val startNow = System.currentTimeMillis()
+        var lastUnderrunAt = startNow
         var lastSkipAt = 0L
+        var lastPacketAt = startNow
 
-        // Розмір буфера підлаштовується сам: після кожного «провалу» мережі росте, на стабільній мережі повільно зменшується.
-        // Раніше буфер був фіксованим і звук «розривався» щоразу, коли пакети запізнювались.
-        var prebuffer = MIN_PREBUFFER_FRAMES + 1
-        var lastUnderrunAt = System.currentTimeMillis()
+        fun bufferedMs(): Int {
+            val t = track ?: return 0
+            if (trackRate <= 0) return 0
+            val head = t.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+            return (((written - head).coerceAtLeast(0L)) * 1000L / trackRate).toInt()
+        }
 
         try {
             while (isCallActive) {
-                if (buffering) {
-                    if (audioQueue.size >= prebuffer) {
-                        buffering = false
-                    } else {
-                        Thread.sleep(8)
-                        continue
-                    }
-                }
-
-                val polled = audioQueue.poll(FRAME_MS * 3L, TimeUnit.MILLISECONDS)
+                val polled = audioQueue.poll(15L, TimeUnit.MILLISECONDS)
                 if (polled == null) {
-                    // Дані не встигли дійти: один раз «дотягуємо» попередній кадр (тихіше), щоб не було клацання,
-                    // збільшуємо буфер і накопичуємо його заново
-                    val last = lastPcm
-                    if (last != null && !concealed) {
-                        val soft = ShortArray(last.size) { (last[it] * 0.4f).toInt().toShort() }
-                        track?.write(soft, 0, soft.size)
-                        concealed = true
+                    if (playing && bufferedMs() < FRAME_MS / 2) {
+                        // Звук у треку закінчується, а нових даних немає
+                        val last = lastPcm
+                        val tr = track
+                        if (last != null && tr != null && concealed < 2) {
+                            val k = if (concealed == 0) 0.5f else 0.2f
+                            val soft = ShortArray(last.size) { (last[it] * k).toInt().toShort() }
+                            val n = tr.write(soft, 0, soft.size)
+                            if (n > 0) written += n
+                            concealed++
+                        }
+                        if (!ranDry) {
+                            ranDry = true
+                            val now = System.currentTimeMillis()
+                            // Довга пауза — співрозмовник просто мовчить або вимкнув мікрофон: запас через це не збільшуємо
+                            if (now - lastPacketAt < 400L) {
+                                targetMs = minOf(targetMs + 40, MAX_TARGET_MS)
+                                lastUnderrunAt = now
+                            }
+                        }
                     }
-                    prebuffer = minOf(prebuffer + 1, MAX_PREBUFFER_FRAMES)
-                    lastUnderrunAt = System.currentTimeMillis()
-                    buffering = true
                     continue
                 }
-                concealed = false
-                var packet: ByteArray = polled
 
-                val now = System.currentTimeMillis()
-                // На стабільній мережі буфер повільно зменшується (менша затримка розмови)
-                if (prebuffer > MIN_PREBUFFER_FRAMES && now - lastUnderrunAt > 20_000L) {
-                    prebuffer--
-                    lastUnderrunAt = now
-                }
-
-                // Годинники телефонів розходяться, тому за 10+ хвилин у черзі збирається затримка. Наздоганяємо ПЛАВНО:
-                // не більше одного пакета раз на 0,4 с (непомітно), а при великому залпі — одразу.
-                if (audioQueue.size > prebuffer + 7) {
-                    while (audioQueue.size > prebuffer + 2) {
-                        val newer = audioQueue.poll() ?: break
-                        packet = newer
-                    }
-                    lastSkipAt = now
-                } else if (audioQueue.size > prebuffer + 3 && now - lastSkipAt > 400L) {
-                    audioQueue.poll()?.let { packet = it }
-                    lastSkipAt = now
-                }
-
+                val packet: ByteArray = polled
                 val rate = VoiceCodec.packetSampleRate(packet)
                 if (rate == 0) continue
 
@@ -727,18 +729,68 @@ class CallService : Service() {
                     track = createAudioTrack(rate)
                     trackRate = rate
                     audioTrack = track
-                    track?.play()
+                    written = 0L
+                    playing = false
+                    ranDry = false
+                    concealed = 0
+                }
+                val tr = track ?: continue
+
+                val now = System.currentTimeMillis()
+                lastPacketAt = now
+
+                // На стабільній мережі запас повільно зменшується
+                if (targetMs > MIN_TARGET_MS && now - lastUnderrunAt > 15_000L) {
+                    targetMs -= 20
+                    lastUnderrunAt = now
+                }
+
+                // Наздоганяємо: звуку накопичилось більше, ніж потрібно
+                if (playing) {
+                    val pendingMs = audioQueue.size * FRAME_MS
+                    val over = bufferedMs() + pendingMs - targetMs
+                    if (over > CATCHUP_EXTRA_MS && now - lastSkipAt > 250L) {
+                        lastSkipAt = now
+                        if (over > 500) {
+                            // Великий залп: лишаємо лише кілька останніх пакетів
+                            while (audioQueue.size > 2) audioQueue.poll()
+                        }
+                        continue
+                    }
+                }
+
+                // Після «провалу» додаємо трохи тиші, щоб запас відновився
+                if (ranDry) {
+                    ranDry = false
+                    val padMs = targetMs / 2 - bufferedMs()
+                    if (padMs > 0) {
+                        val silence = ShortArray(rate * padMs / 1000)
+                        val n = tr.write(silence, 0, silence.size)
+                        if (n > 0) written += n
+                    }
                 }
 
                 val pcm = VoiceCodec.decodePacket(packet) ?: continue
                 lastPcm = pcm
+                concealed = 0
                 // Програмна гучність (діє, лише якщо телефон не дав змінити системну)
                 try {
-                    track?.setVolume(CallSession.softGain)
+                    tr.setVolume(CallSession.softGain)
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
-                track?.write(pcm, 0, pcm.size)
+                val n = tr.write(pcm, 0, pcm.size)
+                if (n > 0) written += n
+
+                // Стартовий запас накопичено — запускаємо відтворення
+                if (!playing && bufferedMs() >= targetMs) {
+                    try {
+                        tr.play()
+                        playing = true
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
             }
         } catch (e: InterruptedException) {
             // Дзвінок завершено
