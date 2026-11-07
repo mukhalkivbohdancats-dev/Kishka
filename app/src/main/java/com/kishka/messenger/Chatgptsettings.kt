@@ -406,58 +406,7 @@ private fun ChatgptModelDialog(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 // ---------- Налаштування (як у platform.openai.com -> Chat) ----------
-                CgHeader(t("cg_settings"))
-
-                CgSelect(
-                    t("cg_service_tier"), st.serviceTier.value,
-                    listOf("default" to t("cg_tier_default"), "auto" to t("cg_tier_auto"), "flex" to t("cg_tier_flex"), "priority" to t("cg_tier_priority"))
-                ) { st.serviceTier.set(it) }
-
-                CgSwitch(t("cg_websocket"), st.websocket.value, note = t("cg_ws_note")) { st.websocket.set(it) }
-
-                CgSelect(
-                    t("cg_text_format"), st.textFormat.value,
-                    listOf("text" to "text", "json_object" to "json_object")
-                ) { st.textFormat.set(it) }
-
-                CgSelect(
-                    t("cg_reasoning_mode"), st.reasoningMode.value,
-                    listOf("standard" to t("cg_standard"), "pro" to t("cg_pro"))
-                ) { st.reasoningMode.set(it) }
-
-                CgSelect(
-                    t("cg_effort"), st.effort.value,
-                    listOf("none" to "none", "minimal" to "minimal", "low" to "low", "medium" to "medium", "high" to "high", "xhigh" to "xhigh")
-                ) { st.effort.set(it) }
-
-                CgSelect(
-                    t("cg_verbosity"), st.verbosity.value,
-                    listOf("low" to "low", "medium" to "medium", "high" to "high")
-                ) { st.verbosity.set(it) }
-
-                CgSelect(
-                    t("cg_summary"), st.summary.value,
-                    listOf("auto" to "auto", "concise" to "concise", "detailed" to "detailed", "none" to "none")
-                ) { st.summary.set(it) }
-
-                CgSwitch(t("cg_store"), st.store.value) { st.store.set(it) }
-
-                Spacer(modifier = Modifier.height(10.dp))
-                CgHeader(t("cg_hosted_tools"))
-                CgSwitch(t("cg_tool_mcp"), false, enabled = false, note = t("cg_unavailable")) { }
-                CgSwitch(t("cg_tool_file_search"), false, enabled = false, note = t("cg_unavailable")) { }
-                CgSwitch(t("cg_tool_web_search"), st.toolWebSearch.value) { st.toolWebSearch.set(it) }
-                CgSwitch(t("cg_tool_image"), st.toolImage.value) { st.toolImage.set(it) }
-                CgSwitch(t("cg_tool_tool_search"), false, enabled = false, note = t("cg_unavailable")) { }
-                CgSwitch(t("cg_tool_code"), st.toolCode.value) { st.toolCode.set(it) }
-                CgSwitch(t("cg_tool_hosted_shell"), false, enabled = false, note = t("cg_unavailable")) { }
-
-                Spacer(modifier = Modifier.height(10.dp))
-                CgHeader(t("cg_local_tools"))
-                CgSwitch(t("cg_tool_function"), false, enabled = false, note = t("cg_unavailable")) { }
-                CgSwitch(t("cg_tool_custom"), false, enabled = false, note = t("cg_unavailable")) { }
-                CgSwitch(t("cg_tool_apply_patch"), false, enabled = false, note = t("cg_unavailable")) { }
-                CgSwitch(t("cg_tool_local_shell"), false, enabled = false, note = t("cg_unavailable")) { }
+                ChatgptSettingsSection(lang = lang)
 
                 Spacer(modifier = Modifier.height(16.dp))
                 Button(
@@ -469,6 +418,74 @@ private fun ChatgptModelDialog(
                 }
             }
         }
+    }
+}
+
+/**
+ * Усі налаштування ChatGPT (як у platform.openai.com -> Chat): рівень сервісу, WebSocket, формат тексту, міркування,
+ * докладність, підсумок, логи, вбудовані та локальні інструменти. Використовується і у вікні моделі у вкладці ChatGPT,
+ * і в «Налаштуваннях ШІ» (вкладка Акаунт): це одні й ті самі збережені значення.
+ */
+@Composable
+fun ChatgptSettingsSection(lang: String) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val st = remember { ChatgptSettings.get(context) }
+    val t: (String) -> String = { key -> ChatgptStrings.get(key, lang) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // ---------- Налаштування (як у platform.openai.com -> Chat) ----------
+        CgHeader(t("cg_settings"))
+
+        CgSelect(
+            t("cg_service_tier"), st.serviceTier.value,
+            listOf("default" to t("cg_tier_default"), "auto" to t("cg_tier_auto"), "flex" to t("cg_tier_flex"), "priority" to t("cg_tier_priority"))
+        ) { st.serviceTier.set(it) }
+
+        CgSwitch(t("cg_websocket"), st.websocket.value, note = t("cg_ws_note")) { st.websocket.set(it) }
+
+        CgSelect(
+            t("cg_text_format"), st.textFormat.value,
+            listOf("text" to "text", "json_object" to "json_object")
+        ) { st.textFormat.set(it) }
+
+        CgSelect(
+            t("cg_reasoning_mode"), st.reasoningMode.value,
+            listOf("standard" to t("cg_standard"), "pro" to t("cg_pro"))
+        ) { st.reasoningMode.set(it) }
+
+        CgSelect(
+            t("cg_effort"), st.effort.value,
+            listOf("none" to "none", "minimal" to "minimal", "low" to "low", "medium" to "medium", "high" to "high", "xhigh" to "xhigh")
+        ) { st.effort.set(it) }
+
+        CgSelect(
+            t("cg_verbosity"), st.verbosity.value,
+            listOf("low" to "low", "medium" to "medium", "high" to "high")
+        ) { st.verbosity.set(it) }
+
+        CgSelect(
+            t("cg_summary"), st.summary.value,
+            listOf("auto" to "auto", "concise" to "concise", "detailed" to "detailed", "none" to "none")
+        ) { st.summary.set(it) }
+
+        CgSwitch(t("cg_store"), st.store.value) { st.store.set(it) }
+
+        Spacer(modifier = Modifier.height(10.dp))
+        CgHeader(t("cg_hosted_tools"))
+        CgSwitch(t("cg_tool_mcp"), false, enabled = false, note = t("cg_unavailable")) { }
+        CgSwitch(t("cg_tool_file_search"), false, enabled = false, note = t("cg_unavailable")) { }
+        CgSwitch(t("cg_tool_web_search"), st.toolWebSearch.value) { st.toolWebSearch.set(it) }
+        CgSwitch(t("cg_tool_image"), st.toolImage.value) { st.toolImage.set(it) }
+        CgSwitch(t("cg_tool_tool_search"), false, enabled = false, note = t("cg_unavailable")) { }
+        CgSwitch(t("cg_tool_code"), st.toolCode.value) { st.toolCode.set(it) }
+        CgSwitch(t("cg_tool_hosted_shell"), false, enabled = false, note = t("cg_unavailable")) { }
+
+        Spacer(modifier = Modifier.height(10.dp))
+        CgHeader(t("cg_local_tools"))
+        CgSwitch(t("cg_tool_function"), false, enabled = false, note = t("cg_unavailable")) { }
+        CgSwitch(t("cg_tool_custom"), false, enabled = false, note = t("cg_unavailable")) { }
+        CgSwitch(t("cg_tool_apply_patch"), false, enabled = false, note = t("cg_unavailable")) { }
+        CgSwitch(t("cg_tool_local_shell"), false, enabled = false, note = t("cg_unavailable")) { }
     }
 }
 
