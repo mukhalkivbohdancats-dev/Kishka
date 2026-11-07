@@ -14,6 +14,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import io.socket.client.Ack
+import io.socket.client.Socket
+import io.socket.emitter.Emitter
 import org.json.JSONObject
 
 enum class CallPhase { IDLE, OUTGOING, INCOMING, ACTIVE }
@@ -68,6 +71,7 @@ object CallCoordinator {
     private var myEmail = ""
     private var registeredFor = ""
     private var timeoutRunnable: Runnable? = null
+    private var connectListener: Emitter.Listener? = null
 
     private var direction = "out"
     private var wasAnswered = false
@@ -98,6 +102,8 @@ object CallCoordinator {
             val s = KishkaManager.getSocket()
             listOf("incoming_call_", "call_answered_", "call_rejected_", "call_ended_", "call_busy_", "call_unavailable_")
                 .forEach { s.off(it + registeredFor) }
+            connectListener?.let { s.off(Socket.EVENT_CONNECT, it) }
+            connectListener = null
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -115,18 +121,75 @@ object CallCoordinator {
             if (obj != null) handler.post { onIncoming(obj) }
         }
         socket.off("call_answered_$me")
-        socket.on("call_answered_$me") { handler.post { onAnswered() } }
+        socket.on("call_answered_$me") { args ->
+            val peer = peerOf(args)
+            handler.post { onAnswered(peer) }
+        }
         socket.off("call_rejected_$me")
-        socket.on("call_rejected_$me") { handler.post { onRejected() } }
+        socket.on("call_rejected_$me") { args ->
+            val peer = peerOf(args)
+            handler.post { onRejected(peer) }
+        }
         socket.off("call_ended_$me")
         socket.on("call_ended_$me") { args ->
             val reason = (args.firstOrNull() as? JSONObject)?.optString("reason", "") ?: ""
-            handler.post { onEnded(reason) }
+            val peer = peerOf(args)
+            handler.post { onEnded(reason, peer) }
         }
         socket.off("call_busy_$me")
-        socket.on("call_busy_$me") { handler.post { onBusy() } }
+        socket.on("call_busy_$me") { args ->
+            val peer = peerOf(args)
+            handler.post { onBusy(peer) }
+        }
         socket.off("call_unavailable_$me")
-        socket.on("call_unavailable_$me") { handler.post { onUnavailable() } }
+        socket.on("call_unavailable_$me") { args ->
+            val peer = peerOf(args)
+            handler.post { onUnavailable(peer) }
+        }
+
+        // Після кожного відновлення зв'язку питаємо сервер, чи дзвінок ще триває: його могли завершити, поки зв'язку не було
+        connectListener?.let { socket.off(Socket.EVENT_CONNECT, it) }
+        val listener = Emitter.Listener { handler.post { checkCallAlive() } }
+        connectListener = listener
+        socket.on(Socket.EVENT_CONNECT, listener)
+    }
+
+    /** Хто співрозмовник у події сервера (порожньо, якщо сервер старої версії цього не надсилає). */
+    private fun peerOf(args: Array<out Any?>): String =
+        ((args.firstOrNull() as? JSONObject)?.optString("peer", "") ?: "").trim().lowercase()
+
+    /**
+     * Подія належить іншому (вже завершеному) дзвінку — її треба ігнорувати. Раніше «запізнілий» відбій попереднього
+     * дзвінка рвав новий дзвінок, який людина встигла набрати одразу після нього.
+     */
+    private fun isStale(peer: String): Boolean =
+        peer.isNotEmpty() && CallSession.peerEmail.isNotEmpty() && peer != CallSession.peerEmail
+
+    private fun checkCallAlive() {
+        val phase = CallSession.phase
+        if (phase == CallPhase.IDLE) return
+        val peer = CallSession.peerEmail
+        if (peer.isEmpty() || myEmail.isEmpty()) return
+        val since = if (phase == CallPhase.ACTIVE && CallSession.startedAt > 0L) CallSession.startedAt else ringStartedWall
+        // Щойно почався або прийнятий дзвінок: сервер міг ще не встигнути його оформити
+        if (System.currentTimeMillis() - since < 4000L) return
+        try {
+            val json = JSONObject().apply {
+                put("me", myEmail)
+                put("peer", peer)
+            }
+            KishkaManager.getSocket().emit("call_check", json, Ack { args ->
+                val res = args.firstOrNull() as? JSONObject
+                if (res != null) {
+                    val active = res.optBoolean("active", true)
+                    handler.post {
+                        if (!active && CallSession.phase == phase && CallSession.peerEmail == peer) onEnded("lost", peer)
+                    }
+                }
+            })
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     // ===================== Дії користувача =====================
@@ -367,6 +430,7 @@ object CallCoordinator {
         val avatar = obj.optString("callerAvatar", "").ifEmpty { null }
         val name = LocalStore.get(context).contactName(myEmail, caller) ?: serverName.ifEmpty { caller }
 
+        clearPendingVideo()
         direction = "in"
         wasAnswered = false
         ringStartedWall = System.currentTimeMillis()
@@ -389,8 +453,8 @@ object CallCoordinator {
         }
     }
 
-    private fun onAnswered() {
-        if (CallSession.phase != CallPhase.OUTGOING) return
+    private fun onAnswered(peer: String = "") {
+        if (CallSession.phase != CallPhase.OUTGOING || isStale(peer)) return
         cancelTimeout()
         wasAnswered = true
         CallSession.startedAt = System.currentTimeMillis()
@@ -399,16 +463,17 @@ object CallCoordinator {
         applyPendingVideo()
     }
 
-    private fun onRejected() {
+    private fun onRejected(peer: String = "") {
         val context = ctx ?: return
-        if (CallSession.phase != CallPhase.OUTGOING) return
+        if (CallSession.phase != CallPhase.OUTGOING || isStale(peer)) return
         logCall(missed = true, status = "declined")
         finishLocal()
         Notice.show(AppText.tr(context, "call_declined_by_peer"))
     }
 
-    private fun onEnded(reason: String) {
+    private fun onEnded(reason: String, peer: String = "") {
         val context = ctx ?: return
+        if (isStale(peer)) return
         when (CallSession.phase) {
             CallPhase.IDLE -> return
             CallPhase.INCOMING -> {
@@ -428,16 +493,16 @@ object CallCoordinator {
         }
     }
 
-    private fun onBusy() {
+    private fun onBusy(peer: String = "") {
         val context = ctx ?: return
-        if (CallSession.phase != CallPhase.OUTGOING) return
+        if (CallSession.phase != CallPhase.OUTGOING || isStale(peer)) return
         finishLocal()
         Notice.show(AppText.tr(context, "line_busy"))
     }
 
-    private fun onUnavailable() {
+    private fun onUnavailable(peer: String = "") {
         val context = ctx ?: return
-        if (CallSession.phase != CallPhase.OUTGOING) return
+        if (CallSession.phase != CallPhase.OUTGOING || isStale(peer)) return
         logCall(missed = true, status = "unavailable")
         finishLocal()
         Notice.show(AppText.tr(context, "call_offline"))
