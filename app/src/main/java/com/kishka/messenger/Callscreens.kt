@@ -193,8 +193,6 @@ fun CallScreen(lang: String) {
     val context = LocalContext.current
 
     val videoMode = phase == CallPhase.ACTIVE && CallVideo.remoteOn
-    // Кнопки камери й екрана доступні і ДО відповіді: натиснута кнопка вмикається автоматично, коли співрозмовник відповів
-    val beforeAnswer = phase == CallPhase.OUTGOING || phase == CallPhase.INCOMING
     val camOn = (CallVideo.localOn && CallVideo.localSource == "camera") || CallSession.pendingVideo == "camera"
     val screenOn = (CallVideo.localOn && CallVideo.localSource == "screen") || CallSession.pendingVideo == "screen"
     val camLive = CallVideo.localOn && CallVideo.localSource == "camera"
@@ -350,20 +348,7 @@ fun CallScreen(lang: String) {
                                 CallCoordinator.accept()
                             }
                         }
-                        Spacer(modifier = Modifier.height(14.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth().widthIn(max = 520.dp),
-                            horizontalArrangement = Arrangement.SpaceEvenly
-                        ) {
-                            CallControl(
-                                if (camOn) Icons.Default.Videocam else Icons.Default.VideocamOff,
-                                CallStrings.get("camera", lang), camOn, buttonSize, iconSize, null, onCamera
-                            )
-                            CallControl(
-                                if (screenOn) Icons.Default.StopScreenShare else Icons.Default.ScreenShare,
-                                CallStrings.get("screen", lang), screenOn, buttonSize, iconSize, null, onScreen
-                            )
-                        }
+                        // Поки телефонують ТОБІ — лише зелена й червона слухавки (без камери й трансляції, доки не приймеш)
                     } else {
                         if (showVolume) {
                             val max = CallCoordinator.volumeMax()
