@@ -14,8 +14,8 @@ const io = new Server(server, {
         methods: ["GET", "POST"]
     },
     maxHttpBufferSize: 1e7,
-    pingInterval: 20000,
-    pingTimeout: 30000
+    pingInterval: 10000,
+    pingTimeout: 20000
 });
 
 // Додано кореневий маршрут для підтримання активності (keep-alive) на Render
@@ -536,7 +536,7 @@ function mediaPreviewText(text, fileType) {
 // Стан активних дзвінків (для відновлення після короткого розриву мережі)
 const activeCalls = new Map();   // email -> email співрозмовника
 const callGrace = new Map();     // email -> timer
-const CALL_GRACE_MS = 12000;
+const CALL_GRACE_MS = 20000;
 const ringTimers = new Map();    // "caller|receiver" -> timer (дзвінок без відповіді завершується сам)
 const RING_TIMEOUT_MS = 60000;
 
@@ -620,6 +620,12 @@ setInterval(() => {
     const cutoff = Date.now() - 3 * 3600 * 1000;
     callMeta.forEach((m, k) => { if (m.startedAt < cutoff) callMeta.delete(k); });
 }, 30 * 60 * 1000);
+
+// Подія «дзвінок завершено» для всіх пристроїв користувача, КРІМ сокета-ініціатора (він уже завершив дзвінок у себе)
+function emitCallEnded(originSocket, email, payload) {
+    if (originSocket && originSocket.userEmail === email) originSocket.to(email).emit(`call_ended_${email}`, payload);
+    else io.to(email).emit(`call_ended_${email}`, payload);
+}
 
 io.on('connection', (socket) => {
     console.log('Клієнт підключився:', socket.id);
@@ -1012,14 +1018,28 @@ io.on('connection', (socket) => {
         userSockets.set(cleanCaller, socket.id);
         socket.join(cleanCaller);
 
+        // Зустрічний дзвінок: двоє одночасно натиснули «подзвонити» одне одному. Раніше другий отримував «зайнято»,
+        // а перший дзвонив у порожнечу 60 секунд. Тепер їх просто зʼєднує.
+        const reverseMeta = callMeta.get(cleanReceiver + '|' + cleanCaller);
+        if (reverseMeta && !reverseMeta.answeredAt &&
+            activeCalls.get(cleanCaller) === cleanReceiver && activeCalls.get(cleanReceiver) === cleanCaller) {
+            clearRingTimer(cleanCaller, cleanReceiver);
+            reverseMeta.answeredAt = Date.now();
+            busyUsers.add(cleanCaller);
+            busyUsers.add(cleanReceiver);
+            io.to(cleanCaller).emit(`call_answered_${cleanCaller}`, { callerEmail: cleanReceiver, receiverEmail: cleanCaller, peer: cleanReceiver });
+            io.to(cleanReceiver).emit(`call_answered_${cleanReceiver}`, { callerEmail: cleanReceiver, receiverEmail: cleanCaller, peer: cleanCaller });
+            return;
+        }
+
         if (busyUsers.has(cleanReceiver) || busyUsers.has(cleanCaller)) {
-            io.to(cleanCaller).emit(`call_busy_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
+            io.to(cleanCaller).emit(`call_busy_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver, peer: cleanReceiver });
             return;
         }
 
         // Абонент не в мережі: повідомляємо про це окремою подією (а не "лінія зайнята")
         if (!userIsOnline(cleanReceiver)) {
-            io.to(cleanCaller).emit(`call_unavailable_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
+            io.to(cleanCaller).emit(`call_unavailable_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver, peer: cleanReceiver });
             recordCall(cleanCaller, cleanReceiver, 'unavailable', 0);
             return;
         }
@@ -1038,8 +1058,8 @@ io.on('connection', (socket) => {
             const metaTimeout = takeCallMeta(cleanCaller, cleanReceiver);
             if (metaTimeout && !metaTimeout.answeredAt) recordCall(cleanCaller, cleanReceiver, 'missed', 0);
             finishCall(cleanCaller, cleanReceiver);
-            io.to(cleanCaller).emit(`call_ended_${cleanCaller}`, { reason: 'no_answer' });
-            io.to(cleanReceiver).emit(`call_ended_${cleanReceiver}`, { reason: 'no_answer' });
+            io.to(cleanCaller).emit(`call_ended_${cleanCaller}`, { reason: 'no_answer', peer: cleanReceiver });
+            io.to(cleanReceiver).emit(`call_ended_${cleanReceiver}`, { reason: 'no_answer', peer: cleanCaller });
         }, RING_TIMEOUT_MS));
 
         db.get("SELECT name, avatar_url AS \"avatarUrl\" FROM users WHERE email = ?", [cleanCaller], (err, row) => {
@@ -1060,7 +1080,7 @@ io.on('connection', (socket) => {
 
         // Дзвінок уже завершено (таймаут або скасування) — повідомляємо тому, хто відповів
         if (activeCalls.get(cleanReceiver) !== cleanCaller) {
-            io.to(cleanReceiver).emit(`call_ended_${cleanReceiver}`, { reason: 'gone' });
+            io.to(cleanReceiver).emit(`call_ended_${cleanReceiver}`, { reason: 'gone', peer: cleanCaller });
             return;
         }
 
@@ -1072,7 +1092,7 @@ io.on('connection', (socket) => {
         const metaAnswer = callMeta.get(cleanCaller + '|' + cleanReceiver);
         if (metaAnswer && !metaAnswer.answeredAt) metaAnswer.answeredAt = Date.now();
 
-        io.to(cleanCaller).emit(`call_answered_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
+        io.to(cleanCaller).emit(`call_answered_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver, peer: cleanReceiver });
     });
 
     socket.on('reject_call', (data) => {
@@ -1083,9 +1103,9 @@ io.on('connection', (socket) => {
         const metaReject = takeCallMeta(cleanCaller, cleanReceiver);
         if (metaReject && !metaReject.answeredAt) recordCall(metaReject.caller, metaReject.receiver, 'declined', 0);
         finishCall(cleanCaller, cleanReceiver);
-        if (cleanCaller) io.to(cleanCaller).emit(`call_rejected_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver });
-        // Інші пристрої того, хто відхилив, теж припиняють дзвонити
-        if (cleanReceiver) io.to(cleanReceiver).emit(`call_ended_${cleanReceiver}`, { reason: 'rejected' });
+        if (cleanCaller) io.to(cleanCaller).emit(`call_rejected_${cleanCaller}`, { callerEmail: cleanCaller, receiverEmail: cleanReceiver, peer: cleanReceiver });
+        // Інші пристрої того, хто відхилив, теж припиняють дзвонити (сам пристрій, що відхилив, уже все завершив)
+        if (cleanReceiver) emitCallEnded(socket, cleanReceiver, { reason: 'rejected', peer: cleanCaller });
     });
 
     socket.on('end_call', (data) => {
@@ -1104,8 +1124,21 @@ io.on('connection', (socket) => {
             }
         }
         finishCall(cleanCaller, cleanReceiver);
-        if (cleanCaller) io.to(cleanCaller).emit(`call_ended_${cleanCaller}`, {});
-        if (cleanReceiver) io.to(cleanReceiver).emit(`call_ended_${cleanReceiver}`, {});
+        // Сокет, що поклав слухавку, повідомлення не отримує: раніше «луна» старого відбою доходила тоді, коли людина
+        // вже набрала наступний дзвінок, і новий дзвінок одразу рвався.
+        if (cleanCaller) emitCallEnded(socket, cleanCaller, { peer: cleanReceiver });
+        if (cleanReceiver) emitCallEnded(socket, cleanReceiver, { peer: cleanCaller });
+    });
+
+    // Після відновлення зв'язку застосунок питає, чи дзвінок ще триває (його могли завершити, поки зв'язку не було)
+    socket.on('call_check', (data, cb) => {
+        const me = String((data && data.me) || '').trim().toLowerCase();
+        const peer = String((data && data.peer) || '').trim().toLowerCase();
+        const active = !!me && !!peer && activeCalls.get(me) === peer && activeCalls.get(peer) === me;
+        const meta = active ? (callMeta.get(me + '|' + peer) || callMeta.get(peer + '|' + me) || null) : null;
+        if (typeof cb === 'function') {
+            try { cb({ active, ringing: !!meta && !meta.answeredAt }); } catch (e) { /* клієнт відключився */ }
+        }
     });
 
     socket.on('voice_chunk', (data) => {
@@ -1167,7 +1200,7 @@ io.on('connection', (socket) => {
                         metaGrace.answeredAt ? (Date.now() - metaGrace.answeredAt) / 1000 : 0);
                 }
                 finishCall(email, peer);
-                io.to(peer).emit(`call_ended_${peer}`, {});
+                io.to(peer).emit(`call_ended_${peer}`, { reason: 'lost', peer: email });
             }, CALL_GRACE_MS));
         } else if (socket.myCallEmails && !(email && activeCalls.has(email))) {
             socket.myCallEmails.forEach(e => busyUsers.delete(e));
@@ -2838,49 +2871,6 @@ io.on('connection', (socket) => {
 });
 // ===================== КІНЕЦЬ БЛОКУ GEMINI =====================
 
-// =====================================================================
-// ===== KISHKA AI (Кішка ШІ): власний ШІ месенджера, окремий від Gemini — див. файл kishkaai.js =====
-// Він замінив вкладку AI Preview. Працює БЕЗ чужих ШІ (власні моделі Kishka-1 і Kishka-image, файли kishkaai.js,
-// kishkaknowledge.js, kishkaimage.js). Події сокета: kai_get_models, kai_get_history, kai_get_status, kai_send,
-// kai_cancel, kai_clear, kai_get_facts, kai_clear_facts. Пошуку в інтернеті там немає (гуглить тільки Gemini).
-// =====================================================================
-// Файл модуля шукаємо БЕЗ урахування регістру: на Linux (Render) Kishkaai.js і kishkaai.js — різні файли
-function loadKishkaAI() {
-    const found = fs.readdirSync(__dirname).find(f => f.toLowerCase() === 'kishkaai.js');
-    if (!found) {
-        console.error('Файл Kishkaai.js не знайдено поруч із server.js — Kishka AI вимкнено, решта сервера працює.');
-        return null;
-    }
-    return require(path.join(__dirname, found));
-}
-const initKishkaAI = loadKishkaAI();
-if (initKishkaAI) initKishkaAI({
-    io,
-    db,
-    dbRun: geminiDbRun,
-    dbAll: geminiDbAll,
-    cleanEmail: geminiCleanEmail,
-    langOf: geminiLang,
-    stripEmoji,
-    makeJob: geminiMakeJob,
-    cancelJob: geminiCancelJob,
-    checkCancelled: geminiCheckCancelled,
-    sleep: geminiSleep,
-    // Загальний бекенд: Кішка ШІ відповідає на будь-яке питання і малює будь-яке зображення (див. kishkaGeneral* нижче)
-    generalAnswer: kishkaBackendOn() ? kishkaGeneralAnswer : null,
-    generalImage: kishkaBackendOn() ? kishkaGeneralImage : null,
-    tz: process.env.GEMINI_TIMEZONE || 'Europe/Kyiv',
-    nowText: (lang) => {
-        try {
-            return new Date().toLocaleString(lang === 'en' ? 'en-GB' : (lang === 'ru' ? 'ru-RU' : 'uk-UA'), {
-                timeZone: process.env.GEMINI_TIMEZONE || 'Europe/Kyiv', dateStyle: 'full', timeStyle: 'short'
-            });
-        } catch (e) {
-            return new Date().toISOString();
-        }
-    }
-});
-// ===================== КІНЕЦЬ БЛОКУ KISHKA AI =====================
 
 // =====================================================================
 // ===== CHATGPT (файл chatgpt.js) =====
@@ -3244,7 +3234,7 @@ io.on('connection', (socket) => {
                 const peer = activeCalls.get(email);
                 if (peer) {
                     finishCall(email, peer);
-                    io.to(peer).emit(`call_ended_${peer}`, {});
+                    io.to(peer).emit(`call_ended_${peer}`, { reason: 'banned', peer: email });
                 }
                 io.to(email).emit('account_banned');
                 io.in(email).disconnectSockets(true);
@@ -3277,47 +3267,16 @@ io.on('connection', (socket) => {
 });
 // ===================== КІНЕЦЬ БЛОКУ АДМІНІСТРАТОРА =====================
 
-// =====================================================================
-// ===== КІШКА ШІ: загальний бекенд (відповіді на будь-які питання і будь-які зображення) =====
-// Власний рушій Kishka-1 не знає всього на світі. Коли він не знає відповіді (або просять намалювати) — питання йде сюди.
-// Використовується той самий ключ, що й для вкладки Gemini (GEMINI_API_KEY); користувач бачить лише «Кішка ШІ».
-// KISHKA_AI_BACKEND=off — вимкнути (Кішка ШІ знову відповідає лише своїм рушієм).
-// =====================================================================
-function kishkaBackendOn() {
-    return (process.env.KISHKA_AI_BACKEND || 'auto').toLowerCase() !== 'off' && !!process.env.GEMINI_API_KEY;
-}
 
-async function kishkaGeneralAnswer(opts) {
-    const lang = geminiLang(opts.lang);
-    const catalog = await geminiGetCatalog();
-    const picked = geminiPickModel(catalog, process.env.KISHKA_AI_MODEL || '');
-    const system = 'Ти — Кішка ШІ (Kishka AI), помічниця месенджера Kishka. Ніколи не називай себе Gemini, Google чи іншою моделлю — ти Кішка ШІ. ' +
-        'Відповідай на будь-яке питання по суті, зрозуміло й доброзичливо, тією мовою, якою пише користувач (' +
-        (lang === 'en' ? 'англійська' : (lang === 'ru' ? 'російська' : 'українська')) + ' за замовчуванням), без емодзі. ' +
-        `Зараз ${geminiNowText()}, рік — ${geminiCurrentYear()}. Для актуальних питань скористайся пошуком Google.`;
-    const contents = [];
-    (opts.history || []).forEach((m) => {
-        const role = m.role === 'model' ? 'model' : 'user';
-        const text = String(m.text || '').trim();
-        if (!text) return;
-        if (contents.length && contents[contents.length - 1].role === role) contents[contents.length - 1].parts[0].text += '\n' + text;
-        else contents.push({ role, parts: [{ text }] });
-    });
-    if (!contents.length || contents[contents.length - 1].role !== 'user') {
-        contents.push({ role: 'user', parts: [{ text: String(opts.question || '') }] });
-    }
-    const out = await callGeminiResilient(contents, system, picked, catalog, opts.job, { search: true });
-    return stripEmoji(out.text);
+// =====================================================================
+// ===== KISHKABLOX (файл kishkablox.js): акаунти «нік + пароль» у базі =====
+// =====================================================================
+try {
+    const initKishkaBlox = loadSiblingModule('kishkablox.js');
+    if (initKishkaBlox) initKishkaBlox({ io, db, dbRun: geminiDbRun, dbAll: geminiDbAll });
+} catch (e) {
+    console.error('KishkaBlox не запустився (решта сервера працює):', e && e.message);
 }
-
-async function kishkaGeneralImage(prompt, job) {
-    const catalog = await geminiGetCatalog();
-    const picked = catalog.find((m) => m.type === 'image' && !m.paid) || catalog.find((m) => m.type === 'image');
-    if (!picked) throw new Error('NO_IMAGE_MODEL');
-    const img = await callGeminiImageResilient(prompt, picked, catalog, job, null, false);
-    return { mime: img.mime, data: Buffer.from(img.data, 'base64') };
-}
-// ===================== КІНЕЦЬ БЛОКУ KISHKA AI (загальний бекенд) =====================
 
 // Не даємо Render Free "заснути" (він вимикає сервіс після 15 хв без запитів) — сервер сам звертається до себе
 (function keepAlive() {
