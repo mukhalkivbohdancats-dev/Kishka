@@ -106,9 +106,12 @@ object Strings {
             "contact_added" to "Контакт успішно додано!",
             "loading_data" to "Завантажуємо ваші дані...",
             "permissions_title" to "Необхідні дозволи",
-            "permissions_desc" to "Для повноцінної роботи месенджера надайте дозволи на мікрофон та сповіщення.",
+            "permissions_desc" to "Для повноцінної роботи месенджера надайте дозволи на мікрофон, камеру, сповіщення та фото й відео.",
             "grant_mic" to "Дозволити мікрофон",
             "grant_notif" to "Дозволити сповіщення",
+            "grant_camera" to "Дозволити камеру",
+            "camera_granted" to "Камеру дозволено",
+            "grant_all_perms" to "Будь ласка, надайте всі дозволи!",
             "continue_app" to "Продовжити в месенджер",
             "copy" to "Копіювати",
             "delete" to "Видалити",
@@ -164,9 +167,12 @@ object Strings {
             "contact_added" to "Контакт успешно добавлен!",
             "loading_data" to "Загружаем ваши данные...",
             "permissions_title" to "Необходимые разрешения",
-            "permissions_desc" to "Для полноценной работы мессенджера предоставьте разрешения на микрофон и уведомления.",
+            "permissions_desc" to "Для полноценной работы мессенджера предоставьте разрешения на микрофон, камеру, уведомления, а также фото и видео.",
             "grant_mic" to "Разрешить микрофон",
             "grant_notif" to "Разрешить уведомления",
+            "grant_camera" to "Разрешить камеру",
+            "camera_granted" to "Камера разрешена",
+            "grant_all_perms" to "Пожалуйста, дайте все разрешения!",
             "continue_app" to "Продолжить в мессенджер",
             "copy" to "Скопировать",
             "delete" to "Удалить",
@@ -222,9 +228,12 @@ object Strings {
             "contact_added" to "Contact successfully added!",
             "loading_data" to "Loading your data...",
             "permissions_title" to "Required Permissions",
-            "permissions_desc" to "To use all features of the messenger, please grant Microphone and Notification permissions.",
+            "permissions_desc" to "To use all features of the messenger, please grant Microphone, Camera, Notification, and Photos and Videos permissions.",
             "grant_mic" to "Allow Microphone",
             "grant_notif" to "Allow Notifications",
+            "grant_camera" to "Allow Camera",
+            "camera_granted" to "Camera allowed",
+            "grant_all_perms" to "Please grant all permissions!",
             "continue_app" to "Continue to Messenger",
             "copy" to "Copy",
             "delete" to "Delete",
@@ -715,7 +724,12 @@ fun MainTabContent(
                 provider = "chatgpt"
             )
         } else AccessBlockedScreen("ChatGPT", currentLanguage)
-        TAB_BLOX -> KishkabloxTab(lang = currentLanguage)
+        TAB_BLOX -> KishkabloxTab(
+            lang = currentLanguage,
+            email = currentUserEmail,
+            displayName = currentDisplayName,
+            avatarUrl = avatarUrl
+        )
         else -> AccountTab(
             manager = manager,
             displayName = currentDisplayName,
@@ -739,7 +753,10 @@ fun checkPermissionsGranted(context: Context): Boolean {
     // вибір фото працює через системний вибір і без дозволу.
     val media = hasMediaPermission(context) ||
         context.getSharedPreferences("kishka_permissions", Context.MODE_PRIVATE).getBoolean("media_asked", false)
-    return mic && notif && media
+    // Четвертий дозвіл — камера (для відеодзвінків). Так само: після того, як запит показано, вхід більше не блокуємо.
+    val camera = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED ||
+        context.getSharedPreferences("kishka_permissions", Context.MODE_PRIVATE).getBoolean("camera_asked", false)
+    return mic && notif && media && camera
 }
 
 @Composable
@@ -757,6 +774,12 @@ fun PermissionsScreen(lang: String, onPermissionsGranted: () -> Unit) {
     var mediaAsked by remember {
         mutableStateOf(context.getSharedPreferences("kishka_permissions", Context.MODE_PRIVATE).getBoolean("media_asked", false))
     }
+    var cameraGranted by remember {
+        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
+    }
+    var cameraAsked by remember {
+        mutableStateOf(context.getSharedPreferences("kishka_permissions", Context.MODE_PRIVATE).getBoolean("camera_asked", false))
+    }
 
     val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         micGranted = granted
@@ -772,7 +795,13 @@ fun PermissionsScreen(lang: String, onPermissionsGranted: () -> Unit) {
         context.getSharedPreferences("kishka_permissions", Context.MODE_PRIVATE).edit().putBoolean("media_asked", true).apply()
     }
 
-    val canContinue = micGranted && notifGranted && (mediaGranted || mediaAsked)
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        cameraGranted = granted
+        cameraAsked = true
+        context.getSharedPreferences("kishka_permissions", Context.MODE_PRIVATE).edit().putBoolean("camera_asked", true).apply()
+    }
+
+    val canContinue = micGranted && notifGranted && (mediaGranted || mediaAsked) && (cameraGranted || cameraAsked)
 
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
     Column(
@@ -796,6 +825,17 @@ fun PermissionsScreen(lang: String, onPermissionsGranted: () -> Unit) {
             colors = ButtonDefaults.buttonColors(containerColor = if (micGranted) Color(0xFF2E7D32) else ViberPurple)
         ) {
             Text(if (micGranted) AppText.get("mic_granted", lang) else Strings.get("grant_mic", lang))
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Дозвіл на камеру
+        Button(
+            onClick = { cameraLauncher.launch(Manifest.permission.CAMERA) },
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = if (cameraGranted) Color(0xFF2E7D32) else ViberPurple)
+        ) {
+            Text(if (cameraGranted) Strings.get("camera_granted", lang) else Strings.get("grant_camera", lang))
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -826,7 +866,7 @@ fun PermissionsScreen(lang: String, onPermissionsGranted: () -> Unit) {
                 if (canContinue) {
                     onPermissionsGranted()
                 } else {
-                    Notice.show(ChatStrings.get("grant_all_three", lang))
+                    Notice.show(Strings.get("grant_all_perms", lang))
                 }
             },
             modifier = Modifier.fillMaxWidth().height(48.dp),
