@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
@@ -124,7 +125,14 @@ object BloxStrings {
             "err_wrong_password" to "Неправильний нікнейм або пароль",
             "err_too_many" to "Забагато невдалих спроб. Спробуйте за кілька хвилин",
             "err_error" to "Не вдалося виконати. Перевірте інтернет і спробуйте ще раз",
-            "err_empty" to "Введіть нікнейм і пароль"
+            "err_empty" to "Введіть нікнейм і пароль"',
+            "install_title" to "Установити KishkaBlox?",
+            "install" to "Установити",
+            "install_error" to "Не вдалося установити. Перевірте інтернет і спробуйте ще раз",
+            "get_started" to "Розпочати",
+            "joining" to "Приєднання до гри",
+            "leave" to "Вийти з гри",
+            "leave_text" to "Ви точно хочете вийти з гри?"
         ),
         "ru" to mapOf(
             "tab" to "KishkaBlox",
@@ -160,7 +168,14 @@ object BloxStrings {
             "err_wrong_password" to "Неправильный никнейм или пароль",
             "err_too_many" to "Слишком много неудачных попыток. Попробуйте через несколько минут",
             "err_error" to "Не удалось выполнить. Проверьте интернет и попробуйте ещё раз",
-            "err_empty" to "Введите никнейм и пароль"
+            "err_empty" to "Введите никнейм и пароль"',
+            "install_title" to "Установить KishkaBlox?",
+            "install" to "Установить",
+            "install_error" to "Не удалось установить. Проверьте интернет и попробуйте ещё раз",
+            "get_started" to "Начать",
+            "joining" to "Присоединение к игре",
+            "leave" to "Выйти из игры",
+            "leave_text" to "Вы точно хотите выйти из игры?"
         ),
         "en" to mapOf(
             "tab" to "KishkaBlox",
@@ -196,7 +211,14 @@ object BloxStrings {
             "err_wrong_password" to "Wrong nickname or password",
             "err_too_many" to "Too many failed attempts. Try again in a few minutes",
             "err_error" to "Could not do it. Check the internet and try again",
-            "err_empty" to "Enter a nickname and a password"
+            "err_empty" to "Enter a nickname and a password"',
+            "install_title" to "Install KishkaBlox?",
+            "install" to "Install",
+            "install_error" to "Could not install. Check the internet and try again",
+            "get_started" to "Get started",
+            "joining" to "Joining the game",
+            "leave" to "Leave",
+            "leave_text" to "Are you sure you want to leave the game?"
         )
     )
 
@@ -433,6 +455,20 @@ object BloxAuth {
  */
 @Composable
 fun KishkabloxTab(lang: String, email: String, displayName: String, avatarUrl: String) {
+    val context = LocalContext.current
+
+    // Спершу — «Установити KishkaBlox?». Установка робиться один раз; після «Розпочати» вкладка відкривається одразу.
+    LaunchedEffect(Unit) { BloxInstall.check(context) }
+
+    if (BloxInstall.phase == BloxInstall.Phase.READY) {
+        KishkabloxMain(lang = lang, email = email, displayName = displayName, avatarUrl = avatarUrl)
+    } else {
+        BloxInstallScreen(lang = lang)
+    }
+}
+
+@Composable
+private fun KishkabloxMain(lang: String, email: String, displayName: String, avatarUrl: String) {
     val context = LocalContext.current
 
     LaunchedEffect(email) { BloxAuth.open(context, email) }
@@ -701,12 +737,15 @@ private fun BloxHome(lang: String, avatarUrl: String) {
     Box(modifier = Modifier.fillMaxSize().background(ViberBg)) {
         if (addFriendsOpen) {
             BloxAddFriendsScreen(lang = lang, onBack = { addFriendsOpen = false })
+        } else if (BloxGame.detailOpen) {
+            // Сторінка гри: стрілочка назад, аватарка, назва і синя кнопка
+            BloxGameDetail(onBack = { BloxGame.detailOpen = false }, onPlay = { BloxGame.enter() })
         } else {
             Row(modifier = Modifier.fillMaxSize()) {
                 BloxRail(lang = lang, page = page, onSelect = { page = it })
                 Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
                     if (page == 0) {
-                        BloxHomePage(lang = lang, avatarUrl = avatarUrl, onAddFriends = { addFriendsOpen = true })
+                        BloxHomePage(lang = lang, avatarUrl = avatarUrl, onAddFriends = { addFriendsOpen = true }, onOpenGame = { BloxGame.detailOpen = true })
                     } else {
                         BloxMorePage(lang = lang)
                     }
@@ -768,7 +807,7 @@ private fun BloxRailItem(
 
 /** Home: аватарка-кружок і нік поруч, вхідні запити, ряд «Додати друзів» + сірі кружки друзів. */
 @Composable
-private fun BloxHomePage(lang: String, avatarUrl: String, onAddFriends: () -> Unit) {
+private fun BloxHomePage(lang: String, avatarUrl: String, onAddFriends: () -> Unit, onOpenGame: () -> Unit) {
     val context = LocalContext.current
     val b: (String) -> String = { key -> BloxStrings.get(key, lang) }
     var friendToDelete by remember { mutableStateOf<String?>(null) }
@@ -893,6 +932,12 @@ private fun BloxHomePage(lang: String, avatarUrl: String, onAddFriends: () -> Un
                 }
             }
         }
+
+        // Тонка сіра лінія під друзями (лише на цій сторінці вкладки), під нею — гра Realistic cars
+        Spacer(modifier = Modifier.height(20.dp))
+        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFD3D3DB)))
+        Spacer(modifier = Modifier.height(16.dp))
+        BloxGameTile(onClick = onOpenGame)
     }
 
     // Тап на сірий кружок — лише кнопка «Видалити друга»
@@ -1028,6 +1073,10 @@ private fun BloxAddFriendsScreen(lang: String, onBack: () -> Unit) {
                     value = query,
                     onValueChange = { query = it.replace(" ", ""); result = null },
                     placeholder = { Text(b("nick"), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    // Лупа зліва всередині поля (як і на клавіатурі, де кнопка дії теж «пошук»)
+                    leadingIcon = {
+                        Icon(Icons.Default.Search, contentDescription = null, tint = Color.Gray)
+                    },
                     singleLine = true,
                     shape = RoundedCornerShape(14.dp),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Search),
