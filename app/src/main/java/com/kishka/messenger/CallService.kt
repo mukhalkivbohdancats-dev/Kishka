@@ -149,11 +149,14 @@ class CallService : Service() {
                 stopped = false
                 startFg(buildIncomingNotification(), microphone = false)
                 startRingtone()
+                // Голосовий канал відкриваємо ще до відповіді: до початку розмови він уже готовий
+                if (myEmail.isNotEmpty()) VoiceChannel.open(myEmail)
             }
             ACTION_OUTGOING -> {
                 stopped = false
                 hadCall = true
                 startFg(buildOngoingNotification(outgoing = true), microphone = true)
+                if (myEmail.isNotEmpty()) VoiceChannel.open(myEmail)
                 // Довгі гудки, як у телефоні, поки співрозмовник не відповів
                 enableHighQualityAudio()
                 setMinimumCallVolume()
@@ -561,6 +564,14 @@ class CallService : Service() {
             audioRecord?.startRecording()
 
             if (myEmail.isNotEmpty()) {
+                // Голос приходить голосовим каналом; основний сокет теж слухаємо — звідти він приходить,
+                // якщо в співрозмовника голосовий канал ще не готовий (старий шлях лишено як запасний)
+                VoiceChannel.open(myEmail)
+                VoiceChannel.setListener { chunk ->
+                    if (isCallActive) {
+                        audioQueue.offer(chunk)
+                    }
+                }
                 manager.listenForVoiceChunks(myEmail) { chunk ->
                     if (isCallActive) {
                         audioQueue.offer(chunk)
@@ -646,7 +657,8 @@ class CallService : Service() {
 
                 val packet = VoiceCodec.encodePacket(rateCode, sequence and 0xFFFF, pcm, samplesPerFrame, encoderState)
                 sequence++
-                manager.sendVoiceChunk(targetEmail, packet)
+                // Голосовий канал; якщо він не готовий — основний сокет (звук не мовчить ні секунди)
+                if (!VoiceChannel.send(targetEmail, packet)) manager.sendVoiceChunk(targetEmail, packet)
             }
         }
     }
@@ -1028,6 +1040,7 @@ class CallService : Service() {
         useCamera = false
         useProjection = false
         stopAudioStreaming()
+        VoiceChannel.close()
         stopRingtone()
         if (hadCall) {
             hadCall = false
