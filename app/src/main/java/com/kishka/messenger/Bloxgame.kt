@@ -1,0 +1,657 @@
+package com.kishka.messenger
+
+import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
+import android.os.Handler
+import android.os.Looper
+import android.view.ViewGroup
+import android.view.WindowManager
+import android.webkit.JavascriptInterface
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import coil.compose.AsyncImage
+import io.socket.client.Ack
+import io.socket.emitter.Emitter
+import kotlinx.coroutines.delay
+import org.json.JSONArray
+import org.json.JSONObject
+
+data class BloxPlayerInfo(val id: Int, val nick: String)
+
+/**
+ * Стан гри, спільний для всього застосунку: коли active = true, замість вкладок на весь екран показується гра
+ * (MainActivity), а пристрій лежить в ігровому (горизонтальному) положенні.
+ */
+object BloxGame {
+    const val GAME_ID = "realistic_cars"
+    const val GAME_TITLE = "Realistic cars"
+
+    /** Гру відкрито на весь екран (екран завантаження або сам світ). */
+    var active by mutableStateOf(false)
+        private set
+
+    /** Відкрито сторінку гри (стрілка, аватарка, назва, синя кнопка). Лишається такою й після виходу з гри. */
+    var detailOpen by mutableStateOf(false)
+
+    var myId by mutableStateOf(-1)
+    var players by mutableStateOf<List<BloxPlayerInfo>>(emptyList())
+
+    fun enter() {
+        players = emptyList()
+        myId = -1
+        active = true
+    }
+
+    fun exit() {
+        active = false
+        players = emptyList()
+        myId = -1
+    }
+
+    /** Вихід з акаунта Kishka: гра закривається, стан скидається. */
+    fun reset() {
+        exit()
+        detailOpen = false
+    }
+}
+
+private val BloxBlue = Color(0xFF1A73E8)
+
+private fun Context.findActivity(): Activity? {
+    var c: Context? = this
+    while (c is ContextWrapper) {
+        if (c is Activity) return c
+        c = c.baseContext
+    }
+    return null
+}
+
+/** Квадрат із заокругленими кутами: зверху зображення, під ним (з маленькою відстанню) текст «Realistic cars». */
+@Composable
+fun BloxGameTile(onClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = Color.White,
+        shadowElevation = 2.dp,
+        modifier = Modifier.width(132.dp).clip(RoundedCornerShape(18.dp)).clickable { onClick() }
+    ) {
+        Column(modifier = Modifier.padding(8.dp)) {
+            AsyncImage(
+                model = bloxImageModel("realistic_cars.jpg", REALISTIC_CARS_URL),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp))
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                BloxGame.GAME_TITLE,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.Black,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp)
+            )
+        }
+    }
+}
+
+/**
+ * Сторінка гри: зверху зліва стрілочка «назад»; під нею квадратна аватарка (з маленьким заокругленням кутів),
+ * праворуч від неї назва «Realistic cars», а під початком назви — синя кнопка запуску.
+ */
+@Composable
+fun BloxGameDetail(onBack: () -> Unit, onPlay: () -> Unit) {
+    BackHandler(onBack = onBack)
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        Column(modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp)) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Default.ArrowBack, contentDescription = null, tint = Color.Black)
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                AsyncImage(
+                    model = bloxImageModel("realistic_cars.jpg", REALISTIC_CARS_URL),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(120.dp).clip(RoundedCornerShape(10.dp))
+                )
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        BloxGame.GAME_TITLE,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.Black,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Box(
+                        modifier = Modifier
+                            .width(132.dp)
+                            .height(46.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(BloxBlue)
+                            .clickable { onPlay() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(32.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Зв'язок між WebView (3D-світ) і сервером. Гра в WebView сама з мережею не працює: усе йде через сокет застосунку.
+ *  WebView -> застосунок: ready (сторінка готова), started (перший кадр), state (мій стан), fail (немає WebGL).
+ *  Сервер -> WebView: start / resync / roster / tick (див. blox_game/game.js).
+ */
+private class BloxGameController(private val appContext: Context, private val email: String, private val lang: String) {
+    private val main = Handler(Looper.getMainLooper())
+    private var webView: WebView? = null
+
+    /** Перший кадр світу намальовано. */
+    var worldStarted by mutableStateOf(false)
+
+    @Volatile private var disposed = false
+    @Volatile private var joinedOnce = false
+    @Volatile private var lx = 0.0
+    @Volatile private var ly = 4.0
+    @Volatile private var lz = 0.0
+    @Volatile private var lry = 0.0
+
+    private val tickListener = Emitter.Listener { args ->
+        val arr = args.firstOrNull() as? JSONArray
+        if (arr != null) js("KishkaGame.tick($arr)")
+    }
+    private val rosterListener = Emitter.Listener { args ->
+        val obj = args.firstOrNull() as? JSONObject
+        if (obj != null) {
+            main.post { updatePlayers(obj.optJSONArray("players")) }
+            js("KishkaGame.roster($obj)")
+        }
+    }
+    private val kickedListener = Emitter.Listener {
+        // Цей акаунт зайшов у гру з іншого пристрою
+        main.post { exitGame(false) }
+    }
+    private val connectListener = Emitter.Listener {
+        // Зв'язок із сервером відновився: сервер забув нас, коли той обірвався, — заходимо знову на тому ж місці
+        main.post { if (joinedOnce && !disposed) join(false) }
+    }
+
+    init {
+        try {
+            val s = KishkaManager.getSocket()
+            s.on("blox_game_tick", tickListener)
+            s.on("blox_game_roster", rosterListener)
+            s.on("blox_game_kicked", kickedListener)
+            s.on(io.socket.client.Socket.EVENT_CONNECT, connectListener)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    inner class Bridge {
+        @JavascriptInterface
+        fun ready() {
+            main.post { if (!disposed) join(true) }
+        }
+
+        @JavascriptInterface
+        fun started() {
+            main.post { if (!disposed) worldStarted = true }
+        }
+
+        @JavascriptInterface
+        fun fail() {
+            main.post { failGame() }
+        }
+
+        @JavascriptInterface
+        fun state(x: Double, y: Double, z: Double, ry: Double, a: Int) {
+            lx = x; ly = y; lz = z; lry = ry
+            if (!joinedOnce || disposed) return
+            try {
+                val s = KishkaManager.getSocket()
+                if (!s.connected()) return
+                s.emit("blox_game_state", JSONObject().put("x", x).put("y", y).put("z", z).put("ry", ry).put("a", a))
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    fun createWebView(ctx: Context): WebView {
+        val wv = WebView(ctx)
+        wv.setBackgroundColor(android.graphics.Color.BLACK)
+        wv.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            allowFileAccess = true
+            allowContentAccess = false
+            cacheMode = WebSettings.LOAD_NO_CACHE
+            mediaPlaybackRequiresUserGesture = false
+            setSupportZoom(false)
+            builtInZoomControls = false
+            displayZoomControls = false
+        }
+        wv.isVerticalScrollBarEnabled = false
+        wv.isHorizontalScrollBarEnabled = false
+        wv.overScrollMode = android.view.View.OVER_SCROLL_NEVER
+        wv.webViewClient = object : WebViewClient() {
+            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                if (request?.isForMainFrame == true) main.post { failGame() }
+            }
+        }
+        wv.addJavascriptInterface(Bridge(), "Android")
+        webView = wv
+        // Спершу тихо докачуємо оновлення гри (якщо є), потім вантажимо сторінку з установлених файлів
+        BloxInstall.syncLatest(appContext) { ok ->
+            if (disposed) return@syncLatest
+            if (!ok) {
+                failGame()
+            } else {
+                wv.loadUrl("file://" + BloxInstall.file(appContext, "game.html").absolutePath)
+            }
+        }
+        return wv
+    }
+
+    private fun join(first: Boolean) {
+        if (disposed) return
+        try {
+            val payload = JSONObject().put("email", email).put("game", BloxGame.GAME_ID)
+            if (!first) payload.put("x", lx).put("y", ly).put("z", lz).put("ry", lry)
+            KishkaManager.getSocket().emit("blox_game_join", payload, Ack { args ->
+                val res = args.firstOrNull() as? JSONObject
+                main.post { onJoinResult(res, first) }
+            })
+        } catch (e: Exception) {
+            e.printStackTrace()
+            failGame()
+        }
+    }
+
+    private fun onJoinResult(res: JSONObject?, first: Boolean) {
+        if (disposed) return
+        if (res == null || !res.optBoolean("success", false)) {
+            if (first) failGame()
+            return
+        }
+        joinedOnce = true
+        val myId = res.optInt("id", -1)
+        BloxGame.myId = myId
+        val list = ArrayList<BloxPlayerInfo>()
+        list.add(BloxPlayerInfo(myId, res.optString("nick", "")))
+        val others = res.optJSONArray("players")
+        if (others != null) {
+            for (i in 0 until others.length()) {
+                val o = others.optJSONObject(i) ?: continue
+                list.add(BloxPlayerInfo(o.optInt("id", -1), o.optString("nick", "")))
+            }
+        }
+        BloxGame.players = list
+        js(if (first) "KishkaGame.start($res)" else "KishkaGame.resync($res)")
+    }
+
+    private fun updatePlayers(arr: JSONArray?) {
+        if (arr == null || disposed) return
+        val list = ArrayList<BloxPlayerInfo>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            list.add(BloxPlayerInfo(o.optInt("id", -1), o.optString("nick", "")))
+        }
+        // Себе — першим у списку
+        val me = BloxGame.myId
+        BloxGame.players = list.sortedBy { if (it.id == me) 0 else 1 }
+    }
+
+    private fun js(code: String) {
+        main.post { if (!disposed) webView?.evaluateJavascript(code, null) }
+    }
+
+    fun pause() {
+        webView?.onPause()
+    }
+
+    fun resume() {
+        webView?.onResume()
+    }
+
+    private fun failGame() {
+        if (disposed) return
+        Notice.show(BloxStrings.get("err_error", lang))
+        exitGame(true)
+    }
+
+    /** Вихід з гри: сервер прибирає гравця зі списку, застосунок повертає вкладки й вертикальне положення. */
+    fun exitGame(tellServer: Boolean) {
+        if (disposed) return
+        if (tellServer) {
+            try {
+                KishkaManager.getSocket().emit("blox_game_leave", JSONObject())
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        BloxGame.exit()
+    }
+
+    fun dispose() {
+        if (disposed) return
+        disposed = true
+        try {
+            val s = KishkaManager.getSocket()
+            s.off("blox_game_tick", tickListener)
+            s.off("blox_game_roster", rosterListener)
+            s.off("blox_game_kicked", kickedListener)
+            s.off(io.socket.client.Socket.EVENT_CONNECT, connectListener)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        val wv = webView
+        webView = null
+        if (wv != null) {
+            try {
+                wv.stopLoading()
+                wv.removeJavascriptInterface("Android")
+                (wv.parent as? ViewGroup)?.removeView(wv)
+                wv.removeAllViews()
+                wv.destroy()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+}
+
+/**
+ * Гра на весь екран: сірий екран завантаження («Joining the game»), потім 3D-світ. Зверху зліва — кругла кнопка
+ * з аватаркою KishkaBlox, яка відкриває напівпрозоре меню зі списком гравців і кнопкою Leave.
+ */
+@Composable
+fun BloxGameScreen(lang: String, email: String) {
+    val context = LocalContext.current
+    val b: (String) -> String = { key -> BloxStrings.get(key, lang) }
+    val configuration = LocalConfiguration.current
+
+    var menuOpen by remember { mutableStateOf(false) }
+    var confirmLeave by remember { mutableStateOf(false) }
+    var minTimePassed by remember { mutableStateOf(false) }
+    val controller = remember { BloxGameController(context.applicationContext, email, lang) }
+
+    // Ігрове положення пристрою (горизонтальне, як у Brawl Stars і Roblox), системні панелі сховано
+    DisposableEffect(Unit) {
+        val activity = context.findActivity()
+        val window = activity?.window
+        var insets: WindowInsetsControllerCompat? = null
+        if (activity != null && window != null) {
+            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            val ctrl = WindowCompat.getInsetsController(window, window.decorView)
+            ctrl.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            ctrl.hide(WindowInsetsCompat.Type.systemBars())
+            insets = ctrl
+        }
+        onDispose {
+            insets?.show(WindowInsetsCompat.Type.systemBars())
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    // Згорнули застосунок — світ не малюється (економимо батарею); гравець лишається в грі
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> controller.pause()
+                Lifecycle.Event.ON_RESUME -> controller.resume()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    DisposableEffect(Unit) { onDispose { controller.dispose() } }
+
+    // Екран завантаження показується щонайменше 1 секунду; далі — скільки потрібно інтернету
+    LaunchedEffect(Unit) {
+        delay(1000)
+        minTimePassed = true
+    }
+    // Гра не завантажилась за 45 секунд — виходимо з повідомленням
+    LaunchedEffect(Unit) {
+        delay(45_000)
+        if (!controller.worldStarted) {
+            Notice.show(b("err_error"))
+            controller.exitGame(true)
+        }
+    }
+
+    val showLoading = !(controller.worldStarted && minTimePassed)
+
+    BackHandler {
+        when {
+            confirmLeave -> confirmLeave = false
+            showLoading -> controller.exitGame(true)
+            menuOpen -> menuOpen = false
+            else -> menuOpen = true
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { ctx -> controller.createWebView(ctx) }
+        )
+
+        if (!showLoading) {
+            // Кругла кнопка з аватаркою KishkaBlox
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = 12.dp, top = 10.dp)
+                    .size(46.dp)
+                    .clip(CircleShape)
+                    .background(Color(0x66000000))
+                    .clickable { menuOpen = !menuOpen }
+            ) {
+                AsyncImage(
+                    model = bloxImageModel("kishkablox.png", KISHKABLOX_LOGO_URL),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().padding(3.dp).clip(CircleShape)
+                )
+            }
+
+            if (menuOpen) {
+                // Тап поза меню закриває його
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { menuOpen = false }
+                )
+                val maxHeight = (configuration.screenHeightDp - 84).coerceAtLeast(160).dp
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = Color(0xB3101012),
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(start = 12.dp, top = 64.dp)
+                        .width(300.dp)
+                        .heightIn(max = maxHeight)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
+                            items(BloxGame.players, key = { it.id }) { player ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(modifier = Modifier.size(32.dp).clip(CircleShape).background(Color(0xFFBDBDC7)))
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        player.nick,
+                                        color = Color.White,
+                                        fontSize = 15.sp,
+                                        fontWeight = if (player.id == BloxGame.myId) FontWeight.Bold else FontWeight.Normal,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = { confirmLeave = true },
+                            modifier = Modifier.fillMaxWidth().height(44.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD93025))
+                        ) {
+                            Text(b("leave"), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Сірий екран завантаження: аватарка зверху, назва посередині, знизу посередині «Joining the game»
+        if (showLoading) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFF3A3B3E))
+                    .pointerInput(Unit) { detectTapGestures { } }
+            ) {
+                Column(modifier = Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                    AsyncImage(
+                        model = bloxImageModel("realistic_cars.jpg", REALISTIC_CARS_URL),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(104.dp).clip(RoundedCornerShape(12.dp))
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(BloxGame.GAME_TITLE, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                }
+                Text(
+                    b("joining"),
+                    color = Color(0xFFD2D2D8),
+                    fontSize = 16.sp,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp)
+                )
+            }
+        }
+    }
+
+    if (confirmLeave) {
+        Dialog(onDismissRequest = { confirmLeave = false }) {
+            Surface(shape = RoundedCornerShape(24.dp), color = Color.White, shadowElevation = 8.dp) {
+                Column(
+                    modifier = Modifier.padding(24.dp).widthIn(min = 260.dp, max = 400.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(b("leave_text"), fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = Color.Black, textAlign = TextAlign.Center)
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedButton(
+                            onClick = { confirmLeave = false },
+                            modifier = Modifier.weight(1f).height(46.dp),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Text(b("no"), fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        }
+                        Button(
+                            onClick = {
+                                confirmLeave = false
+                                menuOpen = false
+                                controller.exitGame(true)
+                            },
+                            modifier = Modifier.weight(1f).height(46.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD93025))
+                        ) {
+                            Text(b("yes"), fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
