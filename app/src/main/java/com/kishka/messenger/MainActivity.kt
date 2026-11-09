@@ -510,6 +510,7 @@ fun KishkaApp() {
     }
 
     val doLogout: () -> Unit = {
+        BloxGame.reset()
         Presence.stop()
         Access.reset()
         CallCoordinator.reset()
@@ -545,16 +546,17 @@ fun KishkaApp() {
     val signedIn = currentUserEmail.isNotEmpty()
 
     Column(modifier = Modifier.fillMaxSize().background(ViberBg)) {
-        if (!isConnected) {
+        // У грі (KishkaBlox) — лише гра на весь екран, без смужок зверху
+        if (!isConnected && !BloxGame.active) {
             OfflineBanner(lang = currentLanguage)
         }
 
         // Дзвінок згорнуто: смужка зверху, дзвінок триває
-        if (signedIn && callPhase != CallPhase.IDLE && CallSession.minimized) {
+        if (signedIn && callPhase != CallPhase.IDLE && CallSession.minimized && !BloxGame.active) {
             CallBanner(lang = currentLanguage)
         }
 
-        if (signedIn && callPhase != CallPhase.IDLE && !CallSession.minimized) {
+        if (signedIn && callPhase != CallPhase.IDLE && !CallSession.minimized && !BloxGame.active) {
             CallScreen(lang = currentLanguage)
         } else if (!permissionsGranted && signedIn) {
             PermissionsScreen(
@@ -572,6 +574,14 @@ fun KishkaApp() {
                     currentUserEmail = email.lowercase()
                 }
             )
+        } else if (BloxGame.active) {
+            // KishkaBlox: гра на весь екран, вкладки зникають. Якщо подзвонили — дзвінок показується поверх гри.
+            Box(modifier = Modifier.fillMaxSize()) {
+                BloxGameScreen(lang = currentLanguage, email = currentUserEmail)
+                if (callPhase != CallPhase.IDLE && !CallSession.minimized) {
+                    CallScreen(lang = currentLanguage)
+                }
+            }
         } else {
             val tabContent: @Composable () -> Unit = {
                 MainTabContent(
