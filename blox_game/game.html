@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Realistic cars</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #8fc2f5;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+    overscroll-behavior: none;
+  }
+  canvas {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none;
+  }
+  #tags { pointer-events: none; }
+
+  /* Джойстик (як у Roblox): зліва знизу */
+  #stick {
+    position: fixed;
+    left: calc(env(safe-area-inset-left, 0px) + 36px);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 36px);
+    width: 132px;
+    height: 132px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.16);
+    border: 2px solid rgba(255, 255, 255, 0.38);
+    touch-action: none;
+  }
+  #knob {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 60px;
+    height: 60px;
+    margin: -30px 0 0 -30px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.52);
+    border: 2px solid rgba(255, 255, 255, 0.7);
+    will-change: transform;
+  }
+
+  /* Кнопка стрибка (як у Roblox): справа знизу */
+  #jump {
+    position: fixed;
+    right: calc(env(safe-area-inset-right, 0px) + 44px);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 44px);
+    width: 88px;
+    height: 88px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.2);
+    border: 2px solid rgba(255, 255, 255, 0.45);
+    touch-action: none;
+  }
+  #jump.down { background: rgba(255, 255, 255, 0.42); }
+  #jump svg {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 40px;
+    height: 40px;
+    margin: -20px 0 0 -20px;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<canvas id="tags"></canvas>
+<div id="stick"><div id="knob"></div></div>
+<div id="jump">
+  <svg viewBox="0 0 24 24"><path d="M12 4 L4.5 13 H9.5 V20 H14.5 V13 H19.5 Z" fill="rgba(255,255,255,0.92)"/></svg>
+</div>
+<script src="game.js"></script>
+</body>
+</html>
