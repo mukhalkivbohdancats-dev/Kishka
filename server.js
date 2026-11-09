@@ -14,8 +14,10 @@ const io = new Server(server, {
         methods: ["GET", "POST"]
     },
     maxHttpBufferSize: 1e7,
-    pingInterval: 10000,
-    pingTimeout: 20000
+    // Під час дзвінка канал заповнений голосом і відео: «пінг» може запізнитись. Раніше 20 с без відповіді рвали звʼязок,
+    // а разом із ним і дзвінок. Тепер запас більший (звʼязок, що справді пропав, усе одно виявляється за ~40 с).
+    pingInterval: 12000,
+    pingTimeout: 30000
 });
 
 // Додано кореневий маршрут для підтримання активності (keep-alive) на Render
@@ -536,7 +538,7 @@ function mediaPreviewText(text, fileType) {
 // Стан активних дзвінків (для відновлення після короткого розриву мережі)
 const activeCalls = new Map();   // email -> email співрозмовника
 const callGrace = new Map();     // email -> timer
-const CALL_GRACE_MS = 20000;
+const CALL_GRACE_MS = 45000; // скільки чекаємо на відновлення звʼязку, перш ніж завершити розмову
 const ringTimers = new Map();    // "caller|receiver" -> timer (дзвінок без відповіді завершується сам)
 const RING_TIMEOUT_MS = 60000;
 
@@ -1141,13 +1143,52 @@ io.on('connection', (socket) => {
         }
     });
 
+    // ---------- Голос ----------
+    // Окремий голосовий канал: другий сокет застосунку (voice_join), яким іде ЛИШЕ голос. Відео, чати, Gemini тощо йдуть
+    // основним сокетом і більше не стоять у черзі перед голосовими пакетами (саме це «рвало» розмову, коли ввімкнено відео).
+    // Якщо в отримувача голосового каналу немає (або це старий застосунок) — голос іде основним сокетом, як і раніше.
+    function relayVoice(target, chunk) {
+        const vRoom = io.sockets.adapter.rooms.get('voice:' + target);
+        if (vRoom && vRoom.size > 0) {
+            const r = io.to('voice:' + target);
+            (r.volatile || r).emit('voice_rx', chunk);
+        } else {
+            // volatile: якщо мережа клієнта «забита», застарілі пакети голосу відкидаються, а не накопичуються
+            const r = io.to(target);
+            (r.volatile || r).emit(`voice_chunk_${target}`, chunk);
+        }
+    }
+
+    socket.on('voice_join', (data, ack) => {
+        const email = String((data && data.email) || '').trim().toLowerCase();
+        if (!email) { if (typeof ack === 'function') { try { ack({ ok: false }); } catch (e) {} } return; }
+        if (socket.voiceEmail && socket.voiceEmail !== email) socket.leave('voice:' + socket.voiceEmail);
+        socket.voiceEmail = email;
+        socket.join('voice:' + email);
+        if (typeof ack === 'function') { try { ack({ ok: true }); } catch (e) {} }
+    });
+
+    // Перевірка зв'язку голосового каналу (застосунок питає раз на 2 с; немає відповіді — перепідключає канал)
+    socket.on('voice_ping', (data, ack) => {
+        if (typeof ack === 'function') {
+            try { ack({ ok: true, inRoom: !!socket.voiceEmail && socket.rooms.has('voice:' + socket.voiceEmail) }); } catch (e) {}
+        }
+    });
+
+    socket.on('voice_tx', (data) => {
+        const from = socket.voiceEmail;
+        const target = String((data && data.targetEmail) || '').trim().toLowerCase();
+        const chunk = data && data.chunk;
+        if (!from || !target || !chunk || chunk.length > 4096) return;
+        // Голос іде лише тому, з ким зараз розмова
+        if (activeCalls.get(from) !== target) return;
+        relayVoice(target, chunk);
+    });
+
     socket.on('voice_chunk', (data) => {
         const { targetEmail, chunk } = data || {};
         if (!targetEmail || !chunk) return;
-        const cleanTarget = targetEmail.trim().toLowerCase();
-        // volatile: якщо мережа клієнта «забита», застарілі пакети голосу відкидаються, а не накопичуються (інакше за 10+ хв звук «ламається»)
-        const voiceRoom = io.to(cleanTarget);
-        (voiceRoom.volatile || voiceRoom).emit(`voice_chunk_${cleanTarget}`, chunk);
+        relayVoice(String(targetEmail).trim().toLowerCase(), chunk);
     });
 
     // ---------- Відео в дзвінку (камера / екран телефона): H.264 кадри бінарно, без перекодування на сервері ----------
@@ -3273,7 +3314,7 @@ io.on('connection', (socket) => {
 // =====================================================================
 try {
     const initKishkaBlox = loadSiblingModule('kishkablox.js');
-    if (initKishkaBlox) initKishkaBlox({ io, db, dbRun: geminiDbRun, dbAll: geminiDbAll });
+    if (initKishkaBlox) initKishkaBlox({ io, app, db, dbRun: geminiDbRun, dbAll: geminiDbAll });
 } catch (e) {
     console.error('KishkaBlox не запустився (решта сервера працює):', e && e.message);
 }
