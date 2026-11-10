@@ -65,7 +65,12 @@ object BloxInstall {
     var percent by mutableStateOf(0)
         private set
 
+    /** Справжня причина останньої невдачі установки (код відповіді сервера, файл тощо). Порожньо — помилки немає. */
+    var errorDetail by mutableStateOf("")
+        private set
+
     @Volatile private var running = false
+    @Volatile private var errorNote = ""
 
     private class Manifest(val version: String, val names: List<String>, val sizes: List<Long>)
 
@@ -110,6 +115,8 @@ object BloxInstall {
         if (running) return
         running = true
         percent = 0
+        errorNote = ""
+        errorDetail = ""
         phase = Phase.DOWNLOADING
         val app = context.applicationContext
         Thread({
@@ -122,13 +129,16 @@ object BloxInstall {
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
+                errorNote = (e.message ?: e.javaClass.simpleName)
             }
+            val note = errorNote
             main.post {
                 running = false
                 if (ok) {
                     percent = 100
                     phase = Phase.INSTALLED
                 } else {
+                    errorDetail = note
                     phase = Phase.ERROR
                 }
             }
@@ -177,7 +187,17 @@ object BloxInstall {
                 conn.connectTimeout = timeoutMs
                 conn.readTimeout = timeoutMs
                 try {
-                    if (conn.responseCode == 200) {
+                    val code = conn.responseCode
+                    if (code != 200) {
+                        // Сервер відповів помилкою (404 — на Render старий код без /blox, 503 — немає файлів гри): показуємо справжню причину
+                        val msg = try {
+                            conn.errorStream?.bufferedReader()?.use { it.readText() }?.let { JSONObject(it).optString("error", "") } ?: ""
+                        } catch (e: Exception) {
+                            ""
+                        }
+                        errorNote = "manifest.json: HTTP " + code + (if (msg.isNotEmpty()) " ($msg)" else "")
+                    }
+                    if (code == 200) {
                         val body = conn.inputStream.bufferedReader().use { it.readText() }
                         val json = JSONObject(body)
                         val arr = json.getJSONArray("files")
@@ -189,12 +209,14 @@ object BloxInstall {
                             sizes.add(o.getLong("size"))
                         }
                         if (names.isNotEmpty()) return Manifest(json.optString("version", ""), names, sizes)
+                        errorNote = "manifest.json: порожній список файлів"
                     }
                 } finally {
                     conn.disconnect()
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
+                errorNote = "manifest.json: " + (e.message ?: e.javaClass.simpleName)
             }
             if (attempt < attempts) {
                 try { Thread.sleep(2000) } catch (e: InterruptedException) { return null }
@@ -253,7 +275,7 @@ object BloxInstall {
                     }
                 }
             }
-            if (!ok) throw lastError ?: java.io.IOException("download")
+            if (!ok) throw java.io.IOException(name + ": " + (lastError?.message ?: "download"))
             done += size
             onProgress(((done * 100L) / total).toInt())
         }
@@ -314,6 +336,10 @@ fun BloxInstallScreen(lang: String) {
             if (phase == BloxInstall.Phase.ERROR) {
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(b("install_error"), fontSize = 14.sp, color = Color(0xFFD93025), textAlign = TextAlign.Center)
+                if (BloxInstall.errorDetail.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(BloxInstall.errorDetail, fontSize = 12.sp, color = Color.Gray, textAlign = TextAlign.Center)
+                }
             }
         }
 
