@@ -1,264 +1,425 @@
-// Перевірки установки KishkaBlox: node --test   (або npm test)
-// Не потребують ні бази, ні інтернету. Express потрібен лише для одного додаткового тесту (пропускається, якщо його немає).
+// Перевірки ігрової кімнати KishkaBlox (blox_game_server.js): node --test   (або npm test)
+// Не потребують ні бази, ні інтернету, ні справжнього Socket.IO: використовується проста імітація io/сокета,
+// яка поводиться так само, як Socket.IO для методів, що викликає сервер (on, join, leave, to(room).emit, id).
+// Справжній транспорт (WebSocket/polling) цими тестами НЕ перевіряється.
 const test = require('node:test');
 const assert = require('node:assert');
-const http = require('http');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const { createBloxFiles, isSafeBloxName } = require('../kishkablox.js');
+const { createBloxGame, sanitizeState, RATE_BURST } = require('../blox_game_server.js');
 
 const quiet = { log() {}, warn() {}, error() {} };
-const ROOT = path.join(__dirname, '..');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Піднімає тимчасовий HTTP-сервер, що працює так само, як app.use('/blox', handle): відрізає '/blox' від req.url
-function startServer(blox) {
-    const server = http.createServer((req, res) => {
-        if (req.url === '/blox' || req.url.startsWith('/blox/') || req.url.startsWith('/blox?')) {
-            req.url = req.url.slice('/blox'.length) || '/';
-            return blox.handle(req, res);
-        }
-        res.statusCode = 404;
-        res.end('other');
-    });
-    return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+class FakeSocket {
+    constructor(io, id, email) {
+        this.io = io;
+        this.id = id;
+        this.userEmail = email || null;
+        this.handlers = {};
+        this.rooms = new Set([id]);
+        this.received = [];
+        this.disconnected = false;
+    }
+    on(ev, fn) { this.handlers[ev] = fn; }
+    join(room) { this.rooms.add(room); }
+    leave(room) { this.rooms.delete(room); }
+    // Клієнт надсилає подію серверу
+    send(ev, data, ack) {
+        const h = this.handlers[ev];
+        if (h) h(data, ack);
+    }
+    call(ev, data) {
+        return new Promise((resolve) => this.send(ev, data, resolve));
+    }
+    disconnect(reason) {
+        this.disconnected = true;
+        this.io.sockets.sockets.delete(this.id);
+        const h = this.handlers.disconnect;
+        if (h) h(reason || 'transport close');
+    }
+    events(name) { return this.received.filter((e) => e.ev === name).map((e) => e.payload); }
+    last(name) { const a = this.events(name); return a[a.length - 1]; }
 }
 
-// Сирий запит без нормалізації шляху (щоб '../' дійшло до сервера як є)
-function rawGet(server, rawPath, method) {
-    return new Promise((resolve, reject) => {
-        const req = http.request({ host: '127.0.0.1', port: server.address().port, path: rawPath, method: method || 'GET' }, (res) => {
-            const chunks = [];
-            res.on('data', (c) => chunks.push(c));
-            res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
-        });
-        req.on('error', reject);
-        req.end();
-    });
+class FakeIO {
+    constructor() {
+        this.sockets = { sockets: new Map() };
+        this.connectionHandlers = [];
+        this.seq = 0;
+    }
+    on(ev, fn) { if (ev === 'connection') this.connectionHandlers.push(fn); }
+    to(room) {
+        const self = this;
+        return {
+            emit(ev, payload) {
+                for (const s of self.sockets.sockets.values()) {
+                    if (s.rooms.has(room)) s.received.push({ ev, payload: JSON.parse(JSON.stringify(payload)) });
+                }
+            }
+        };
+    }
+    connect(email, noIdentify) {
+        const s = new FakeSocket(this, 'sock' + (++this.seq), noIdentify ? null : email);
+        this.sockets.sockets.set(s.id, s);
+        this.connectionHandlers.forEach((h) => h(s));
+        return s;
+    }
 }
 
-function tmpGame(files) {
-    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'blox-'));
-    const game = path.join(base, 'blox_game');
-    fs.mkdirSync(game);
-    for (const [name, data] of Object.entries(files)) fs.writeFileSync(path.join(game, name), data);
-    return { base, game };
+// Усі акаунти, яких немає в списку відмов, вважаються «увійшли в KishkaBlox» і мають нік з пошти до '@'
+function setup(extra) {
+    const io = new FakeIO();
+    const clock = { t: 1000000 };
+    const logged = (extra && extra.logged) || null;
+    const game = createBloxGame(Object.assign({
+        io,
+        logger: quiet,
+        now: () => clock.t,
+        tickMs: 10,
+        graceMs: 200,
+        getNick: async (email) => {
+            if (logged && !logged.has(email)) return null;
+            return email.split('@')[0];
+        }
+    }, (extra && extra.opts) || {}));
+    // Підключення: кожен новий сокет отримує обробники гри
+    io.on('connection', (s) => game.attach(s));
+    return { io, game, clock };
 }
 
-// ---------- Справжні файли репозиторію ----------
-test('/blox/manifest.json: 200 і формат, який очікує Android (fetchManifest)', async () => {
-    const blox = createBloxFiles({ logger: quiet });
-    const server = await startServer(blox);
-    try {
-        const r = await rawGet(server, '/blox/manifest.json');
-        assert.strictEqual(r.status, 200);
-        assert.match(r.headers['content-type'], /application\/json/);
-        const json = JSON.parse(r.body.toString('utf8'));
-        assert.strictEqual(typeof json.version, 'string');
-        assert.ok(json.version.length > 0);
-        assert.ok(Array.isArray(json.files) && json.files.length > 0);
-        for (const f of json.files) {
-            assert.strictEqual(typeof f.name, 'string');
-            assert.ok(Number.isInteger(f.size) && f.size > 0, 'size має бути цілим додатним: ' + f.name);
-        }
-        const names = json.files.map((f) => f.name);
-        for (const need of ['game.html', 'game.js', 'kishkablox.png', 'realistic_cars.jpg']) {
-            assert.ok(names.includes(need), 'у маніфесті немає ' + need);
-        }
-    } finally { server.close(); }
+const GAME = 'realistic_cars';
+const join = (client, email, extra) => client.call('blox_game_join', Object.assign({ email, game: GAME }, extra || {}));
+
+test('два гравці: id, нік із сервера, повний список і кількість', async () => {
+    const { io, game } = setup();
+    const a = io.connect('anna@x.com');
+    const b = io.connect('bob@x.com');
+    const ra = await join(a, 'anna@x.com');
+    assert.strictEqual(ra.success, true);
+    assert.strictEqual(ra.nick, 'anna');
+    assert.strictEqual(ra.count, 1);
+    assert.deepStrictEqual(ra.players, []);
+    const rb = await join(b, 'bob@x.com');
+    assert.strictEqual(rb.success, true);
+    assert.notStrictEqual(rb.id, ra.id);
+    assert.strictEqual(rb.count, 2);
+    assert.strictEqual(rb.players.length, 1);
+    assert.strictEqual(rb.players[0].id, ra.id);
+    assert.strictEqual(rb.players[0].nick, 'anna');
+    for (const c of [a, b]) {
+        const roster = c.last('blox_game_roster');
+        assert.strictEqual(roster.count, 2);
+        assert.strictEqual(roster.players.length, roster.count);
+        assert.deepStrictEqual(roster.players.map((p) => p.nick).sort(), ['anna', 'bob']);
+    }
+    game.shutdown();
 });
 
-test('кожен файл із маніфесту віддається, size і sha256 збігаються з відданими байтами та з файлом на диску', async () => {
-    const blox = createBloxFiles({ logger: quiet });
-    const server = await startServer(blox);
-    try {
-        const m = JSON.parse((await rawGet(server, '/blox/manifest.json')).body.toString('utf8'));
-        for (const f of m.files) {
-            const r = await rawGet(server, '/blox/files/' + encodeURIComponent(f.name));
-            assert.strictEqual(r.status, 200, f.name);
-            assert.strictEqual(r.body.length, f.size, 'розмір відданого файла ' + f.name);
-            assert.strictEqual(Number(r.headers['content-length']), f.size, 'Content-Length ' + f.name);
-            assert.strictEqual(require('crypto').createHash('sha256').update(r.body).digest('hex'), f.sha256, f.name);
-            const entry = blox.scan().entries.get(f.name);
-            assert.strictEqual(fs.statSync(entry.abs).size, f.size, 'розмір на диску ' + f.name);
-            assert.ok(!/text\/html/.test(String(r.headers['content-type'])) || f.name.endsWith('.html'), 'не HTML-сторінка помилки замість ' + f.name);
-        }
-    } finally { server.close(); }
+test('нік не береться з пакета клієнта', async () => {
+    const { io, game } = setup();
+    const a = io.connect('anna@x.com');
+    const r = await join(a, 'anna@x.com', { nick: 'Hacker', name: 'Hacker' });
+    assert.strictEqual(r.nick, 'anna');
+    game.shutdown();
 });
 
-test('усі файли, на які посилається game.html, є в маніфесті', async () => {
-    const blox = createBloxFiles({ logger: quiet });
-    const names = blox.buildManifest().manifest.files.map((f) => f.name);
-    const html = fs.readFileSync(path.join(ROOT, 'blox_game', 'game.html'), 'utf8');
-    const refs = [...html.matchAll(/(?:src|href)\s*=\s*["']([^"']+)["']/g)].map((m) => m[1]).filter((u) => !/^(https?:|data:|#)/.test(u));
-    assert.ok(refs.length > 0);
-    for (const ref of refs) assert.ok(names.includes(ref), 'game.html посилається на ' + ref + ', якого немає в маніфесті');
+test('синхронізація позиції, повороту й пози: інший клієнт отримує tick', async () => {
+    const { io, game } = setup();
+    const a = io.connect('anna@x.com');
+    const b = io.connect('bob@x.com');
+    const ra = await join(a, 'anna@x.com');
+    await join(b, 'bob@x.com');
+    a.send('blox_game_state', { x: 10.123, y: 4, z: -20.5, ry: 1.5, a: 1 });
+    await sleep(50);
+    const ticks = b.events('blox_game_tick').flat();
+    const mine = ticks.filter((t) => t[0] === ra.id);
+    const last = mine[mine.length - 1];
+    assert.deepStrictEqual(last, [ra.id, 10.12, 4, -20.5, 1.5, 1]);
+    // Поза «у повітрі» теж передається
+    a.send('blox_game_state', { x: 10.123, y: 9, z: -20.5, ry: 1.5, a: 2 });
+    await sleep(50);
+    const t2 = b.events('blox_game_tick').flat().filter((t) => t[0] === ra.id);
+    assert.strictEqual(t2[t2.length - 1][5], 2);
+    assert.strictEqual(t2[t2.length - 1][2], 9);
+    game.shutdown();
 });
 
-test('HEAD віддає ті самі заголовки без тіла', async () => {
-    const server = await startServer(createBloxFiles({ logger: quiet }));
-    try {
-        const g = await rawGet(server, '/blox/files/game.js');
-        const h = await rawGet(server, '/blox/files/game.js', 'HEAD');
-        assert.strictEqual(h.status, 200);
-        assert.strictEqual(h.body.length, 0);
-        assert.strictEqual(Number(h.headers['content-length']), g.body.length);
-    } finally { server.close(); }
+test('стан, що не змінився, не розсилається повторно', async () => {
+    const { io, game } = setup();
+    const a = io.connect('anna@x.com');
+    const b = io.connect('bob@x.com');
+    const ra = await join(a, 'anna@x.com');
+    await join(b, 'bob@x.com');
+    a.send('blox_game_state', { x: 1, y: 4, z: 1, ry: 0, a: 0 });
+    await sleep(40);
+    const before = b.events('blox_game_tick').flat().filter((t) => t[0] === ra.id).length;
+    a.send('blox_game_state', { x: 1, y: 4, z: 1, ry: 0, a: 0 });
+    await sleep(40);
+    const after = b.events('blox_game_tick').flat().filter((t) => t[0] === ra.id).length;
+    assert.strictEqual(after, before);
+    game.shutdown();
 });
 
-// ---------- Захист від виходу за межі папки ----------
-test('небезпечні імена не читають файли поза папкою гри', async () => {
-    const secret = 'TOP-SECRET-' + Date.now();
-    const { base, game } = tmpGame({ 'game.html': '<html></html>', 'game.js': 'x=1' });
-    fs.writeFileSync(path.join(base, 'secret.txt'), secret);
-    fs.writeFileSync(path.join(base, 'server.js'), secret);
-    const blox = createBloxFiles({ gameDir: game, assetsDir: path.join(base, 'none'), logger: quiet });
-    const server = await startServer(blox);
-    const attacks = [
-        '/blox/files/../secret.txt',
-        '/blox/files/../server.js',
-        '/blox/files/..%2fsecret.txt',
-        '/blox/files/..%2Fsecret.txt',
-        '/blox/files/%2e%2e%2fsecret.txt',
-        '/blox/files/%2e%2e/secret.txt',
-        '/blox/files/..%5csecret.txt',
-        '/blox/files/..\\secret.txt',
-        '/blox/files/....//secret.txt',
-        '/blox/files/%2Fetc%2Fpasswd',
-        '/blox/files//etc/passwd',
-        '/blox/files/' + encodeURIComponent(path.join(base, 'secret.txt')),
-        '/blox/files/game.html%00.png',
-        '/blox/files/game.html%00',
-        '/blox/files/%00',
-        '/blox/files/%',
-        '/blox/files/%E0%A4%A',
-        '/blox/files/..',
-        '/blox/files/.',
-        '/blox/files/',
-        '/blox/files',
-        '/blox/files/__proto__',
-        '/blox/files/constructor',
-        '/blox/files/toString',
-        '/blox/files/GAME.HTML',
-        '/blox/files/secret.txt',
-        '/blox/files/.env',
-        '/blox/../secret.txt',
-        '/blox/manifest.json/../../secret.txt'
+test('кімнати різних ігор не змішуються', async () => {
+    const { io, game } = setup({ opts: { games: new Set(['g1', 'g2']) } });
+    const a = io.connect('anna@x.com');
+    const b = io.connect('bob@x.com');
+    const c = io.connect('carl@x.com');
+    const ra = await a.call('blox_game_join', { email: 'anna@x.com', game: 'g1' });
+    const rb = await b.call('blox_game_join', { email: 'bob@x.com', game: 'g2' });
+    await c.call('blox_game_join', { email: 'carl@x.com', game: 'g1' });
+    assert.strictEqual(rb.count, 1);
+    assert.deepStrictEqual(rb.players, []);
+    a.send('blox_game_state', { x: 5, y: 4, z: 5, ry: 0, a: 1 });
+    await sleep(50);
+    assert.strictEqual(b.events('blox_game_tick').flat().filter((t) => t[1] === 5).length, 0, 'гравець іншої гри не отримує чужих станів');
+    assert.ok(c.events('blox_game_tick').flat().some((t) => t[0] === ra.id));
+    assert.strictEqual(b.last('blox_game_roster').count, 1);
+    assert.strictEqual(c.last('blox_game_roster').count, 2);
+    game.shutdown();
+});
+
+test('вихід: гравець зникає зі списку, іншим приходить новий список', async () => {
+    const { io, game } = setup();
+    const a = io.connect('anna@x.com');
+    const b = io.connect('bob@x.com');
+    await join(a, 'anna@x.com');
+    await join(b, 'bob@x.com');
+    const res = await b.call('blox_game_leave', {});
+    assert.strictEqual(res.success, true);
+    assert.strictEqual(a.last('blox_game_roster').count, 1);
+    assert.deepStrictEqual(a.last('blox_game_roster').players.map((p) => p.nick), ['anna']);
+    assert.strictEqual(game.stats(GAME).count, 1);
+    // Клієнт з Bloxgame.kt надсилає leave без ack і без даних
+    b.send('blox_game_leave', undefined, undefined);
+    game.shutdown();
+});
+
+test('відключення прибирає гравця й повідомляє інших', async () => {
+    const { io, game } = setup();
+    const a = io.connect('anna@x.com');
+    const b = io.connect('bob@x.com');
+    await join(a, 'anna@x.com');
+    await join(b, 'bob@x.com');
+    b.disconnect();
+    assert.strictEqual(a.last('blox_game_roster').count, 1);
+    assert.strictEqual(game.stats(GAME).count, 1);
+    game.shutdown();
+});
+
+test('повторне підключення: той самий id і остання позиція, якщо не минув час очікування', async () => {
+    const { io, game, clock } = setup();
+    const a = io.connect('anna@x.com');
+    const ra = await join(a, 'anna@x.com');
+    a.send('blox_game_state', { x: 40, y: 4, z: 50, ry: 2, a: 0 });
+    a.disconnect();
+    clock.t += 100; // менше за graceMs (200)
+    const a2 = io.connect('anna@x.com');
+    const r2 = await join(a2, 'anna@x.com');
+    assert.strictEqual(r2.success, true);
+    assert.strictEqual(r2.id, ra.id);
+    assert.strictEqual(r2.x, 40);
+    assert.strictEqual(r2.z, 50);
+    assert.strictEqual(r2.count, 1);
+    game.shutdown();
+});
+
+test('повторне підключення після закінчення часу очікування дає нового гравця; клієнтська позиція приймається', async () => {
+    const { io, game, clock } = setup();
+    const a = io.connect('anna@x.com');
+    const ra = await join(a, 'anna@x.com');
+    a.disconnect();
+    clock.t += 5000;
+    const a2 = io.connect('anna@x.com');
+    const r2 = await join(a2, 'anna@x.com', { x: 12, y: 4, z: -8, ry: 0.5 });
+    assert.notStrictEqual(r2.id, ra.id);
+    assert.strictEqual(r2.x, 12);
+    assert.strictEqual(r2.z, -8);
+    game.shutdown();
+});
+
+test('дубльований вхід: старий пристрій відключається, дубліката немає', async () => {
+    const { io, game } = setup();
+    const phone = io.connect('anna@x.com');
+    const tablet = io.connect('anna@x.com');
+    const r1 = await join(phone, 'anna@x.com');
+    const r2 = await join(tablet, 'anna@x.com');
+    assert.strictEqual(r2.success, true);
+    assert.strictEqual(r2.count, 1);
+    assert.strictEqual(r2.id, r1.id);
+    assert.deepStrictEqual(r2.players, []);
+    assert.deepStrictEqual(phone.last('blox_game_kicked'), { reason: 'other_device' });
+    assert.strictEqual(tablet.events('blox_game_kicked').length, 0);
+    assert.strictEqual(game.stats(GAME).count, 1);
+    // Закриття старого сокета не видаляє нового гравця
+    phone.disconnect();
+    assert.strictEqual(game.stats(GAME).count, 1);
+    // Старий пристрій більше не впливає на гру
+    phone.send('blox_game_state', { x: 99, y: 4, z: 99, ry: 0, a: 1 });
+    await sleep(30);
+    assert.strictEqual(tablet.events('blox_game_tick').flat().filter((t) => t[1] === 99).length, 0);
+    game.shutdown();
+});
+
+test('некоректні координати й пози відкидаються', async () => {
+    const { io, game } = setup();
+    const a = io.connect('anna@x.com');
+    const b = io.connect('bob@x.com');
+    const ra = await join(a, 'anna@x.com');
+    await join(b, 'bob@x.com');
+    await sleep(30);
+    const base = b.events('blox_game_tick').flat().filter((t) => t[0] === ra.id).length;
+    const bad = [
+        { x: NaN, y: 4, z: 0, ry: 0, a: 0 },
+        { x: Infinity, y: 4, z: 0, ry: 0, a: 0 },
+        { x: -Infinity, y: 4, z: 0, ry: 0, a: 0 },
+        { x: '5', y: 4, z: 0, ry: 0, a: 0 },
+        { x: 1e9, y: 4, z: 0, ry: 0, a: 0 },
+        { x: 0, y: 9999, z: 0, ry: 0, a: 0 },
+        { x: 0, y: -500, z: 0, ry: 0, a: 0 },
+        { x: 0, y: 4, z: 301, ry: 0, a: 0 },
+        { x: 0, y: 4, z: 0, ry: 5000, a: 0 },
+        { x: 0, y: 4, z: 0, ry: 0, a: 7 },
+        { x: 0, y: 4, z: 0, ry: 0, a: 1.5 },
+        { x: 0, y: 4, z: 0, ry: 0, a: 'run' },
+        null, 'x', 42, [], {}
     ];
-    try {
-        for (const a of attacks) {
-            const r = await rawGet(server, a);
-            assert.ok(!r.body.toString('utf8').includes(secret), 'ВИТІК через ' + a);
-            assert.ok(r.status >= 400 && r.status < 500, a + ' -> ' + r.status);
-            if (a.startsWith('/blox/')) assert.match(String(r.headers['content-type']), /application\/json/, a);
+    for (const d of bad) {
+        assert.strictEqual(sanitizeState(d), null, JSON.stringify(d));
+        a.send('blox_game_state', d);
+    }
+    await sleep(50);
+    const after = b.events('blox_game_tick').flat().filter((t) => t[0] === ra.id).length;
+    assert.strictEqual(after, base, 'жоден некоректний стан не розіслано');
+    game.shutdown();
+});
+
+test('кут нормалізується, а відсутня поза означає «стоїть»', () => {
+    const s = sanitizeState({ x: 0, y: 4, z: 0, ry: Math.PI * 3 });
+    assert.ok(Math.abs(s.ry) <= Math.PI + 1e-9);
+    assert.strictEqual(s.a, 0);
+});
+
+test('обмеження частоти: надлишок пакетів відкидається, потім ліміт відновлюється', async () => {
+    const { io, game, clock } = setup();
+    const a = io.connect('anna@x.com');
+    const b = io.connect('bob@x.com');
+    const ra = await join(a, 'anna@x.com');
+    await join(b, 'bob@x.com');
+    // Година не рухається: пропустити можна лише RATE_BURST пакетів
+    for (let i = 1; i <= 100; i++) a.send('blox_game_state', { x: i, y: 4, z: 0, ry: 0, a: 1 });
+    await sleep(40);
+    const xs = b.events('blox_game_tick').flat().filter((t) => t[0] === ra.id).map((t) => t[1]);
+    assert.strictEqual(xs[xs.length - 1], RATE_BURST, 'прийнято рівно ' + RATE_BURST + ' пакетів');
+    // Після паузи знову можна
+    clock.t += 2000;
+    a.send('blox_game_state', { x: 200, y: 4, z: 0, ry: 0, a: 1 });
+    await sleep(40);
+    const xs2 = b.events('blox_game_tick').flat().filter((t) => t[0] === ra.id).map((t) => t[1]);
+    assert.strictEqual(xs2[xs2.length - 1], 200);
+    game.shutdown();
+});
+
+test('перевірка особи: чужий email, сокет без імені, не ввійшов у KishkaBlox, невідома гра, порожній пакет', async () => {
+    const { io, game } = setup({ logged: new Set(['anna@x.com', 'bob@x.com']) });
+    const eve = io.connect('eve@x.com');
+    // Сокет назвався eve, але просить зайти як anna
+    const spoof = await join(eve, 'anna@x.com');
+    assert.deepStrictEqual(spoof, { success: false, code: 'not_identified' });
+    // Сокет, який ще не назвався
+    const anon = io.connect('anna@x.com', true);
+    assert.strictEqual((await join(anon, 'anna@x.com')).code, 'not_identified');
+    // Є акаунт Kishka, але не ввійшов у KishkaBlox
+    assert.strictEqual((await join(eve, 'eve@x.com')).code, 'not_logged_in');
+    const a = io.connect('anna@x.com');
+    assert.strictEqual((await a.call('blox_game_join', { email: 'anna@x.com', game: 'nope' })).code, 'unknown_game');
+    assert.strictEqual((await a.call('blox_game_join', { email: 'anna@x.com' })).code, 'unknown_game');
+    assert.strictEqual((await a.call('blox_game_join', null)).code, 'bad_payload');
+    assert.strictEqual((await a.call('blox_game_join', { game: GAME })).code, 'bad_payload');
+    assert.strictEqual(game.stats(GAME).count, 0, 'жодна відмова не створила гравця');
+    game.shutdown();
+});
+
+test('збій перевірки акаунта (база недоступна) повертає code=error, а не нескінченне очікування', async () => {
+    const { io, game } = setup({ opts: { getNick: async () => { throw new Error('db down'); } } });
+    const a = io.connect('anna@x.com');
+    const r = await join(a, 'anna@x.com');
+    assert.deepStrictEqual(r, { success: false, code: 'error' });
+    game.shutdown();
+});
+
+test('ліміт гравців у грі', async () => {
+    const { io, game } = setup({ opts: { maxPlayers: 2 } });
+    const a = io.connect('a@x.com');
+    const b = io.connect('b@x.com');
+    const c = io.connect('c@x.com');
+    assert.strictEqual((await join(a, 'a@x.com')).success, true);
+    assert.strictEqual((await join(b, 'b@x.com')).success, true);
+    assert.strictEqual((await join(c, 'c@x.com')).code, 'game_full');
+    game.shutdown();
+});
+
+test('стан від сокета, який не заходив у гру, ігнорується без помилок', async () => {
+    const { io, game } = setup();
+    const a = io.connect('anna@x.com');
+    a.send('blox_game_state', { x: 1, y: 4, z: 1, ry: 0, a: 0 });
+    a.send('blox_game_leave', {});
+    a.disconnect();
+    assert.strictEqual(game.stats(GAME).count, 0);
+    game.shutdown();
+});
+
+test('без станів довше за тайм-аут гравець виходить із гри (клієнту приходить kicked)', async () => {
+    const { io, game, clock } = setup({ opts: { staleMs: 1000 } });
+    const a = io.connect('anna@x.com');
+    const b = io.connect('bob@x.com');
+    await join(a, 'anna@x.com');
+    await join(b, 'bob@x.com');
+    clock.t += 1500;
+    b.send('blox_game_state', { x: 3, y: 4, z: 3, ry: 0, a: 0 }); // bob живий
+    await sleep(40);
+    assert.deepStrictEqual(a.last('blox_game_kicked'), { reason: 'timeout' });
+    assert.strictEqual(game.stats(GAME).count, 1);
+    game.shutdown();
+});
+
+test('таймер розсилки зупиняється, коли кімната порожня', async () => {
+    const { io, game } = setup();
+    const a = io.connect('anna@x.com');
+    await join(a, 'anna@x.com');
+    assert.strictEqual(game.stats(GAME).timer, true);
+    await a.call('blox_game_leave', {});
+    assert.strictEqual(game.stats(GAME).timer, false);
+    game.shutdown();
+});
+
+// ---------- Підключення до kishkablox.js: нік береться з акаунта KishkaBlox у базі ----------
+test('kishkablox.js підключає гру: ввійшов — зайшов, вийшов із KishkaBlox — відмова', async () => {
+    const initKishkaBlox = require('../kishkablox.js');
+    const io = new FakeIO();
+    const accounts = { 'anna@x.com': { nick: 'AnnaBlox', logged_in: 1 }, 'eve@x.com': { nick: 'Eve', logged_in: 0 } };
+    const dbRun = async () => ({});
+    const dbAll = async (sql, params) => {
+        if (/FROM blox_accounts WHERE owner_email = \?/.test(sql)) {
+            const acc = accounts[params[0]];
+            return acc ? [{ nick_lower: acc.nick.toLowerCase(), nick: acc.nick, pass_salt: 's', pass_hash: 'h', logged_in: acc.logged_in, owner_email: params[0] }] : [];
         }
-    } finally { server.close(); }
-});
-
-test('symlink на файл поза папкою гри не потрапляє ні в маніфест, ні в роздачу', async (t) => {
-    const secret = 'SYMLINK-SECRET';
-    const { base, game } = tmpGame({ 'game.html': '<html></html>', 'game.js': 'x=1' });
-    fs.writeFileSync(path.join(base, 'outside.js'), secret);
-    try { fs.symlinkSync(path.join(base, 'outside.js'), path.join(game, 'evil.js')); } catch (e) { return t.skip('symlink недоступні'); }
-    const blox = createBloxFiles({ gameDir: game, assetsDir: path.join(base, 'none'), logger: quiet });
-    const server = await startServer(blox);
+        return [];
+    };
+    const origErr = console.error;
+    const origLog = console.log;
+    const origWarn = console.warn;
+    console.error = () => {}; console.log = () => {}; console.warn = () => {};
     try {
-        const m = JSON.parse((await rawGet(server, '/blox/manifest.json')).body.toString('utf8'));
-        assert.ok(!m.files.some((f) => f.name === 'evil.js'));
-        const r = await rawGet(server, '/blox/files/evil.js');
-        assert.strictEqual(r.status, 404);
-        assert.ok(!r.body.toString().includes(secret));
-    } finally { server.close(); }
-});
-
-test('isSafeBloxName', () => {
-    for (const ok of ['game.html', 'game.js', 'kishkablox.png', 'a_b-c.1.js']) assert.ok(isSafeBloxName(ok), ok);
-    for (const bad of ['', '.', '..', '../a', 'a/b', 'a\\b', '/etc/passwd', 'a\0b', '.env', 'ім’я.js', 'a b.js', 'x'.repeat(200), null, undefined, 5]) assert.ok(!isSafeBloxName(bad), String(bad));
-});
-
-// ---------- Помилки ----------
-test('немає папки гри -> 503 JSON, не HTML, і запис у лог', async () => {
-    const lines = [];
-    const logger = { log() {}, warn() {}, error: (m) => lines.push(m) };
-    const blox = createBloxFiles({ gameDir: path.join(os.tmpdir(), 'blox-no-such-dir-' + Date.now()), assetsDir: ROOT + '/Assets', logger });
-    const server = await startServer(blox);
-    try {
-        const r = await rawGet(server, '/blox/manifest.json');
-        assert.strictEqual(r.status, 503);
-        assert.match(r.headers['content-type'], /application\/json/);
-        assert.strictEqual(JSON.parse(r.body.toString()).ok, false);
-        assert.ok(lines.some((l) => l.includes('Папки гри немає')), 'у лозі немає пояснення: ' + lines.join('|'));
-        const f = await rawGet(server, '/blox/files/game.js');
-        assert.strictEqual(f.status, 503);
-    } finally { server.close(); }
-});
-
-test('немає game.js -> маніфест 503 (а не неповний список)', async () => {
-    const { base, game } = tmpGame({ 'game.html': '<html></html>' });
-    const lines = [];
-    const server = await startServer(createBloxFiles({ gameDir: game, assetsDir: path.join(base, 'none'), logger: { log() {}, warn() {}, error: (m) => lines.push(m) } }));
-    try {
-        const r = await rawGet(server, '/blox/manifest.json');
-        assert.strictEqual(r.status, 503);
-        assert.ok(lines.some((l) => l.includes('game.js')));
-    } finally { server.close(); }
-});
-
-test('файл зник після маніфесту -> 404 JSON і запис у лог', async () => {
-    const { base, game } = tmpGame({ 'game.html': '<html></html>', 'game.js': 'x=1' });
-    const lines = [];
-    const server = await startServer(createBloxFiles({ gameDir: game, assetsDir: path.join(base, 'none'), logger: { log() {}, warn() {}, error: (m) => lines.push(m) } }));
-    try {
-        assert.strictEqual((await rawGet(server, '/blox/manifest.json')).status, 200);
-        fs.unlinkSync(path.join(game, 'game.js'));
-        const r = await rawGet(server, '/blox/files/game.js');
-        assert.strictEqual(r.status, 404);
-        assert.match(r.headers['content-type'], /application\/json/);
-        assert.ok(lines.length > 0);
-    } finally { server.close(); }
-});
-
-test('зміна файла змінює size, sha256 і version', async () => {
-    const { base, game } = tmpGame({ 'game.html': '<html></html>', 'game.js': 'x=1' });
-    const blox = createBloxFiles({ gameDir: game, assetsDir: path.join(base, 'none'), logger: quiet });
-    const a = blox.buildManifest().manifest;
-    fs.writeFileSync(path.join(game, 'game.js'), 'x=12345;');
-    const b = blox.buildManifest().manifest;
-    assert.notStrictEqual(a.version, b.version);
-    assert.strictEqual(b.files.find((f) => f.name === 'game.js').size, 8);
-});
-
-test('невідомий маршрут і не-GET -> JSON, не HTML', async () => {
-    const server = await startServer(createBloxFiles({ logger: quiet }));
-    try {
-        const a = await rawGet(server, '/blox/nothing');
-        assert.strictEqual(a.status, 404);
-        assert.match(a.headers['content-type'], /application\/json/);
-        const b = await rawGet(server, '/blox/manifest.json', 'POST');
-        assert.strictEqual(b.status, 405);
-        assert.match(b.headers['content-type'], /application\/json/);
-    } finally { server.close(); }
-});
-
-// ---------- Справжній Express (якщо встановлено: npm install) ----------
-test('через справжній Express: app.use("/blox") віддає маніфест і файли', async (t) => {
-    let express;
-    try { express = require('express'); } catch (e) { return t.skip('express не встановлено (npm install)'); }
-    const app = express();
-    createBloxFiles({ logger: quiet }).register(app);
-    const server = http.createServer(app);
-    await new Promise((r) => server.listen(0, '127.0.0.1', r));
-    try {
-        const m = await rawGet(server, '/blox/manifest.json');
-        assert.strictEqual(m.status, 200);
-        const json = JSON.parse(m.body.toString());
-        for (const f of json.files) {
-            const r = await rawGet(server, '/blox/files/' + f.name);
-            assert.strictEqual(r.status, 200);
-            assert.strictEqual(r.body.length, f.size);
-        }
-        const bad = await rawGet(server, '/blox/files/../server.js');
-        assert.ok(bad.status >= 400);
-        assert.match(String(bad.headers['content-type']), /application\/json/);
-    } finally { server.close(); }
+        initKishkaBlox({ io, app: { use() {} }, db: null, dbRun, dbAll });
+    } finally {
+        console.error = origErr; console.log = origLog; console.warn = origWarn;
+    }
+    const anna = io.connect('anna@x.com');
+    const eve = io.connect('eve@x.com');
+    const ok = await anna.call('blox_game_join', { email: 'anna@x.com', game: GAME });
+    assert.strictEqual(ok.success, true);
+    assert.strictEqual(ok.nick, 'AnnaBlox');
+    const no = await eve.call('blox_game_join', { email: 'eve@x.com', game: GAME });
+    assert.deepStrictEqual(no, { success: false, code: 'not_logged_in' });
+    await anna.call('blox_game_leave', {});
 });
