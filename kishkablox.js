@@ -16,6 +16,7 @@
 //   blox_add_friend { email, nick }              -> { success, code?, relation? }
 //   blox_respond    { email, nick, accept }      -> { success, code? }
 //   blox_delete_friend { email, nick }           -> { success, code? }
+// Гра (ігрова кімната, див. blox_game_server.js): blox_game_join / blox_game_state / blox_game_leave -> blox_game_roster / blox_game_tick / blox_game_kicked
 // HTTP-маршрути установки гри (їх викликає застосунок, див. Bloxinstall.kt):
 //   GET /blox/manifest.json       -> { version, files: [{ name, size, sha256 }], total }
 //   GET /blox/files/<ім'я>        -> байти файла (розмір точно дорівнює size з маніфесту)
@@ -30,6 +31,7 @@
 // Старі акаунти (створені до цієї версії, без прив'язки) «прив'язуються» до акаунта Kishka при першому вході з ніком і паролем.
 // =====================================================================
 const crypto = require('crypto');
+const { createBloxGame } = require('./blox_game_server.js');
 
 const NICK_MIN = 3;
 const NICK_MAX = 20;
@@ -465,7 +467,23 @@ module.exports = function initKishkaBlox(ctx) {
         await dbRun('DELETE FROM blox_friend_requests WHERE (from_lower = ? AND to_lower = ?) OR (from_lower = ? AND to_lower = ?)', [aLower, bLower, bLower, aLower]);
     }
 
+    // Ігрова кімната (blox_game_server.js): нік гравця береться з бази, лише для акаунта, що ввійшов у KishkaBlox
+    let game = null;
+    try {
+        game = createBloxGame({
+            io,
+            getNick: async (email) => {
+                await ready;
+                const acc = await loggedInAccount(email);
+                return acc ? acc.nick : null;
+            }
+        });
+    } catch (e) {
+        console.error('KishkaBlox: ігровий сервер (blox_game_server.js) не запустився:', e && e.message);
+    }
+
     io.on('connection', (socket) => {
+        if (game) game.attach(socket);
         // Повний стан для екрана: чи є акаунт, чи увійшов, а якщо так — друзі та запити
         on(socket, 'blox_status', async (data, done) => {
             const email = cleanEmail(data.email);
