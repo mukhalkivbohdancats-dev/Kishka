@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.os.Handler
+import android.util.Log
 import android.os.Looper
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -16,6 +17,9 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -43,6 +47,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
@@ -59,6 +64,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
@@ -124,6 +130,21 @@ object BloxGame {
 
 private val BloxBlue = Color(0xFF1A73E8)
 
+private const val BLOX_TAG = "KishkaBlox"
+
+/** Скільки синя кнопка показує круговий індикатор перед відкриттям вікна гри. */
+private const val PLAY_LOADING_MS = 3000L
+
+/** Скільки чекаємо відповідь сервера на вхід у гру, перш ніж спробувати ще раз. */
+private const val JOIN_TIMEOUT_MS = 8000L
+
+/** Скільки разів намагаємось зайти в гру вперше, перш ніж показати помилку (замість нескінченного завантаження). */
+private const val MAX_FIRST_ATTEMPTS = 3
+
+/** Повтор після відповіді сервера з тимчасовою причиною (сокет ще не назвався, збій бази). */
+private const val JOIN_RETRY_MS = 1500L
+private const val MAX_JOIN_RETRIES = 3
+
 private fun Context.findActivity(): Activity? {
     var c: Context? = this
     while (c is ContextWrapper) {
@@ -171,6 +192,18 @@ fun BloxGameTile(onClick: () -> Unit) {
 @Composable
 fun BloxGameDetail(onBack: () -> Unit, onPlay: () -> Unit) {
     BackHandler(onBack = onBack)
+    // Після натискання синя кнопка 3 секунди показує круговий індикатор, потім відкривається вікно гри
+    var starting by remember { mutableStateOf(false) }
+    LaunchedEffect(starting) {
+        if (starting) {
+            delay(PLAY_LOADING_MS)
+            onPlay()
+        }
+    }
+    // Повернулись із гри: кнопка знову активна
+    LaunchedEffect(BloxGame.active) {
+        if (!BloxGame.active) starting = false
+    }
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         Column(modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp)) {
             IconButton(onClick = onBack) {
@@ -203,10 +236,14 @@ fun BloxGameDetail(onBack: () -> Unit, onPlay: () -> Unit) {
                             .height(46.dp)
                             .clip(RoundedCornerShape(10.dp))
                             .background(BloxBlue)
-                            .clickable { onPlay() },
+                            .clickable(enabled = !starting) { starting = true },
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(32.dp))
+                        if (starting) {
+                            CircularProgressIndicator(color = Color.White, strokeWidth = 3.dp, modifier = Modifier.size(28.dp))
+                        } else {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(32.dp))
+                        }
                     }
                 }
             }
@@ -228,6 +265,11 @@ private class BloxGameController(private val appContext: Context, private val em
 
     @Volatile private var disposed = false
     @Volatile private var joinedOnce = false
+    /** Сторінка гри готова, але сервер ще не підтвердив перший вхід. */
+    @Volatile private var pendingFirstJoin = false
+    private var joinToken = 0
+    private var firstAttempts = 0
+    private var joinRetries = 0
     @Volatile private var lx = 0.0
     @Volatile private var ly = 4.0
     @Volatile private var lz = 0.0
@@ -250,7 +292,7 @@ private class BloxGameController(private val appContext: Context, private val em
     }
     private val connectListener = Emitter.Listener {
         // Зв'язок із сервером відновився: сервер забув нас, коли той обірвався, — заходимо знову на тому ж місці
-        main.post { if (joinedOnce && !disposed) join(false) }
+        main.post { if (!disposed && (joinedOnce || pendingFirstJoin)) join(!joinedOnce) }
     }
 
     init {
@@ -268,7 +310,12 @@ private class BloxGameController(private val appContext: Context, private val em
     inner class Bridge {
         @JavascriptInterface
         fun ready() {
-            main.post { if (!disposed) join(true) }
+            main.post {
+                if (!disposed) {
+                    pendingFirstJoin = true
+                    join(true)
+                }
+            }
         }
 
         @JavascriptInterface
@@ -332,28 +379,65 @@ private class BloxGameController(private val appContext: Context, private val em
         return wv
     }
 
+    /**
+     * Вхід у гру на сервері. Відповідь чекаємо не нескінченно: якщо за JOIN_TIMEOUT_MS ack не прийшов, пробуємо ще
+     * (перший вхід — до MAX_FIRST_ATTEMPTS разів, потім помилка й вихід на сторінку гри).
+     */
     private fun join(first: Boolean) {
         if (disposed) return
+        val token = ++joinToken
         try {
-            val payload = JSONObject().put("email", email).put("game", BloxGame.GAME_ID)
-            if (!first) payload.put("x", lx).put("y", ly).put("z", lz).put("ry", lry)
-            KishkaManager.getSocket().emit("blox_game_join", payload, Ack { args ->
-                val res = args.firstOrNull() as? JSONObject
-                main.post { onJoinResult(res, first) }
-            })
+            val socket = KishkaManager.getSocket()
+            if (socket.connected()) {
+                val payload = JSONObject().put("email", email).put("game", BloxGame.GAME_ID)
+                if (!first) payload.put("x", lx).put("y", ly).put("z", lz).put("ry", lry)
+                socket.emit("blox_game_join", payload, Ack { args ->
+                    val res = args.firstOrNull() as? JSONObject
+                    main.post { if (token == joinToken) onJoinResult(res, first) }
+                })
+            } else {
+                Log.w(BLOX_TAG, "вхід у гру: сокет не підключений, чекаємо з'єднання (спроба " + (firstAttempts + 1) + ")")
+            }
         } catch (e: Exception) {
             e.printStackTrace()
-            failGame()
+            if (first) failGame()
+            return
         }
+        main.postDelayed({
+            if (disposed || token != joinToken) return@postDelayed
+            if (first && !joinedOnce) {
+                firstAttempts++
+                if (firstAttempts >= MAX_FIRST_ATTEMPTS) {
+                    Log.w(BLOX_TAG, "вхід у гру: сервер не відповів за " + (JOIN_TIMEOUT_MS * MAX_FIRST_ATTEMPTS / 1000) + " с")
+                    failGame()
+                } else {
+                    join(true)
+                }
+            } else {
+                join(false)
+            }
+        }, JOIN_TIMEOUT_MS)
     }
 
     private fun onJoinResult(res: JSONObject?, first: Boolean) {
         if (disposed) return
+        joinToken++ // відповідь отримано: таймер очікування більше не спрацює
         if (res == null || !res.optBoolean("success", false)) {
-            if (first) failGame()
+            val code = res?.optString("code", "") ?: ""
+            Log.w(BLOX_TAG, "вхід у гру відхилено сервером, code=" + code)
+            // Тимчасові причини (сокет ще не назвався, збій бази) — пробуємо ще кілька разів
+            val temporary = code == "not_identified" || code == "error"
+            if (temporary && joinRetries < MAX_JOIN_RETRIES) {
+                joinRetries++
+                main.postDelayed({ if (!disposed) join(first) }, JOIN_RETRY_MS)
+                return
+            }
+            failGame()
             return
         }
+        joinRetries = 0
         joinedOnce = true
+        pendingFirstJoin = false
         val myId = res.optInt("id", -1)
         BloxGame.myId = myId
         val list = ArrayList<BloxPlayerInfo>()
@@ -507,6 +591,11 @@ fun BloxGameScreen(lang: String, email: String) {
 
     val showLoading = !(controller.worldStarted && minTimePassed)
 
+    // Вікно гри з'являється плавно, а сірий екран завантаження так само плавно зникає
+    val appear = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { appear.animateTo(1f, tween(700)) }
+    val loadingAlpha by animateFloatAsState(if (showLoading) 1f else 0f, tween(600), label = "bloxLoading")
+
     BackHandler {
         when {
             confirmLeave -> confirmLeave = false
@@ -516,7 +605,7 @@ fun BloxGameScreen(lang: String, email: String) {
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black).graphicsLayer { alpha = appear.value }) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx -> controller.createWebView(ctx) }
@@ -593,10 +682,11 @@ fun BloxGameScreen(lang: String, email: String) {
         }
 
         // Сірий екран завантаження: аватарка зверху, назва посередині, знизу посередині «Joining the game»
-        if (showLoading) {
+        if (loadingAlpha > 0.01f) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .graphicsLayer { alpha = loadingAlpha }
                     .background(Color(0xFF3A3B3E))
                     .pointerInput(Unit) { detectTapGestures { } }
             ) {
@@ -610,12 +700,18 @@ fun BloxGameScreen(lang: String, email: String) {
                     Spacer(modifier = Modifier.height(14.dp))
                     Text(BloxGame.GAME_TITLE, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
                 }
-                Text(
-                    b("joining"),
-                    color = Color(0xFFD2D2D8),
-                    fontSize = 16.sp,
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp)
-                )
+                Column(
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    CircularProgressIndicator(color = Color.White, strokeWidth = 2.5.dp, modifier = Modifier.size(26.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        b("joining"),
+                        color = Color(0xFFD2D2D8),
+                        fontSize = 16.sp
+                    )
+                }
             }
         }
     }
