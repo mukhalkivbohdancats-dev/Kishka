@@ -16,6 +16,11 @@
 //   blox_add_friend { email, nick }              -> { success, code?, relation? }
 //   blox_respond    { email, nick, accept }      -> { success, code? }
 //   blox_delete_friend { email, nick }           -> { success, code? }
+// HTTP-маршрути установки гри (їх викликає застосунок, див. Bloxinstall.kt):
+//   GET /blox/manifest.json       -> { version, files: [{ name, size, sha256 }], total }
+//   GET /blox/files/<ім'я>        -> байти файла (розмір точно дорівнює size з маніфесту)
+// Файли беруться з папки blox_game/ (змінна BLOX_GAME_DIR) + дві картинки з Assets/ (див. BLOX_ASSET_ALIASES).
+// Помилки завжди повертаються як JSON { ok:false, error, message } з відповідним HTTP-статусом — ніколи не HTML.
 // Сервер сам надсилає подію 'blox_update' у кімнату пошти (усі пристрої цього акаунта Kishka), коли змінились друзі/запити.
 // Коди помилок: bad_nick, bad_password, taken, has_account, not_found, wrong_password, too_many, not_logged_in, self, error
 //
@@ -52,6 +57,277 @@ function noteFailure(key) {
     else f.count++;
 }
 
+// =====================================================================
+// ===== Роздача файлів гри для установки (GET /blox/manifest.json, GET /blox/files/<ім'я>) =====
+// Нічого не залежить від бази: якщо база недоступна, файли гри все одно віддаються.
+// Розміри й хеші рахуються з реальних файлів на сервері під час кожного запиту (кешуються за розміром і датою зміни).
+// Віддавати можна ТІЛЬКИ файли, що є у списку установки: ім'я з URL ніколи не підставляється в шлях до файла.
+// =====================================================================
+const fs = require('fs');
+const path = require('path');
+
+const BLOX_FILE_NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
+const BLOX_MIME = {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'application/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp',
+    '.gif': 'image/gif',
+    '.svg': 'image/svg+xml',
+    '.ogg': 'audio/ogg',
+    '.mp3': 'audio/mpeg',
+    '.wav': 'audio/wav',
+    '.glb': 'model/gltf-binary',
+    '.woff2': 'font/woff2'
+};
+// Без цих двох файлів гра не запуститься: тоді маніфест повертає 503 замість неповного списку
+const BLOX_REQUIRED_FILES = ['game.html', 'game.js'];
+// Застосунок бере ці файли з телефона під такими іменами (Bloxgame.kt -> bloxImageModel), а в репозиторії вони лежать в Assets/
+const BLOX_ASSET_ALIASES = [
+    { name: 'kishkablox.png', source: 'Kishkablox.png' },
+    { name: 'realistic_cars.jpg', source: 'Realistic_cars.jpg' }
+];
+const BLOX_MAX_FILE_BYTES = 50 * 1024 * 1024;
+
+function bloxSafeLog(value) {
+    return JSON.stringify(String(value)).slice(0, 200);
+}
+
+function isSafeBloxName(name) {
+    return typeof name === 'string' && BLOX_FILE_NAME_RE.test(name) && name !== '.' && name !== '..';
+}
+
+function createBloxFiles(options) {
+    const opts = options || {};
+    const gameDir = path.resolve(opts.gameDir || process.env.BLOX_GAME_DIR || path.join(__dirname, 'blox_game'));
+    const assetsDir = path.resolve(opts.assetsDir || process.env.BLOX_ASSETS_DIR || path.join(__dirname, 'Assets'));
+    const log = opts.logger || console;
+    const hashCache = new Map(); // абсолютний шлях -> { sig, size, sha256 }
+
+    // Чи лежить справжній шлях файла (з урахуванням symlink) всередині папки root
+    function insideRoot(realFile, realRoot) {
+        return realFile === realRoot || realFile.startsWith(realRoot + path.sep);
+    }
+
+    function candidate(name, abs, realRoot, entries, problems) {
+        try {
+            const real = fs.realpathSync(abs);
+            if (!insideRoot(real, realRoot)) {
+                problems.push('файл ' + bloxSafeLog(name) + ' вказує за межі папки гри — пропущено');
+                return;
+            }
+            const st = fs.statSync(real);
+            if (!st.isFile()) return;
+            if (st.size > BLOX_MAX_FILE_BYTES) {
+                problems.push('файл ' + bloxSafeLog(name) + ' завеликий (' + st.size + ' байт) — пропущено');
+                return;
+            }
+            entries.set(name, { name, abs: real, size: st.size, mtimeMs: st.mtimeMs });
+        } catch (e) {
+            if (!(e && e.code === 'ENOENT')) problems.push('файл ' + bloxSafeLog(name) + ': ' + (e && e.message));
+        }
+    }
+
+    // Поточний список файлів установки: Map ім'я -> запис. Кидає помилку, якщо папки гри немає.
+    function scan() {
+        const entries = new Map();
+        const problems = [];
+        let realGame;
+        try {
+            realGame = fs.realpathSync(gameDir);
+        } catch (e) {
+            const err = new Error('Папки гри немає: ' + gameDir + ' (' + (e && e.code) + ')');
+            err.code = 'dir_missing';
+            throw err;
+        }
+        let names;
+        try {
+            names = fs.readdirSync(realGame);
+        } catch (e) {
+            const err = new Error('Не вдалося прочитати папку гри ' + gameDir + ': ' + (e && e.message));
+            err.code = 'dir_unreadable';
+            throw err;
+        }
+        names.sort();
+        for (const name of names) {
+            if (name.startsWith('.')) continue;
+            const ext = path.extname(name).toLowerCase();
+            if (!BLOX_MIME[ext]) {
+                problems.push('файл ' + bloxSafeLog(name) + ' має тип, який не віддається — пропущено');
+                continue;
+            }
+            if (!isSafeBloxName(name)) {
+                problems.push('ім\'я файла ' + bloxSafeLog(name) + ' містить недозволені символи — пропущено');
+                continue;
+            }
+            candidate(name, path.join(realGame, name), realGame, entries, problems);
+        }
+        let realAssets = null;
+        try { realAssets = fs.realpathSync(assetsDir); } catch (e) { /* папки Assets немає */ }
+        for (const alias of BLOX_ASSET_ALIASES) {
+            if (entries.has(alias.name)) continue; // файл із папки гри важливіший
+            if (!realAssets) {
+                problems.push('немає папки Assets (' + assetsDir + '), тому «' + alias.name + '» не додано');
+                continue;
+            }
+            candidate(alias.name, path.join(realAssets, alias.source), realAssets, entries, problems);
+            if (!entries.has(alias.name)) problems.push('немає файла Assets/' + alias.source + ', тому «' + alias.name + '» не додано');
+        }
+        return { entries, problems };
+    }
+
+    function readFileChecked(entry) {
+        return fs.readFileSync(entry.abs);
+    }
+
+    // sha256 і справжній розмір (за прочитаними байтами) з кешем за розміром і датою зміни
+    function describe(entry) {
+        const sig = entry.size + ':' + entry.mtimeMs;
+        const cached = hashCache.get(entry.abs);
+        if (cached && cached.sig === sig) return cached;
+        const buf = readFileChecked(entry);
+        const info = {
+            sig,
+            size: buf.length,
+            sha256: require('crypto').createHash('sha256').update(buf).digest('hex')
+        };
+        hashCache.set(entry.abs, info);
+        return info;
+    }
+
+    function buildManifest() {
+        const { entries, problems } = scan();
+        const missing = BLOX_REQUIRED_FILES.filter((n) => !entries.has(n));
+        if (missing.length > 0) {
+            const err = new Error('У папці гри ' + gameDir + ' немає обов\'язкових файлів: ' + missing.join(', '));
+            err.code = 'required_missing';
+            err.missing = missing;
+            throw err;
+        }
+        const files = [];
+        const versionHash = require('crypto').createHash('sha256');
+        for (const entry of entries.values()) {
+            const info = describe(entry);
+            files.push({ name: entry.name, size: info.size, sha256: info.sha256 });
+            versionHash.update(entry.name + ':' + info.size + ':' + info.sha256 + '\n');
+        }
+        const total = files.reduce((sum, f) => sum + f.size, 0);
+        return { manifest: { version: versionHash.digest('hex').slice(0, 16), files, total }, problems };
+    }
+
+    function sendJson(res, status, code, message, extraHeaders) {
+        const body = JSON.stringify({ ok: false, error: code, message });
+        res.statusCode = status;
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        if (extraHeaders) for (const k of Object.keys(extraHeaders)) res.setHeader(k, extraHeaders[k]);
+        res.setHeader('Content-Length', Buffer.byteLength(body));
+        res.end(body);
+    }
+
+    function serveManifest(req, res) {
+        let built;
+        try {
+            built = buildManifest();
+        } catch (e) {
+            const code = e && e.code === 'required_missing' ? 'game_files_missing' : e && e.code === 'dir_missing' ? 'game_dir_missing' : 'manifest_error';
+            log.error('KishkaBlox /blox/manifest.json: ' + (e && e.message) + ' (cwd=' + process.cwd() + ', __dirname=' + __dirname + ')');
+            return sendJson(res, 503, code, 'Файли гри на сервері недоступні. Спробуйте пізніше.');
+        }
+        for (const p of built.problems) log.warn('KishkaBlox /blox/manifest.json: ' + p);
+        const body = JSON.stringify(built.manifest);
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('Content-Length', Buffer.byteLength(body));
+        res.end(body);
+    }
+
+    function serveFile(req, res, rawName) {
+        let name;
+        try {
+            name = decodeURIComponent(rawName);
+        } catch (e) {
+            log.warn('KishkaBlox /blox/files: некоректне кодування імені ' + bloxSafeLog(rawName));
+            return sendJson(res, 400, 'bad_name', 'Некоректне ім\'я файла');
+        }
+        if (!isSafeBloxName(name)) {
+            log.warn('KishkaBlox /blox/files: заблоковано небезпечне ім\'я ' + bloxSafeLog(name));
+            return sendJson(res, 400, 'bad_name', 'Некоректне ім\'я файла');
+        }
+        let scanned;
+        try {
+            scanned = scan();
+        } catch (e) {
+            log.error('KishkaBlox /blox/files/' + name + ': ' + (e && e.message));
+            return sendJson(res, 503, 'game_dir_missing', 'Файли гри на сервері недоступні. Спробуйте пізніше.');
+        }
+        const entry = scanned.entries.get(name);
+        if (!entry) {
+            log.error('KishkaBlox /blox/files/' + name + ': файла немає у списку установки (папка ' + gameDir + ')');
+            return sendJson(res, 404, 'file_not_found', 'Файла немає в установці гри');
+        }
+        let buf;
+        try {
+            buf = readFileChecked(entry);
+        } catch (e) {
+            if (e && e.code === 'ENOENT') {
+                log.error('KishkaBlox /blox/files/' + name + ': файл зник з диска: ' + entry.abs);
+                return sendJson(res, 404, 'file_not_found', 'Файла немає в установці гри');
+            }
+            log.error('KishkaBlox /blox/files/' + name + ': не вдалося прочитати ' + entry.abs + ': ' + (e && e.message));
+            return sendJson(res, 500, 'read_error', 'Не вдалося прочитати файл');
+        }
+        res.statusCode = 200;
+        res.setHeader('Content-Type', BLOX_MIME[path.extname(name).toLowerCase()] || 'application/octet-stream');
+        res.setHeader('Content-Length', buf.length);
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.end(buf);
+    }
+
+    // Єдиний обробник усього, що починається з /blox. Підключається як app.use('/blox', handle):
+    // Express відрізає '/blox' від req.url, тому тут шляхи виглядають як /manifest.json та /files/<ім'я>.
+    function handle(req, res) {
+        try {
+            if (req.method !== 'GET' && req.method !== 'HEAD') {
+                return sendJson(res, 405, 'method_not_allowed', 'Дозволено лише GET', { Allow: 'GET, HEAD' });
+            }
+            const raw = String(req.url || '/').split('?')[0].split('#')[0];
+            if (raw === '/manifest.json') return serveManifest(req, res);
+            if (raw.startsWith('/files/')) return serveFile(req, res, raw.slice('/files/'.length));
+            return sendJson(res, 404, 'not_found', 'Невідомий маршрут KishkaBlox');
+        } catch (e) {
+            log.error('KishkaBlox ' + req.method + ' ' + bloxSafeLog(req.url) + ': ' + (e && e.stack || e));
+            if (!res.headersSent) sendJson(res, 500, 'server_error', 'Помилка сервера');
+            else res.end();
+        }
+    }
+
+    // Один раз при запуску пишемо в лог, що саме сервер бачить (допомагає знайти неправильний шлях на Render)
+    function logStartup() {
+        try {
+            const built = buildManifest();
+            log.log('KishkaBlox: роздача гри з ' + gameDir + ': ' + built.manifest.files.length + ' файлів, ' + built.manifest.total + ' байт, версія ' + built.manifest.version + ' (' + built.manifest.files.map((f) => f.name).join(', ') + ')');
+            for (const p of built.problems) log.warn('KishkaBlox: ' + p);
+        } catch (e) {
+            log.error('KishkaBlox: УСТАНОВКА ГРИ НЕ ПРАЦЮЄ — ' + (e && e.message) + ' (cwd=' + process.cwd() + ', __dirname=' + __dirname + '). Перевірте, що Render розгортає потрібний репозиторій/гілку і що папка blox_game є у корені проєкту.');
+        }
+    }
+
+    function register(app) {
+        app.use('/blox', handle);
+        logStartup();
+    }
+
+    return { handle, register, buildManifest, scan, gameDir, assetsDir };
+}
+
 function cleanEmail(value) {
     return String(value || '').trim().toLowerCase();
 }
@@ -81,7 +357,15 @@ function safeEqualHex(a, b) {
 }
 
 module.exports = function initKishkaBlox(ctx) {
-    const { io, dbRun, dbAll } = ctx;
+    const { io, app, dbRun, dbAll } = ctx;
+
+    // Маршрути установки гри реєструємо першими й окремо від бази: що б не сталося з таблицями, файли гри віддаються
+    try {
+        if (!app) throw new Error('server.js не передав app у KishkaBlox');
+        createBloxFiles().register(app);
+    } catch (e) {
+        console.error('KishkaBlox: маршрути /blox/* не підключено:', e && e.message);
+    }
 
     const ready = (async () => {
         await dbRun(`CREATE TABLE IF NOT EXISTS blox_accounts (
@@ -376,3 +660,7 @@ module.exports = function initKishkaBlox(ctx) {
         });
     });
 };
+
+// Для тестів (test/blox.test.js)
+module.exports.createBloxFiles = createBloxFiles;
+module.exports.isSafeBloxName = isSafeBloxName;
