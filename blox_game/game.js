@@ -32,6 +32,7 @@
     var CAM_MAX = 100;
     var FIRST_PERSON_DIST = 1.5;
     var GRAY = [0.64, 0.65, 0.67];
+    var FACE = [0.1, 0.1, 0.12];
 
     var Native = window.Android || {
         // Запуск у звичайному браузері (для перевірки): локальна гра без мережі
@@ -329,7 +330,9 @@
         '    float line = step(0.488, max(f.x, f.y));\n' +
         '    c = c * (1.0 - 0.22 * line);\n' +
         '  }\n' +
-        '  vec3 lit = c * (0.36 + 0.34 * hemi + 0.55 * d);\n' +
+        '  vec3 amb = mix(vec3(0.34, 0.33, 0.32), vec3(0.62, 0.70, 0.84), hemi) * 0.78;\n' +
+        '  vec3 sun = vec3(1.0, 0.95, 0.86) * (0.62 * d);\n' +
+        '  vec3 lit = min(c * (amb + sun), vec3(1.0));\n' +
         '  float dist = length(vW - uCam);\n' +
         '  float fg = clamp((dist - 160.0) / 360.0, 0.0, 1.0);\n' +
         '  gl_FragColor = vec4(mix(lit, uFog, fg), uAlpha);\n' +
@@ -515,6 +518,10 @@
         push(); M.translate(stk, 0, 3, 0); drawBox(stk, 2, 2, 1, GRAY); pop();
         // голова
         push(); M.translate(stk, 0, 4.5, 0); drawBox(stk, 1.25, 1.0, 1.25, GRAY); pop();
+        // обличчя на передній стороні голови (перед персонажа дивиться в бік +Z): очі й усмішка
+        push(); M.translate(stk, -0.3, 4.6, 0.64); drawBox(stk, 0.18, 0.22, 0.04, FACE); pop();
+        push(); M.translate(stk, 0.3, 4.6, 0.64); drawBox(stk, 0.18, 0.22, 0.04, FACE); pop();
+        push(); M.translate(stk, 0, 4.22, 0.64); drawBox(stk, 0.5, 0.1, 0.04, FACE); pop();
         // руки (шарнір на плечі)
         push();
         M.translate(stk, -1.5, 4, 0); M.rotateZ(stk, c.armLz); M.rotateX(stk, c.armL);
