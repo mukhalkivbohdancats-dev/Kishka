@@ -115,8 +115,10 @@ class CallService : Service() {
         private const val RING_START_VOLUME = 0.12f
         private const val RING_MAX_VOLUME = 0.6f
         private const val MIN_TARGET_MS = 100       // мінімальний запас звуку в динаміку від мережевих "ривків"
-        private const val MAX_TARGET_MS = 400       // до 400 мс на поганій мережі (запас росте сам після кожного "провалу")
-        private const val CATCHUP_EXTRA_MS = 200    // скільки зайвого запасу терпимо, перш ніж наздоганяти
+        private const val MAX_TARGET_MS = 500       // до 500 мс на поганій мережі (запас росте сам після кожного "провалу")
+        private const val CATCHUP_EXTRA_MS = 200    // скільки зайвого запасу терпимо, перш ніж наздоганяти (пропускаємо лише паузи)
+        private const val HARD_CATCHUP_MS = 800     // понад це (залп після довгого зависання мережі) відкидаємо найстаріше
+        private const val QUIET_RMS = 350.0         // кадр тихіший за це — пауза між словами, її можна пропустити без втрати слів
         private const val CHANNEL_CONFIG_IN = AudioFormat.CHANNEL_IN_MONO
         private const val CHANNEL_CONFIG_OUT = AudioFormat.CHANNEL_OUT_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
@@ -691,6 +693,14 @@ class CallService : Service() {
         var lastUnderrunAt = startNow
         var lastSkipAt = 0L
         var lastPacketAt = startNow
+        var quietSkips = 0
+
+        fun isQuiet(frame: ShortArray): Boolean {
+            if (frame.isEmpty()) return true
+            var sum = 0.0
+            for (v in frame) sum += v.toDouble() * v.toDouble()
+            return Math.sqrt(sum / frame.size) < QUIET_RMS
+        }
 
         fun bufferedMs(): Int {
             val t = track ?: return 0
@@ -719,7 +729,7 @@ class CallService : Service() {
                             val now = System.currentTimeMillis()
                             // Довга пауза — співрозмовник просто мовчить або вимкнув мікрофон: запас через це не збільшуємо
                             if (now - lastPacketAt < 400L) {
-                                targetMs = minOf(targetMs + 40, MAX_TARGET_MS)
+                                targetMs = minOf(targetMs + 60, MAX_TARGET_MS)
                                 lastUnderrunAt = now
                             }
                         }
@@ -757,17 +767,19 @@ class CallService : Service() {
                     lastUnderrunAt = now
                 }
 
-                // Наздоганяємо: звуку накопичилось більше, ніж потрібно
+                // Наздоганяємо: звуку накопичилось більше, ніж потрібно.
+                // Раніше кожні 250 мс викидався ПОТОЧНИЙ пакет (разом зі словом) — звідси «при-... -віт» і «сп-... -рави».
+                // Тепер слова не чіпаємо: надлишок з'їдають лише паузи (див. нижче), і тільки при зависанні понад 0,8 с
+                // відкидається найстаріша частина залпу.
+                var over = 0
                 if (playing) {
                     val pendingMs = audioQueue.size * FRAME_MS
-                    val over = bufferedMs() + pendingMs - targetMs
-                    if (over > CATCHUP_EXTRA_MS && now - lastSkipAt > 250L) {
+                    over = bufferedMs() + pendingMs - targetMs
+                    if (over > HARD_CATCHUP_MS && now - lastSkipAt > 1000L) {
                         lastSkipAt = now
-                        if (over > 500) {
-                            // Великий залп: лишаємо лише кілька останніх пакетів
-                            while (audioQueue.size > 2) audioQueue.poll()
-                        }
-                        continue
+                        val keep = (targetMs / FRAME_MS).coerceAtLeast(2)
+                        while (audioQueue.size > keep) audioQueue.poll()
+                        over = 0
                     }
                 }
 
@@ -783,6 +795,12 @@ class CallService : Service() {
                 }
 
                 val pcm = VoiceCodec.decodePacket(packet) ?: continue
+                // Запас більший за потрібний: пропускаємо тихий кадр (паузу), щоб затримка зменшувалась непомітно для слуху
+                if (playing && over > CATCHUP_EXTRA_MS && quietSkips < 3 && isQuiet(pcm)) {
+                    quietSkips++
+                    continue
+                }
+                quietSkips = 0
                 lastPcm = pcm
                 concealed = 0
                 // Програмна гучність (діє, лише якщо телефон не дав змінити системну)
