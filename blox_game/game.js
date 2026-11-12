@@ -1,1348 +1,983 @@
-// =====================================================================
-// KishkaBlox — гра «Realistic cars»: 3D-світ на чистому WebGL (без сторонніх бібліотек).
-// Завантажується у WebView застосунку Kishka з файлів, які KishkaBlox установив на телефон.
-// Складається з файлів: world.js (рельєф), physics.js (персонаж і машини), camera.js (камера), i18n.js (переклади),
-// models.js (моделі), game.js (цей файл: малювання, керування, зв'язок із сервером), game.html.
-//
-// Зв'язок із застосунком (Android) іде через window.Android (JavascriptInterface):
-//   Android.ready()                    сторінка готова -> застосунок заходить у гру на сервері
-//   Android.started()                  перший кадр світу намальовано -> сірий екран завантаження зникає
-//   Android.sendState(json)            мій стан для інших: {x,y,z,ry,a,d,c?}; c — стан моєї машини {t,x,y,z,ry,s,st}
-//   Android.carSpawn(type,x,y,z,ry)    створити мою машину (сервер відповість через KishkaGame.carResult)
-//   Android.carRemove()                прибрати мою машину
-//   Android.failReason(text)           webgl | script — причина, чому гру не запущено
-//   Android.log(text)                  діагностика в Logcat
-//   Android.state(x,y,z,ry,a)          (старий виклик, лишився для сумісності зі старим застосунком)
-// Застосунок викликає в сторінці:
-//   KishkaGame.config({lang, invertCamera})            мова написів, інверсія камери
-//   KishkaGame.start(data) / resync(data)              відповідь сервера на вхід: {id,nick,x,y,z,ry,players:[],cars:[]}
-//   KishkaGame.roster({players:[{id,nick}]})           хто зараз у грі
-//   KishkaGame.tick([[id,x,y,z,ry,a,d],...])           стани гравців (10 разів на секунду)
-//   KishkaGame.cars({cars:[{id,cid,type,x,y,z,ry}]})   повний список машин у кімнаті
-//   KishkaGame.carTick([[id,cid,x,y,z,ry,speed,steer],...])  рух машин
-//   KishkaGame.carResult({ok,cid,code})                результат створення моєї машини
-//
-// Керування, як у Roblox: джойстик зліва, кнопка стрибка справа, палець по екрану — камера (палець угору = погляд угору),
-// два пальці — наближення/віддалення. У машині: газ і назад праворуч знизу, повороти ліворуч знизу.
-// =====================================================================
-(function () {
-    'use strict';
+package com.kishka.messenger
 
-    var World = window.KishkaWorld, Phys = window.KishkaPhysics, Cam = window.KishkaCamera;
-    var Models = window.KishkaModels, I18 = window.KishkaI18n;
+import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
+import android.os.Handler
+import android.util.Log
+import android.os.Looper
+import android.view.ViewGroup
+import android.view.WindowManager
+import android.webkit.ConsoleMessage
+import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import coil.compose.AsyncImage
+import io.socket.client.Ack
+import io.socket.emitter.Emitter
+import kotlinx.coroutines.delay
+import org.json.JSONArray
+import org.json.JSONObject
 
-    // ---------------------------------------------------------------- зв'язок із застосунком
-    function nativeFn(name) {
-        var a = window.Android;
-        return a && a[name] !== undefined ? function () { return a[name].apply(a, arguments); } : null;
+data class BloxPlayerInfo(val id: Int, val nick: String)
+
+/**
+ * Стан гри, спільний для всього застосунку: коли active = true, замість вкладок на весь екран показується гра
+ * (MainActivity), а пристрій лежить в ігровому (горизонтальному) положенні.
+ */
+object BloxGame {
+    const val GAME_ID = "realistic_cars"
+    const val GAME_TITLE = "Realistic cars"
+
+    /** Гру відкрито на весь екран (екран завантаження або сам світ). */
+    var active by mutableStateOf(false)
+        private set
+
+    /** Відкрито сторінку гри (стрілка, аватарка, назва, синя кнопка). Лишається такою й після виходу з гри. */
+    var detailOpen by mutableStateOf(false)
+
+    var myId by mutableStateOf(-1)
+    var players by mutableStateOf<List<BloxPlayerInfo>>(emptyList())
+
+    /** Налаштування «Інверсія камери»: за замовчуванням вимкнено (палець угору = камера вгору). Зберігається на пристрої. */
+    var invertCamera by mutableStateOf(false)
+        private set
+
+    private const val SETTINGS_PREFS = "kishkablox_settings"
+
+    fun loadSettings(context: Context) {
+        invertCamera = context.applicationContext.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
+            .getBoolean("invert_camera", false)
     }
-    var standalone = !window.Android;       // відкрито в звичайному браузері (для перевірки): локальна гра без мережі
-    var N = {
-        ready: nativeFn('ready'), started: nativeFn('started'), fail: nativeFn('fail'), failReason: nativeFn('failReason'),
-        log: nativeFn('log'), sendState: nativeFn('sendState'), oldState: nativeFn('state'),
-        carSpawn: nativeFn('carSpawn'), carRemove: nativeFn('carRemove')
-    };
-    function call(fn) {
-        if (!fn) return;
-        try { fn.apply(null, Array.prototype.slice.call(arguments, 1)); } catch (e) { /* застосунок закрив гру */ }
-    }
-    function nlog(text) {
-        call(N.log, String(text).slice(0, 300));
-        if (standalone && window.console) console.log('[game] ' + text);
-    }
-    function nfail(reason, text) {
-        nlog('FAIL ' + reason + ': ' + text);
-        if (N.failReason) call(N.failReason, reason + ': ' + String(text).slice(0, 200));
-        else call(N.fail);
+
+    fun saveInvertCamera(context: Context, value: Boolean) {
+        invertCamera = value
+        context.applicationContext.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
+            .edit().putBoolean("invert_camera", value).apply()
     }
 
-    // ---------------------------------------------------------------- налаштування
-    var SEND_EVERY_MS = 90;     // як часто надсилати свій стан (~11 разів на секунду)
-    var INTERP_DELAY = 0.12;    // показуємо інших гравців із затримкою 120 мс: між пакетами рух плавний
-    var CHAR_SEAT_SCALE = 0.8;  // у машині персонаж трохи менший, щоб голова не пробивала дах
-    var CAR_NEAR = 12;          // з якої відстані можна сісти у свою машину
-    var SPAWN_COOLDOWN_MS = 1500;
-    var SHOW_NAMETAGS = true;
-    var CAR_TYPES = Phys.CAR_TYPES;
-
-    function $(id) { return document.getElementById(id); }
-    function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
-    function angDiff(a, b) { return Phys.angDiff(a, b); }
-    function nowMs() { return (window.performance && performance.now) ? performance.now() : Date.now(); }
-
-    // ---------------------------------------------------------------- якість графіки
-    // Потужний телефон — більше деталей і різкість; слабкий — менше. Далі якість сама підлаштовується під FPS.
-    function detectTier() {
-        var cores = navigator.hardwareConcurrency || 4;
-        var mem = navigator.deviceMemory || 3;
-        var score = cores + mem * 1.5;
-        if (score >= 15) return 2;
-        if (score >= 9) return 1;
-        return 0;
+    fun enter() {
+        players = emptyList()
+        myId = -1
+        active = true
     }
-    var TIER = detectTier();
-    var TIER_CFG = [
-        { cell: 3, dpr: 1.0, aa: false, far: 520, fogFar: 420 },
-        { cell: 2, dpr: 1.5, aa: true, far: 700, fogFar: 520 },
-        { cell: 1.5, dpr: 2.0, aa: true, far: 800, fogFar: 600 }
-    ][TIER];
 
-    // ---------------------------------------------------------------- матриці (column-major, як у WebGL)
-    var tmp16 = new Float32Array(16);
-    var M = {
-        ident: function (o) { for (var i = 0; i < 16; i++) o[i] = 0; o[0] = o[5] = o[10] = o[15] = 1; return o; },
-        copy: function (o, a) { for (var i = 0; i < 16; i++) o[i] = a[i]; return o; },
-        mul: function (o, a, b) {
-            for (var c = 0; c < 4; c++) for (var r = 0; r < 4; r++) {
-                var s = 0;
-                for (var k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k];
-                tmp16[c * 4 + r] = s;
+    fun exit() {
+        active = false
+        players = emptyList()
+        myId = -1
+    }
+
+    /** Вихід з акаунта Kishka: гра закривається, стан скидається. */
+    fun reset() {
+        exit()
+        detailOpen = false
+    }
+}
+
+private val BloxBlue = Color(0xFF1A73E8)
+
+private const val BLOX_TAG = "KishkaBlox"
+
+/** Скільки синя кнопка показує круговий індикатор перед відкриттям вікна гри. */
+private const val PLAY_LOADING_MS = 3000L
+
+/** Скільки чекаємо відповідь сервера на вхід у гру, перш ніж спробувати ще раз. */
+private const val JOIN_TIMEOUT_MS = 8000L
+
+/** Скільки разів намагаємось зайти в гру вперше, перш ніж показати помилку (замість нескінченного завантаження). */
+private const val MAX_FIRST_ATTEMPTS = 3
+
+/** Повтор після відповіді сервера з тимчасовою причиною (сокет ще не назвався, збій бази). */
+private const val JOIN_RETRY_MS = 1500L
+private const val MAX_JOIN_RETRIES = 3
+
+/** Коди відмови сервера на вхід у гру, для яких є окремий переклад (join_<код> у BloxStrings). */
+private val JOIN_CODES = setOf("not_logged_in", "not_identified", "game_full", "unknown_game", "bad_payload", "error")
+
+private fun Context.findActivity(): Activity? {
+    var c: Context? = this
+    while (c is ContextWrapper) {
+        if (c is Activity) return c
+        c = c.baseContext
+    }
+    return null
+}
+
+/** Квадрат із заокругленими кутами: зверху зображення, під ним (з маленькою відстанню) текст «Realistic cars». */
+@Composable
+fun BloxGameTile(onClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = Color.White,
+        shadowElevation = 2.dp,
+        modifier = Modifier.width(132.dp).clip(RoundedCornerShape(18.dp)).clickable { onClick() }
+    ) {
+        Column(modifier = Modifier.padding(8.dp)) {
+            AsyncImage(
+                model = bloxImageModel("realistic_cars.jpg", REALISTIC_CARS_URL),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp))
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                BloxGame.GAME_TITLE,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.Black,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp)
+            )
+        }
+    }
+}
+
+/**
+ * Сторінка гри: зверху зліва стрілочка «назад»; під нею квадратна аватарка (з маленьким заокругленням кутів),
+ * праворуч від неї назва «Realistic cars», а під початком назви — синя кнопка запуску.
+ */
+@Composable
+fun BloxGameDetail(onBack: () -> Unit, onPlay: () -> Unit) {
+    BackHandler(onBack = onBack)
+    // Після натискання синя кнопка 3 секунди показує круговий індикатор, потім відкривається вікно гри
+    var starting by remember { mutableStateOf(false) }
+    LaunchedEffect(starting) {
+        if (starting) {
+            delay(PLAY_LOADING_MS)
+            onPlay()
+        }
+    }
+    // Повернулись із гри: кнопка знову активна
+    LaunchedEffect(BloxGame.active) {
+        if (!BloxGame.active) starting = false
+    }
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        Column(modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp)) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Default.ArrowBack, contentDescription = null, tint = Color.Black)
             }
-            for (var i = 0; i < 16; i++) o[i] = tmp16[i];
-            return o;
-        },
-        translate: function (m, x, y, z) {
-            m[12] += m[0] * x + m[4] * y + m[8] * z;
-            m[13] += m[1] * x + m[5] * y + m[9] * z;
-            m[14] += m[2] * x + m[6] * y + m[10] * z;
-            m[15] += m[3] * x + m[7] * y + m[11] * z;
-        },
-        scale: function (m, sx, sy, sz) {
-            for (var i = 0; i < 4; i++) { m[i] *= sx; m[4 + i] *= sy; m[8 + i] *= sz; }
-        },
-        rotateX: function (m, a) {
-            var c = Math.cos(a), s = Math.sin(a);
-            for (var i = 0; i < 4; i++) { var y = m[4 + i], z = m[8 + i]; m[4 + i] = y * c + z * s; m[8 + i] = z * c - y * s; }
-        },
-        rotateY: function (m, a) {
-            var c = Math.cos(a), s = Math.sin(a);
-            for (var i = 0; i < 4; i++) { var x = m[i], z = m[8 + i]; m[i] = x * c - z * s; m[8 + i] = x * s + z * c; }
-        },
-        rotateZ: function (m, a) {
-            var c = Math.cos(a), s = Math.sin(a);
-            for (var i = 0; i < 4; i++) { var x = m[i], y = m[4 + i]; m[i] = x * c + y * s; m[4 + i] = y * c - x * s; }
-        },
-        perspective: function (o, fovy, aspect, near, far) {
-            var f = 1 / Math.tan(fovy / 2);
-            for (var i = 0; i < 16; i++) o[i] = 0;
-            o[0] = f / aspect; o[5] = f; o[10] = (far + near) / (near - far); o[11] = -1; o[14] = (2 * far * near) / (near - far);
-            return o;
-        },
-        lookAt: function (o, ex, ey, ez, cx, cy, cz) {
-            var zx = ex - cx, zy = ey - cy, zz = ez - cz;
-            var zl = Math.sqrt(zx * zx + zy * zy + zz * zz) || 1;
-            zx /= zl; zy /= zl; zz /= zl;
-            var xx = zz, xy = 0, xz = -zx;
-            var xl = Math.sqrt(xx * xx + xz * xz) || 1;
-            xx /= xl; xz /= xl;
-            var yx = zy * xz - zz * xy, yy = zz * xx - zx * xz, yz = zx * xy - zy * xx;
-            o[0] = xx; o[1] = yx; o[2] = zx; o[3] = 0;
-            o[4] = xy; o[5] = yy; o[6] = zy; o[7] = 0;
-            o[8] = xz; o[9] = yz; o[10] = zz; o[11] = 0;
-            o[12] = -(xx * ex + xy * ey + xz * ez);
-            o[13] = -(yx * ex + yy * ey + yz * ez);
-            o[14] = -(zx * ex + zy * ey + zz * ez);
-            o[15] = 1;
-            return o;
-        }
-    };
-
-    // ---------------------------------------------------------------- WebGL-малювальник (є два: головний і для попереднього перегляду машин)
-    var VS =
-        'attribute vec3 aPos;\nattribute vec3 aNrm;\nattribute vec3 aCol;\n' +
-        'uniform mat4 uVP;\nuniform mat4 uM;\nuniform mat3 uN;\n' +
-        'varying vec3 vN;\nvarying vec3 vW;\nvarying vec3 vC;\n' +
-        'void main() {\n  vec4 w = uM * vec4(aPos, 1.0);\n  vW = w.xyz;\n  vN = uN * aNrm;\n  vC = aCol;\n  gl_Position = uVP * w;\n}\n';
-    var FS =
-        '#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n' +
-        'varying vec3 vN;\nvarying vec3 vW;\nvarying vec3 vC;\n' +
-        'uniform vec3 uTint;\nuniform vec3 uLight;\nuniform vec3 uCam;\nuniform vec3 uFog;\nuniform vec2 uFogR;\n' +
-        'uniform float uAlpha;\nuniform float uSpec;\n' +
-        'void main() {\n' +
-        '  vec3 n = normalize(vN);\n' +
-        '  vec3 L = normalize(uLight);\n' +
-        '  float d = max(dot(n, L), 0.0);\n' +
-        '  float hemi = 0.5 + 0.5 * n.y;\n' +
-        '  vec3 c = vC * uTint;\n' +
-        '  vec3 amb = mix(vec3(0.36, 0.34, 0.32), vec3(0.64, 0.72, 0.86), hemi) * 0.8;\n' +
-        '  vec3 sun = vec3(1.0, 0.95, 0.86) * (0.72 * d);\n' +
-        '  vec3 lit = c * (amb + sun);\n' +
-        '  vec3 V = normalize(uCam - vW);\n' +
-        '  vec3 H = normalize(L + V);\n' +
-        '  lit += vec3(1.0, 0.97, 0.9) * pow(max(dot(n, H), 0.0), 48.0) * uSpec;\n' +
-        '  float dist = length(vW - uCam);\n' +
-        '  float fg = clamp((dist - uFogR.x) / (uFogR.y - uFogR.x), 0.0, 1.0);\n' +
-        '  gl_FragColor = vec4(mix(min(lit, vec3(1.0)), uFog, fg), uAlpha);\n' +
-        '}\n';
-    var SKY_VS = 'attribute vec2 aP;\nvarying vec2 vP;\nvoid main() { vP = aP; gl_Position = vec4(aP, 0.9999, 1.0); }\n';
-    var SKY_FS =
-        '#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n' +
-        'varying vec2 vP;\nuniform vec3 uHor;\nuniform vec3 uTop;\nuniform float uHorizon;\n' +
-        'void main() {\n  float t = clamp((vP.y - uHorizon) * 0.7, 0.0, 1.0);\n  t = sqrt(t);\n  gl_FragColor = vec4(mix(uHor, uTop, t), 1.0);\n}\n';
-
-    var FOG = [0.72, 0.84, 0.96];
-    var SKY_TOP = [0.32, 0.58, 0.92];
-    var rendererSeq = 0;
-
-    function createRenderer(canvas, o) {
-        o = o || {};
-        var gl = canvas.getContext('webgl', {
-            antialias: !!o.aa, alpha: !!o.alpha, premultipliedAlpha: false,
-            preserveDrawingBuffer: !!o.preserve, powerPreference: 'high-performance'
-        }) || canvas.getContext('experimental-webgl');
-        if (!gl) throw new Error('no webgl');
-        var id = ++rendererSeq;
-
-        function compile(type, src) {
-            var s = gl.createShader(type);
-            gl.shaderSource(s, src);
-            gl.compileShader(s);
-            if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error('shader: ' + gl.getShaderInfoLog(s));
-            return s;
-        }
-        function program(vs, fs, attribs) {
-            var p = gl.createProgram();
-            gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
-            gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
-            for (var i = 0; i < attribs.length; i++) gl.bindAttribLocation(p, i, attribs[i]);
-            gl.linkProgram(p);
-            if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('link: ' + gl.getProgramInfoLog(p));
-            return p;
-        }
-        var prog = program(VS, FS, ['aPos', 'aNrm', 'aCol']);
-        var loc = {};
-        ['uVP', 'uM', 'uN', 'uTint', 'uLight', 'uCam', 'uFog', 'uFogR', 'uAlpha', 'uSpec'].forEach(function (n) { loc[n] = gl.getUniformLocation(prog, n); });
-        var skyProg = program(SKY_VS, SKY_FS, ['aP']);
-        var skyLoc = { uHor: gl.getUniformLocation(skyProg, 'uHor'), uTop: gl.getUniformLocation(skyProg, 'uTop'), uHorizon: gl.getUniformLocation(skyProg, 'uHorizon') };
-        var skyBuf = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, skyBuf);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-
-        gl.enable(gl.DEPTH_TEST);
-        gl.depthFunc(gl.LEQUAL);
-
-        // Геометрія -> буфери (кешується на самій геометрії окремо для кожного малювальника)
-        function mesh(geo) {
-            if (!geo.__gl) geo.__gl = {};
-            if (geo.__gl[id]) return geo.__gl[id];
-            var n = geo.pos.length / 3;
-            var data = new Float32Array(n * 9);
-            for (var i = 0; i < n; i++) {
-                data[i * 9] = geo.pos[i * 3]; data[i * 9 + 1] = geo.pos[i * 3 + 1]; data[i * 9 + 2] = geo.pos[i * 3 + 2];
-                data[i * 9 + 3] = geo.nrm[i * 3]; data[i * 9 + 4] = geo.nrm[i * 3 + 1]; data[i * 9 + 5] = geo.nrm[i * 3 + 2];
-                data[i * 9 + 6] = geo.col[i * 3]; data[i * 9 + 7] = geo.col[i * 3 + 1]; data[i * 9 + 8] = geo.col[i * 3 + 2];
-            }
-            var vb = gl.createBuffer();
-            gl.bindBuffer(gl.ARRAY_BUFFER, vb);
-            gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-            var ib = gl.createBuffer();
-            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
-            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(geo.idx), gl.STATIC_DRAW);
-            var m = { vb: vb, ib: ib, count: geo.idx.length };
-            geo.__gl[id] = m;
-            return m;
-        }
-
-        var nm = new Float32Array(9);
-        var cur = null;
-        function bind(m) {
-            if (cur === m) return;
-            cur = m;
-            gl.bindBuffer(gl.ARRAY_BUFFER, m.vb);
-            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, m.ib);
-            gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 36, 0);
-            gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 36, 12);
-            gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 36, 24);
-        }
-
-        function begin(vp, camPos, w, h, clear) {
-            gl.viewport(0, 0, w, h);
-            if (clear) gl.clearColor(clear[0], clear[1], clear[2], clear[3]);
-            else gl.clearColor(FOG[0], FOG[1], FOG[2], 1);
-            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-            gl.useProgram(prog);
-            gl.uniformMatrix4fv(loc.uVP, false, vp);
-            gl.uniform3f(loc.uLight, 0.45, 0.85, 0.3);
-            gl.uniform3f(loc.uCam, camPos[0], camPos[1], camPos[2]);
-            gl.uniform3f(loc.uFog, FOG[0], FOG[1], FOG[2]);
-            gl.uniform2f(loc.uFogR, o.fogNear || 160, o.fogFar || 420);
-            cur = null;
-            gl.disable(gl.BLEND);
-            gl.depthMask(true);
-        }
-
-        function sky(horizonNdc) {
-            gl.useProgram(skyProg);
-            gl.disable(gl.DEPTH_TEST);
-            gl.depthMask(false);
-            gl.bindBuffer(gl.ARRAY_BUFFER, skyBuf);
-            gl.enableVertexAttribArray(0);
-            gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-            gl.disableVertexAttribArray(1);
-            gl.disableVertexAttribArray(2);
-            gl.uniform3f(skyLoc.uHor, FOG[0], FOG[1], FOG[2]);
-            gl.uniform3f(skyLoc.uTop, SKY_TOP[0], SKY_TOP[1], SKY_TOP[2]);
-            gl.uniform1f(skyLoc.uHorizon, horizonNdc);
-            gl.drawArrays(gl.TRIANGLES, 0, 3);
-            gl.enable(gl.DEPTH_TEST);
-            gl.depthMask(true);
-            gl.useProgram(prog);
-            cur = null;
-        }
-
-        // Малює сітку з матрицею m. tint — множник кольору, alpha — прозорість, spec — блиск
-        function draw(m, mat, tint, alpha, spec) {
-            bind(m);
-            nm[0] = mat[0]; nm[1] = mat[1]; nm[2] = mat[2];
-            nm[3] = mat[4]; nm[4] = mat[5]; nm[5] = mat[6];
-            nm[6] = mat[8]; nm[7] = mat[9]; nm[8] = mat[10];
-            gl.uniformMatrix4fv(loc.uM, false, mat);
-            gl.uniformMatrix3fv(loc.uN, false, nm);
-            if (tint) gl.uniform3f(loc.uTint, tint[0], tint[1], tint[2]); else gl.uniform3f(loc.uTint, 1, 1, 1);
-            gl.uniform1f(loc.uAlpha, alpha === undefined ? 1 : alpha);
-            gl.uniform1f(loc.uSpec, spec || 0);
-            gl.drawElements(gl.TRIANGLES, m.count, gl.UNSIGNED_SHORT, 0);
-        }
-
-        function blend(on) {
-            if (on) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); }
-            else { gl.disable(gl.BLEND); gl.depthMask(true); }
-        }
-        function offset(on) {
-            if (on) { gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-1.5, -1.5); }
-            else gl.disable(gl.POLYGON_OFFSET_FILL);
-        }
-
-        return { gl: gl, id: id, mesh: mesh, begin: begin, sky: sky, draw: draw, blend: blend, offset: offset };
-    }
-
-    // ---------------------------------------------------------------- стан гри
-    var canvas = $('c');
-    var tagsCanvas = $('tags');
-    var tagsCtx = null;
-    var R = null;                         // головний малювальник
-    var terrain = [], propsGeo = null, decalsGeo = null, discGeo = null;
-    var charModel = null;
-    var carModels = {};
-    var W = 1, H = 1, DPR = 1, renderScale = 1;
-
-    var started = false, firstFrameDone = false;
-    var myId = -1, myNick = '';
-    var walker = null;
-    var driving = false;
-    var myCar = null;                     // { type, cid, x,y,z, ry, pitch, roll, speed, steer, wheel, ... } або null
-    var pendingSpawn = false;
-    var lastSpawnAt = -1e9;
-    var remotes = {};                     // id -> гравець
-    var remoteCars = {};                  // id власника -> машина
-    var myPose = null;
-    var cam = Cam.create({ yaw: 0, pitch: 0.35, dist: 14 });
-    var settings = { invertCamera: false };
-    var lastDragAt = -1e9;
-
-    var input = { sx: 0, sy: 0, jump: false, keys: {}, gas: false, rev: false, left: false, right: false };
-
-    var VP = new Float32Array(16), V = new Float32Array(16), P = new Float32Array(16);
-    var eye = { x: 0, y: 0, z: 0, dist: 0 };
-    var camTarget = { x: 0, y: 0, z: 0 };
-
-    // ---------------------------------------------------------------- пози персонажа
-    function newPose() { return { ph: 0, hL: 0, kL: 0, hR: 0, kR: 0, sL: 0, eL: 0, sR: 0, eR: 0, az: 0, bob: 0, lean: 0 }; }
-    var T = { hL: 0, kL: 0, hR: 0, kR: 0, sL: 0, eL: 0, sR: 0, eR: 0, az: 0, bob: 0, lean: 0 };
-
-    // mode: 0 стоїть, 1 іде, 2 у повітрі, 3 сидить у машині. Кути: додатній обертає кінцівку назад, від'ємний — уперед.
-    function updatePose(p, mode, speed, dt, steer) {
-        T.hL = T.kL = T.hR = T.kR = T.sL = T.eL = T.sR = T.eR = T.az = T.bob = T.lean = 0;
-        if (mode === 3) {
-            T.hL = T.hR = -1.5; T.kL = T.kR = 1.45;
-            T.sL = T.sR = -1.15 - 0.1 * Math.abs(steer);
-            T.eL = T.eR = -0.5;
-            T.sL += steer * 0.18; T.sR -= steer * 0.18;
-            T.lean = 0.04;
-        } else if (mode === 2) {
-            T.sL = T.sR = -2.55; T.az = 0.28;
-            T.hL = -0.55; T.kL = 0.9; T.hR = 0.35; T.kR = 0.35;
-            T.eL = T.eR = -0.2;
-        } else if (mode === 1) {
-            var f = clamp(speed / 16, 0.4, 1.15);
-            p.ph += dt * (6.2 + 4 * f);
-            var s = Math.sin(p.ph), c = Math.cos(p.ph), amp = 0.78 * f;
-            T.hL = s * amp; T.hR = -s * amp;
-            T.kL = 1.15 * amp * Math.max(0, -c); T.kR = 1.15 * amp * Math.max(0, c);
-            T.sL = -s * amp * 0.95; T.sR = s * amp * 0.95;
-            T.eL = -0.35 - 0.25 * Math.max(0, -T.sL); T.eR = -0.35 - 0.25 * Math.max(0, -T.sR);
-            T.bob = Math.abs(s) * 0.11 * f;
-            T.lean = 0.1 * f;
-        } else {
-            p.ph += dt * 1.8;
-            var sw = Math.sin(p.ph);
-            T.sL = sw * 0.05; T.sR = -sw * 0.05;
-            T.eL = T.eR = -0.12;
-            T.bob = (sw * 0.5 + 0.5) * 0.03;
-        }
-        var k = Math.min(1, dt * (mode === 3 ? 10 : 18));
-        p.hL += (T.hL - p.hL) * k; p.kL += (T.kL - p.kL) * k;
-        p.hR += (T.hR - p.hR) * k; p.kR += (T.kR - p.kR) * k;
-        p.sL += (T.sL - p.sL) * k; p.eL += (T.eL - p.eL) * k;
-        p.sR += (T.sR - p.sR) * k; p.eR += (T.eR - p.eR) * k;
-        p.az += (T.az - p.az) * k; p.bob += (T.bob - p.bob) * k; p.lean += (T.lean - p.lean) * k;
-    }
-
-    // ---------------------------------------------------------------- малювання персонажа
-    var stk = new Float32Array(16);
-    var stackM = [];
-    for (var si = 0; si < 10; si++) stackM.push(new Float32Array(16));
-    var sp = 0;
-    function push() { M.copy(stackM[sp++], stk); }
-    function pop() { M.copy(stk, stackM[--sp]); }
-
-    function drawChar(r, base, p, tint) {
-        var C = charModel.dims, parts = charModel.meshes;
-        M.copy(stk, base);
-        push();
-        M.translate(stk, 0, p.bob, 0);
-        if (p.lean) {
-            M.translate(stk, 0, C.hipY, 0); M.rotateX(stk, -p.lean); M.translate(stk, 0, -C.hipY, 0);
-        }
-        r.draw(parts.torso, stk, tint);
-        r.draw(parts.head, stk, tint);
-        // руки: плече -> лікоть
-        [[1, p.sL, p.eL], [-1, p.sR, p.eR]].forEach(function (a) {
-            push();
-            M.translate(stk, a[0] * C.shoulderX, C.shoulderY, 0);
-            M.rotateZ(stk, a[0] * p.az);
-            M.rotateX(stk, a[1]);
-            r.draw(parts.upperArm, stk, tint);
-            M.translate(stk, 0, -C.upperArm, 0);
-            M.rotateX(stk, a[2]);
-            r.draw(parts.foreArm, stk, tint);
-            pop();
-        });
-        pop();
-        // ноги: стегно -> коліно (тулуб не нахиляємо разом із ногами)
-        push();
-        M.translate(stk, 0, p.bob, 0);
-        [[1, p.hL, p.kL], [-1, p.hR, p.kR]].forEach(function (a) {
-            push();
-            M.translate(stk, a[0] * C.hipX, C.hipY, 0);
-            M.rotateX(stk, a[1]);
-            r.draw(parts.thigh, stk, tint);
-            M.translate(stk, 0, -C.thigh, 0);
-            M.rotateX(stk, a[2]);
-            r.draw(parts.shin, stk, tint);
-            pop();
-        });
-        pop();
-    }
-
-    // ---------------------------------------------------------------- малювання машини
-    var carBase = new Float32Array(16);
-    var seatBase = new Float32Array(16);
-    var wheelM = new Float32Array(16);
-
-    function carMatrix(out, c) {
-        M.ident(out);
-        M.translate(out, c.x, c.y, c.z);
-        M.rotateY(out, c.ry);
-        M.rotateX(out, -(c.pitch || 0));
-        M.rotateZ(out, -(c.roll || 0));
-        return out;
-    }
-
-    function drawCarOpaque(r, c, tint) {
-        var mdl = carModels[c.type];
-        if (!mdl) return;
-        carMatrix(carBase, c);
-        r.draw(mdl.opaqueMesh, carBase, tint, 1, 0.35);
-        var steerAng = -(c.steer || 0) * 0.9;
-        for (var i = 0; i < mdl.wheelPos.length; i++) {
-            var w = mdl.wheelPos[i];
-            M.copy(wheelM, carBase);
-            M.translate(wheelM, w.x, w.y, w.z);
-            if (w.steer) M.rotateY(wheelM, steerAng);
-            M.rotateX(wheelM, c.wheel || 0);
-            r.draw(mdl.wheelMesh, wheelM, null, 1, 0.15);
-        }
-    }
-    function drawCarGlass(r, c) {
-        var mdl = carModels[c.type];
-        if (!mdl) return;
-        carMatrix(carBase, c);
-        r.draw(mdl.glassMesh, carBase, null, 0.5, 0.9);
-    }
-    // Персонаж за кермом: матриця машини -> місце водія
-    function drawSeated(r, c, pose, tint) {
-        var mdl = carModels[c.type];
-        if (!mdl) return;
-        carMatrix(seatBase, c);
-        M.translate(seatBase, mdl.seat[0], mdl.seat[1], mdl.seat[2]);
-        M.scale(seatBase, CHAR_SEAT_SCALE, CHAR_SEAT_SCALE, CHAR_SEAT_SCALE);
-        M.translate(seatBase, 0, -charModel.dims.hipY, 0);
-        drawChar(r, seatBase, pose, tint);
-    }
-
-    // ---------------------------------------------------------------- побудова світу
-    var shadowM = new Float32Array(16);
-    function buildDisc() {
-        var g = Models.newGeo(), seg = 20;
-        g.pos.push(0, 0, 0); g.nrm.push(0, 1, 0); g.col.push(1, 1, 1);
-        for (var i = 0; i < seg; i++) {
-            var a = (i / seg) * Math.PI * 2;
-            g.pos.push(Math.cos(a), 0, Math.sin(a)); g.nrm.push(0, 1, 0); g.col.push(1, 1, 1);
-        }
-        for (var j = 0; j < seg; j++) g.idx.push(0, 1 + j, 1 + ((j + 1) % seg));
-        return g;
-    }
-
-    function buildAssets() {
-        var ch = Models.buildCharacter();
-        charModel = { dims: ch.dims, meshes: {} };
-        for (var k in ch.parts) charModel.meshes[k] = R.mesh(ch.parts[k]);
-        CAR_TYPES.forEach(function (t) {
-            var c = Models.buildCar(t);
-            carModels[t] = {
-                opaqueMesh: R.mesh(c.opaque), glassMesh: R.mesh(c.glass), wheelMesh: R.mesh(c.wheel),
-                wheelPos: c.wheelPos, seat: c.seat, height: c.height, len: c.len, wid: c.wid
-            };
-        });
-        if (terrain.length === 0) {
-            terrain = Models.buildTerrain(World, TIER_CFG.cell, 40);
-            propsGeo = Models.buildProps(World);
-            decalsGeo = Models.buildDecals(World);
-            discGeo = buildDisc();
-        }
-        terrain.forEach(function (c) { c.mesh = R.mesh(c.geo); });
-        R.propsMesh = R.mesh(propsGeo);
-        R.decalsMesh = R.mesh(decalsGeo);
-        R.discMesh = R.mesh(discGeo);
-    }
-
-    function drawShadow(r, x, z, rx, rz, ry, alpha) {
-        var gy = World.heightAt(x, z) + 0.1;
-        M.ident(shadowM);
-        M.translate(shadowM, x, gy, z);
-        M.rotateY(shadowM, ry);
-        M.scale(shadowM, rx, 1, rz);
-        r.draw(R.discMesh, shadowM, [0, 0, 0], alpha, 0);
-    }
-
-    // ---------------------------------------------------------------- інтерполяція отриманих станів
-    function pushSnap(list, s) {
-        s.t = nowMs() / 1000;
-        list.push(s);
-        if (list.length > 14) list.shift();
-    }
-    // Знімає стан у момент rt (секунди). Між двома пакетами — плавний перехід, після останнього — коротка екстраполяція
-    function sampleSnaps(list, rt, out, isCar) {
-        var n = list.length;
-        if (n === 0) return false;
-        var a, b, k;
-        if (rt <= list[0].t) { a = b = list[0]; k = 0; }
-        else if (rt >= list[n - 1].t) { a = b = list[n - 1]; k = 0; }
-        else {
-            for (var i = n - 1; i > 0; i--) {
-                if (list[i - 1].t <= rt) { a = list[i - 1]; b = list[i]; break; }
-            }
-            k = (rt - a.t) / Math.max(1e-4, b.t - a.t);
-        }
-        out.x = a.x + (b.x - a.x) * k;
-        out.y = a.y + (b.y - a.y) * k;
-        out.z = a.z + (b.z - a.z) * k;
-        out.ry = a.ry + angDiff(a.ry, b.ry) * k;
-        out.a = b.a; out.d = b.d;
-        if (isCar) {
-            out.speed = a.speed + (b.speed - a.speed) * k;
-            out.steer = a.steer + (b.steer - a.steer) * k;
-            if (rt > list[n - 1].t) {
-                var ex = Math.min(rt - list[n - 1].t, 0.15);
-                out.x += Math.sin(out.ry) * out.speed * ex;
-                out.z += Math.cos(out.ry) * out.speed * ex;
-            }
-        }
-        // старі пакети більше не потрібні
-        while (list.length > 3 && list[1].t < rt - 0.4) list.shift();
-        return true;
-    }
-
-    // ---------------------------------------------------------------- гравці й машини зі списків сервера
-    function makeRemote(id, nick) {
-        return { id: id, nick: nick || '', snaps: [], x: 0, y: 0, z: 0, ry: 0, a: 0, d: 0, speed: 0, has: false, pose: newPose(), px: 0, pz: 0 };
-    }
-    function addRemote(id, nick) {
-        if (id === myId) return null;
-        if (remotes[id]) { if (nick) remotes[id].nick = nick; return remotes[id]; }
-        remotes[id] = makeRemote(id, nick);
-        return remotes[id];
-    }
-    function applyRoster(list) {
-        var seen = {};
-        for (var i = 0; i < list.length; i++) {
-            var p = list[i];
-            if (!p || p.id === myId) continue;
-            seen[p.id] = true;
-            addRemote(p.id, p.nick);
-        }
-        for (var id in remotes) if (!seen[id]) delete remotes[id];
-    }
-    function remoteSnap(r, x, y, z, ry, a, d, first) {
-        var s = { x: x, y: y, z: z, ry: ry, a: a, d: d };
-        if (first) r.snaps.length = 0;
-        pushSnap(r.snaps, s);
-        if (first) { s.t -= 1; r.has = true; r.px = x; r.pz = z; }
-        r.has = true;
-    }
-
-    function newRemoteCar(e) {
-        return { id: e.id, cid: e.cid, type: e.type, snaps: [], x: e.x, y: e.y, z: e.z, ry: e.ry, pitch: 0, roll: 0, speed: 0, steer: 0, wheel: 0 };
-    }
-    function carSnap(rc, x, y, z, ry, speed, steer, first) {
-        var s = { x: x, y: y, z: z, ry: ry, speed: speed || 0, steer: steer || 0, a: 0, d: 0 };
-        if (first) rc.snaps.length = 0;
-        pushSnap(rc.snaps, s);
-        if (first) s.t -= 1;
-    }
-
-    function removeMyCarLocal() {
-        myCar = null;
-        pendingSpawn = false;
-        if (driving) setDriving(false, true);
-    }
-
-    // Повний список машин від сервера: створює нові, оновлює тип, прибирає зниклі
-    function applyCars(list) {
-        var seen = {};
-        for (var i = 0; i < list.length; i++) {
-            var e = list[i];
-            if (!e || typeof e.id !== 'number' || CAR_TYPES.indexOf(e.type) < 0) continue;
-            if (e.id === myId) {
-                seen.me = true;
-                if (pendingSpawn) continue;                              // ще чекаємо відповідь на мій spawn
-                if (!myCar || myCar.cid !== e.cid) {
-                    // Сервер тримає іншу мою машину (повторне підключення, інший пристрій): беремо її
-                    var wasDriving = driving;
-                    myCar = Phys.createCar(e.type, +e.x, +e.z, +e.ry);
-                    myCar.cid = e.cid;
-                    if (wasDriving) setDriving(false, true);
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                AsyncImage(
+                    model = bloxImageModel("realistic_cars.jpg", REALISTIC_CARS_URL),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(120.dp).clip(RoundedCornerShape(10.dp))
+                )
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        BloxGame.GAME_TITLE,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.Black,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Box(
+                        modifier = Modifier
+                            .width(132.dp)
+                            .height(46.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(BloxBlue)
+                            .clickable(enabled = !starting) { starting = true },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (starting) {
+                            CircularProgressIndicator(color = Color.White, strokeWidth = 3.dp, modifier = Modifier.size(28.dp))
+                        } else {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(32.dp))
+                        }
+                    }
                 }
-                continue;
-            }
-            seen[e.id] = true;
-            var rc = remoteCars[e.id];
-            if (!rc || rc.cid !== e.cid || rc.type !== e.type) {
-                rc = remoteCars[e.id] = newRemoteCar(e);
-                carSnap(rc, +e.x, +e.y, +e.z, +e.ry, 0, 0, true);
             }
         }
-        for (var id in remoteCars) if (!seen[id]) delete remoteCars[id];
-        if (myCar && !seen.me && !pendingSpawn) removeMyCarLocal();      // сервер прибрав мою машину
     }
+}
 
-    function begin(data, isResync) {
-        myId = data.id;
-        myNick = data.nick || '';
-        var s = World.spawnPoint();
-        var sx = isFinite(+data.x) ? +data.x : s.x, sz = isFinite(+data.z) ? +data.z : s.z;
-        if (!walker || !isResync) {
-            walker = Phys.createWalker(sx, sz);
-            walker.ry = Math.PI / 2;
-            myPose = newPose();
-            driving = false;
-            myCar = null;
-            pendingSpawn = false;
-            cam.yaw = walker.ry + Math.PI;
-            document.body.classList.remove('driving');
-        }
-        remotes = {};
-        remoteCars = {};
-        var players = data.players || [];
-        for (var i = 0; i < players.length; i++) {
-            var p = players[i];
-            if (!p || p.id === myId) continue;
-            var r = addRemote(p.id, p.nick);
-            remoteSnap(r, +p.x || 0, +p.y || 0, +p.z || 0, +p.ry || 0, p.a | 0, p.d | 0, true);
-        }
-        applyCars(data.cars || []);
-        started = true;
-        updateCarAct();
+/**
+ * Зв'язок між WebView (3D-світ) і сервером. Гра в WebView сама з мережею не працює: усе йде через сокет застосунку.
+ *  WebView -> застосунок: ready (сторінка готова), started (перший кадр), state (мій стан), fail (немає WebGL).
+ *  Сервер -> WebView: start / resync / roster / tick (див. blox_game/game.js).
+ */
+private class BloxGameController(private val appContext: Context, private val email: String, private val lang: String) {
+    private val main = Handler(Looper.getMainLooper())
+    private var webView: WebView? = null
+
+    /** Перший кадр світу намальовано. */
+    var worldStarted by mutableStateOf(false)
+
+    @Volatile private var disposed = false
+    @Volatile private var joinedOnce = false
+    /** Сторінка гри (game.html) викликала ready(): файли гри завантажились і WebGL запустився. */
+    @Volatile private var pageReady = false
+    private var spawnToken = 0
+    /** Сторінка гри готова, але сервер ще не підтвердив перший вхід. */
+    @Volatile private var pendingFirstJoin = false
+    private var joinToken = 0
+    private var firstAttempts = 0
+    private var joinRetries = 0
+    @Volatile private var lx = 0.0
+    @Volatile private var ly = 4.0
+    @Volatile private var lz = 0.0
+    @Volatile private var lry = 0.0
+
+    private val tickListener = Emitter.Listener { args ->
+        val arr = args.firstOrNull() as? JSONArray
+        if (arr != null) js("KishkaGame.tick($arr)")
     }
-
-    // ---------------------------------------------------------------- водіння: сісти / вийти
-    function setDriving(on, silent) {
-        if (on && !myCar) return;
-        driving = !!on;
-        document.body.classList.toggle('driving', driving);
-        releaseAll();
-        if (driving) {
-            closePanel();
-            myCar.speed = myCar.speed || 0;
-        } else if (myCar && walker && !silent) {
-            // Вийти ліворуч від машини
-            var def = Phys.CARS[myCar.type];
-            var d = def.wid / 2 + 2.6;
-            var nx = myCar.x + Math.cos(myCar.ry) * d, nz = myCar.z - Math.sin(myCar.ry) * d;
-            var c = World.clampToWorld(nx, nz, 2);
-            var o = World.resolveObstacles(c.x, c.z, 1);
-            walker.x = o.x; walker.z = o.z; walker.y = World.heightAt(o.x, o.z) + 0.2;
-            walker.vy = 0; walker.onGround = false; walker.ry = myCar.ry;
-        }
-        updateCarAct();
-    }
-
-    function carNearMe() {
-        if (!myCar || !walker) return false;
-        var dx = walker.x - myCar.x, dz = walker.z - myCar.z;
-        return dx * dx + dz * dz < CAR_NEAR * CAR_NEAR;
-    }
-
-    function updateCarAct() {
-        var b = $('carAct');
-        if (driving) {
-            b.textContent = I18.t('exit_car');
-            b.classList.add('show');
-        } else if (carNearMe()) {
-            b.textContent = I18.t('enter_car');
-            b.classList.add('show');
-        } else {
-            b.classList.remove('show');
+    private val rosterListener = Emitter.Listener { args ->
+        val obj = args.firstOrNull() as? JSONObject
+        if (obj != null) {
+            main.post { updatePlayers(obj.optJSONArray("players")) }
+            js("KishkaGame.roster($obj)")
         }
     }
-
-    // ---------------------------------------------------------------- створення машини
-    function spawnCar(type) {
-        if (CAR_TYPES.indexOf(type) < 0 || !walker) return;
-        var t = nowMs();
-        if (t - lastSpawnAt < SPAWN_COOLDOWN_MS) { toast(I18.t('car_wait')); return; }
-        lastSpawnAt = t;
-        var hadCar = !!myCar;
-        // Якщо сидимо в старій машині — місце беремо біля неї; стару прибираємо перед появою нової
-        var px = driving && myCar ? myCar.x : walker.x, pz = driving && myCar ? myCar.z : walker.z;
-        var py = driving && myCar ? myCar.ry : walker.ry;
-        if (driving) setDriving(false, true);
-        var spot = Phys.spawnSpot(px, pz, py, type);
-        myCar = Phys.createCar(type, spot.x, spot.z, spot.ry);
-        myCar.cid = -1;
-        pendingSpawn = true;
-        closePanel();
-        if (N.carSpawn) call(N.carSpawn, type, spot.x, spot.y, spot.z, spot.ry);
-        else if (standalone) setTimeout(function () { window.KishkaGame.carResult({ ok: true, cid: Math.floor(Math.random() * 1e6) }); }, 60);
-        // Одразу сідаємо за кермо
-        walker.x = myCar.x; walker.z = myCar.z; walker.y = myCar.y;
-        setDriving(true);
-        toast(I18.t(hadCar ? 'car_removed' : 'car_spawned'));
+    private val carsListener = Emitter.Listener { args ->
+        val obj = args.firstOrNull() as? JSONObject
+        if (obj != null) js("KishkaGame.cars($obj)")
     }
-
-    // ---------------------------------------------------------------- кадр: фізика й стан
-    var sendTimer = 0, sinceBeat = 0, lastSent = '', lastCarSent = '', sinceCarBeat = 0;
-
-    function currentMoveDir() {
-        var sx = input.sx, sy = input.sy, k = input.keys;
-        if (sx === 0 && sy === 0) {
-            sx = (k.ArrowRight || k.KeyD ? 1 : 0) - (k.ArrowLeft || k.KeyA ? 1 : 0);
-            sy = (k.ArrowUp || k.KeyW ? 1 : 0) - (k.ArrowDown || k.KeyS ? 1 : 0);
-        }
-        var mag = Math.sqrt(sx * sx + sy * sy);
-        if (mag > 1) { sx /= mag; sy /= mag; mag = 1; }
-        // вперед відносно камери: від камери до гравця
-        var fx = -Math.sin(cam.yaw), fz = -Math.cos(cam.yaw);
-        var rx = Math.cos(cam.yaw), rz = -Math.sin(cam.yaw);
-        return { mx: fx * sy + rx * sx, mz: fz * sy + rz * sx, mag: mag };
+    private val carTickListener = Emitter.Listener { args ->
+        val arr = args.firstOrNull() as? JSONArray
+        if (arr != null) js("KishkaGame.carTick($arr)")
     }
-
-    function stepLocal(dt) {
-        var k = input.keys;
-        if (driving && myCar) {
-            var th = (input.gas || k.ArrowUp || k.KeyW ? 1 : 0) - (input.rev || k.ArrowDown || k.KeyS ? 1 : 0);
-            var st = (input.right || k.ArrowRight || k.KeyD ? 1 : 0) - (input.left || k.ArrowLeft || k.KeyA ? 1 : 0);
-            Phys.stepMany(dt, function (h) { Phys.stepCar(myCar, { throttle: th, steer: st }, h); });
-            walker.x = myCar.x; walker.y = myCar.y; walker.z = myCar.z; walker.ry = myCar.ry;
-            walker.a = 0; walker.speed = 0;
-            return;
-        }
-        var dir = currentMoveDir();
-        var jump = input.jump || k.Space;
-        Phys.stepMany(dt, function (h) {
-            Phys.stepWalker(walker, { mx: dir.mx * dir.mag, mz: dir.mz * dir.mag, jump: jump }, h);
-        });
-        // Припаркована машина докочується до зупинки
-        if (myCar && (Math.abs(myCar.speed) > 0.05 || myCar.air)) {
-            Phys.stepMany(dt, function (h) { Phys.stepCar(myCar, { throttle: 0, steer: 0 }, h); });
-        }
-    }
-
-    function sendState(dt) {
-        sendTimer += dt * 1000;
-        sinceBeat += dt * 1000;
-        sinceCarBeat += dt * 1000;
-        if (sendTimer < SEND_EVERY_MS) return;
-        sendTimer = 0;
-        var r2 = function (v) { return Math.round(v * 100) / 100; };
-        var o = { x: r2(walker.x), y: r2(walker.y), z: r2(walker.z), ry: r2(walker.ry), a: driving ? 0 : walker.a, d: driving ? 1 : 0 };
-        var key = o.x + ',' + o.y + ',' + o.z + ',' + o.ry + ',' + o.a + ',' + o.d;
-        var changed = key !== lastSent;
-        var withCar = false;
-        if (myCar && !pendingSpawn) {
-            var c = { t: myCar.type, x: r2(myCar.x), y: r2(myCar.y), z: r2(myCar.z), ry: r2(myCar.ry), s: r2(myCar.speed), st: r2(myCar.steer) };
-            var ck = c.x + ',' + c.y + ',' + c.z + ',' + c.ry + ',' + c.s + ',' + c.st;
-            if (ck !== lastCarSent || sinceCarBeat > 1500) {
-                o.c = c; withCar = true; lastCarSent = ck; sinceCarBeat = 0;
+    private val kickedListener = Emitter.Listener { args ->
+        // Цей акаунт зайшов у гру з іншого пристрою (або сервер не отримував від гри даних 60 с)
+        val reason = (args.firstOrNull() as? JSONObject)?.optString("reason", "") ?: ""
+        Log.w(BLOX_TAG, "сервер відключив від гри: reason=" + reason)
+        main.post {
+            if (!disposed) {
+                Notice.show(BloxStrings.get(if (reason == "timeout") "kicked_timeout" else "kicked_other", lang))
+                exitGame(false)
             }
         }
-        if (!changed && !withCar && sinceBeat < 1000) return;
-        sinceBeat = 0;
-        lastSent = key;
-        var json = JSON.stringify(o);
-        if (N.sendState) call(N.sendState, json);
-        else if (N.oldState) call(N.oldState, o.x, o.y, o.z, o.ry, o.a);
+    }
+    private val disconnectListener = Emitter.Listener { args ->
+        Log.w(BLOX_TAG, "зв'язок із сервером втрачено: " + (args.firstOrNull() ?: "?"))
+    }
+    private val connectListener = Emitter.Listener {
+        // Зв'язок із сервером відновився: сервер забув нас, коли той обірвався, — заходимо знову на тому ж місці
+        main.post { if (!disposed && (joinedOnce || pendingFirstJoin)) join(!joinedOnce) }
     }
 
-    // ---------------------------------------------------------------- віддалені гравці й машини
-    var snapOut = { x: 0, y: 0, z: 0, ry: 0, a: 0, d: 0, speed: 0, steer: 0 };
-
-    function updateRemotes(dt) {
-        var rt = nowMs() / 1000 - INTERP_DELAY;
-        var id;
-        for (id in remoteCars) {
-            var rc = remoteCars[id];
-            if (!sampleSnaps(rc.snaps, rt, snapOut, true)) continue;
-            var def = Phys.CARS[rc.type];
-            var g = Phys.groundSample(def, { x: snapOut.x, z: snapOut.z, ry: snapOut.ry });
-            rc.x = snapOut.x; rc.z = snapOut.z; rc.ry = snapOut.ry; rc.y = Math.max(snapOut.y, g.y - 0.5);
-            rc.pitch = g.pitch; rc.roll = g.roll; rc.speed = snapOut.speed; rc.steer = snapOut.steer;
-            rc.wheel += (rc.speed * dt) / def.wheelR;
-        }
-        for (id in remotes) {
-            var r = remotes[id];
-            if (!r.has || !sampleSnaps(r.snaps, rt, snapOut, false)) continue;
-            var ox = r.x, oz = r.z;
-            r.x = snapOut.x; r.y = snapOut.y; r.z = snapOut.z; r.ry = snapOut.ry; r.a = snapOut.a; r.d = snapOut.d;
-            var sp = Math.sqrt((r.x - ox) * (r.x - ox) + (r.z - oz) * (r.z - oz)) / Math.max(dt, 0.001);
-            if (sp > 80) sp = 0;                         // телепорт (повторний вхід) — не «біг»
-            r.speed += (sp - r.speed) * Math.min(1, dt * 8);
-            var inCar = r.d === 1 && remoteCars[id];
-            var mode = inCar ? 3 : (r.a === 2 ? 2 : (r.speed > 1.5 || r.a === 1 ? 1 : 0));
-            updatePose(r.pose, mode, r.speed > 1.5 ? r.speed : 16, dt, inCar ? remoteCars[id].steer : 0);
-        }
-    }
-
-    // ---------------------------------------------------------------- камера
-    function updateCamera(dt) {
-        var tx, ty, tz;
-        if (driving && myCar) { tx = myCar.x; ty = myCar.y + 2.8; tz = myCar.z; }
-        else { tx = walker.x; ty = walker.y + 3.2; tz = walker.z; }
-        camTarget.x = tx; camTarget.y = ty; camTarget.z = tz;
-        // У машині камера сама м'яко повертається за нею, поки гравець не крутить її пальцем
-        if (driving && myCar && Math.abs(myCar.speed) > 3 && nowMs() - lastDragAt > 1500) {
-            Cam.followYaw(cam, myCar.ry + (myCar.speed >= 0 ? Math.PI : 0), dt, 1.3);
-        }
-        Cam.eye(cam, camTarget, World.heightAt, eye);
-        M.lookAt(V, eye.x, eye.y, eye.z, tx, ty, tz);
-        M.perspective(P, 70 * Math.PI / 180, W / H, 0.4, TIER_CFG.far);
-        M.mul(VP, P, V);
-    }
-
-    // ---------------------------------------------------------------- малювання кадру
-    function render() {
-        // Горизонт на екрані: камера над землею й дивиться вниз -> горизонт вище центру
-        var horizon = clamp(Math.tan(cam.pitch) / Math.tan(35 * Math.PI / 180), -3, 3);
-        R.begin(VP, [eye.x, eye.y, eye.z], canvas.width, canvas.height);
-        R.sky(horizon);
-
-        var i, c;
-        // Рельєф: показуємо лише шматки, що можуть бути перед камерою
-        var fx = camTarget.x - eye.x, fy = camTarget.y - eye.y, fz = camTarget.z - eye.z;
-        var fl = Math.sqrt(fx * fx + fy * fy + fz * fz) || 1;
-        fx /= fl; fz /= fl;
-        var maxD = TIER_CFG.fogFar + 120;
-        for (i = 0; i < terrain.length; i++) {
-            c = terrain[i];
-            var dx = c.cx - eye.x, dz = c.cz - eye.z;
-            var d = Math.sqrt(dx * dx + dz * dz);
-            if (d > maxD + c.radius) continue;
-            if (d > c.radius && (dx * fx + dz * fz) / d < -0.35 - c.radius / d) continue;
-            R.draw(c.mesh, M.ident(stk), null, 1, 0);
-        }
-        R.offset(true);
-        R.draw(R.decalsMesh, M.ident(stk), null, 1, 0);
-        R.offset(false);
-        R.draw(R.propsMesh, M.ident(stk), null, 1, 0);
-
-        // Машини й персонажі
-        var hideMe = !driving && eye.dist < 1.8;
-        var id;
-        if (myCar) drawCarOpaque(R, myCar);
-        for (id in remoteCars) drawCarOpaque(R, remoteCars[id]);
-        if (driving && myCar) { if (eye.dist > 2.2) drawSeated(R, myCar, myPose); }
-        else if (!hideMe) {
-            M.ident(stk); M.translate(stk, walker.x, walker.y, walker.z); M.rotateY(stk, walker.ry);
-            drawChar(R, stk, myPose);
-        }
-        var drawnBase = new Float32Array(16);
-        for (id in remotes) {
-            var r = remotes[id];
-            if (!r.has) continue;
-            if (r.d === 1 && remoteCars[id]) { drawSeated(R, remoteCars[id], r.pose); continue; }
-            M.ident(drawnBase); M.translate(drawnBase, r.x, r.y, r.z); M.rotateY(drawnBase, r.ry);
-            drawChar(R, drawnBase, r.pose);
-        }
-
-        // М'які тіні й прозоре скло
-        R.blend(true);
-        R.offset(true);
-        if (myCar) { var d0 = Phys.CARS[myCar.type]; drawShadow(R, myCar.x, myCar.z, d0.wid * 0.62, d0.len * 0.56, myCar.ry, 0.3); }
-        for (id in remoteCars) { var rc = remoteCars[id], d1 = Phys.CARS[rc.type]; drawShadow(R, rc.x, rc.z, d1.wid * 0.62, d1.len * 0.56, rc.ry, 0.3); }
-        if (!driving && !hideMe) {
-            var h = Math.max(0, walker.y - World.heightAt(walker.x, walker.z));
-            drawShadow(R, walker.x, walker.z, 1.5, 1.5, 0, clamp(0.32 - h * 0.012, 0.08, 0.32));
-        }
-        for (id in remotes) {
-            var q = remotes[id];
-            if (!q.has || (q.d === 1 && remoteCars[id])) continue;
-            drawShadow(R, q.x, q.z, 1.5, 1.5, 0, clamp(0.32 - Math.max(0, q.y - World.heightAt(q.x, q.z)) * 0.012, 0.08, 0.32));
-        }
-        R.offset(false);
-        if (myCar) drawCarGlass(R, myCar);
-        for (id in remoteCars) drawCarGlass(R, remoteCars[id]);
-        R.blend(false);
-    }
-
-    function drawTags() {
-        if (!tagsCtx) return;
-        tagsCtx.clearRect(0, 0, tagsCanvas.width, tagsCanvas.height);
-        if (!SHOW_NAMETAGS) return;
-        tagsCtx.font = 'bold ' + Math.round(13 * DPR * renderScale) + 'px sans-serif';
-        tagsCtx.textAlign = 'center';
-        tagsCtx.textBaseline = 'bottom';
-        tagsCtx.lineWidth = 3 * DPR * renderScale;
-        tagsCtx.strokeStyle = 'rgba(0,0,0,0.65)';
-        tagsCtx.fillStyle = '#ffffff';
-        var list = [];
-        if (myNick && (driving || eye.dist >= 1.8)) {
-            var my = driving && myCar ? myCar.y + (carModels[myCar.type] ? carModels[myCar.type].height : 4) + 1.2 : walker.y + 5.9;
-            list.push({ nick: myNick, x: driving && myCar ? myCar.x : walker.x, y: my, z: driving && myCar ? myCar.z : walker.z });
-        }
-        var id;
-        for (id in remotes) {
-            var r = remotes[id];
-            if (!r.has || !r.nick) continue;
-            var inCar = r.d === 1 && remoteCars[id];
-            list.push({ nick: r.nick, x: r.x, y: inCar ? r.y + (carModels[remoteCars[id].type] ? carModels[remoteCars[id].type].height : 4) + 1.2 : r.y + 5.9, z: r.z });
-        }
-        for (var i = 0; i < list.length; i++) {
-            var c = list[i];
-            var dx = c.x - eye.x, dy = c.y - eye.y, dz = c.z - eye.z;
-            if (Math.sqrt(dx * dx + dy * dy + dz * dz) > 150) continue;
-            var cw = VP[3] * c.x + VP[7] * c.y + VP[11] * c.z + VP[15];
-            if (cw <= 0.01) continue;
-            var cx = (VP[0] * c.x + VP[4] * c.y + VP[8] * c.z + VP[12]) / cw;
-            var cy = (VP[1] * c.x + VP[5] * c.y + VP[9] * c.z + VP[13]) / cw;
-            if (cx < -1.1 || cx > 1.1 || cy < -1.1 || cy > 1.1) continue;
-            var px = (cx * 0.5 + 0.5) * tagsCanvas.width;
-            var py = (1 - (cy * 0.5 + 0.5)) * tagsCanvas.height;
-            tagsCtx.strokeText(c.nick, px, py);
-            tagsCtx.fillText(c.nick, px, py);
-        }
-    }
-
-    // ---------------------------------------------------------------- розмір екрана й адаптивна якість
-    function resize() {
-        DPR = Math.min(window.devicePixelRatio || 1, TIER_CFG.dpr);
-        var cssW = window.innerWidth || 1, cssH = window.innerHeight || 1;
-        W = Math.max(1, Math.round(cssW * DPR * renderScale));
-        H = Math.max(1, Math.round(cssH * DPR * renderScale));
-        canvas.width = W; canvas.height = H;
-        tagsCanvas.width = W; tagsCanvas.height = H;
-    }
-
-    var perf = { acc: 0, n: 0, goodFor: 0 };
-    function adaptQuality(dt) {
-        perf.acc += dt; perf.n++;
-        if (perf.n < 45) return;
-        var avg = perf.acc / perf.n;
-        perf.acc = 0; perf.n = 0;
-        if (avg > 0.033 && renderScale > 0.55) {
-            renderScale = Math.max(0.55, renderScale - 0.12);
-            perf.goodFor = 0;
-            resize();
-            nlog('швидкість ' + Math.round(1 / avg) + ' к/с: зменшую роздільну здатність до ' + renderScale.toFixed(2));
-        } else if (avg < 0.019) {
-            perf.goodFor++;
-            if (perf.goodFor >= 4 && renderScale < 1) {
-                renderScale = Math.min(1, renderScale + 0.08);
-                perf.goodFor = 0;
-                resize();
-            }
-        } else {
-            perf.goodFor = 0;
-        }
-    }
-
-    // ---------------------------------------------------------------- підказка зверху
-    var toastTimer = 0;
-    function toast(text) {
-        var el = $('toast');
-        el.textContent = text;
-        el.classList.add('show');
-        clearTimeout(toastTimer);
-        toastTimer = setTimeout(function () { el.classList.remove('show'); }, 2200);
-    }
-
-    // ---------------------------------------------------------------- вікно вибору машин
-    var selectedType = null;
-    var previews = null;                      // type -> dataURL (або null, якщо не вдалося намалювати)
-
-    var CAR_ICONS = {
-        sedan: '<svg viewBox="0 0 48 30"><path d="M4 21v-5l4-9h26l6 9h4v5h-4a5 5 0 0 1-10 0H17a5 5 0 0 1-10 0H4z" fill="#ff6b6b"/><path d="M12 9h9v7h-13zM24 9h8l4 7H24z" fill="#cfe4ff"/><circle cx="12" cy="22" r="3.6" fill="#22283a"/><circle cx="35" cy="22" r="3.6" fill="#22283a"/></svg>',
-        van: '<svg viewBox="0 0 48 30"><path d="M3 22V8l3-3h28l8 8v9h-3a5 5 0 0 1-10 0H15a5 5 0 0 1-10 0H3z" fill="#ffc83d"/><path d="M8 8h8v6H7zM19 8h8v6h-8zM30 8h4l5 6h-9z" fill="#cfe4ff"/><circle cx="11" cy="23" r="3.6" fill="#22283a"/><circle cx="35" cy="23" r="3.6" fill="#22283a"/></svg>',
-        truck: '<svg viewBox="0 0 48 30"><path d="M2 6h24v16H2z" fill="#eef0f4"/><path d="M26 10h10l6 7v5H26z" fill="#3a7be0"/><path d="M29 12h6l4 5h-10z" fill="#cfe4ff"/><circle cx="10" cy="23" r="3.6" fill="#22283a"/><circle cx="20" cy="23" r="3.6" fill="#22283a"/><circle cx="36" cy="23" r="3.6" fill="#22283a"/></svg>'
-    };
-
-    // Малюємо кожну машину в маленькому окремому WebGL-вікні й показуємо як картинку
-    function makePreviews() {
-        previews = {};
-        var pc = document.createElement('canvas');
-        pc.width = 480; pc.height = 300;
-        var pr = null;
+    init {
         try {
-            pr = createRenderer(pc, { alpha: true, aa: true, preserve: true, fogNear: 900, fogFar: 1000 });
-            var vp = new Float32Array(16), pv = new Float32Array(16), pp = new Float32Array(16), pm = new Float32Array(16), sh = new Float32Array(16);
-            var disc = Models.newGeo();
-            var dsc = buildDisc();
-            CAR_TYPES.forEach(function (t) {
-                var mdl = Models.buildCar(t);
-                var op = pr.mesh(mdl.opaque), gl = pr.mesh(mdl.glass), wh = pr.mesh(mdl.wheel);
-                var dist = mdl.len * 1.45;
-                var ex = dist * 0.62, ey = mdl.height * 0.95 + 2.4, ez = dist * 0.82;
-                M.lookAt(pv, ex, ey, ez, 0, mdl.height * 0.42, 0);
-                M.perspective(pp, 34 * Math.PI / 180, 480 / 300, 1, 400);
-                M.mul(vp, pp, pv);
-                pr.begin(vp, [ex, ey, ez], 480, 300, [0, 0, 0, 0]);
-                M.ident(sh); M.scale(sh, mdl.wid * 0.75, 1, mdl.len * 0.62);
-                M.translate(sh, 0, 0.05, 0);
-                pr.blend(true);
-                pr.draw(pr.mesh(dsc), sh, [0, 0, 0], 0.28, 0);
-                pr.blend(false);
-                M.ident(pm);
-                pr.draw(op, pm, null, 1, 0.35);
-                mdl.wheelPos.forEach(function (w) {
-                    M.ident(pm); M.translate(pm, w.x, w.y, w.z);
-                    pr.draw(wh, pm, null, 1, 0.15);
-                });
-                M.ident(pm);
-                pr.blend(true);
-                pr.draw(gl, pm, null, 0.5, 0.9);
-                pr.blend(false);
-                previews[t] = pc.toDataURL('image/png');
-            });
-        } catch (e) {
-            nlog('попередній перегляд машин не вдалося намалювати: ' + (e && e.message));
-            CAR_TYPES.forEach(function (t) { if (!previews[t]) previews[t] = null; });
+            val s = KishkaManager.getSocket()
+            s.on("blox_game_tick", tickListener)
+            s.on("blox_game_roster", rosterListener)
+            s.on("blox_game_cars", carsListener)
+            s.on("blox_car_tick", carTickListener)
+            s.on("blox_game_kicked", kickedListener)
+            s.on(io.socket.client.Socket.EVENT_CONNECT, connectListener)
+            s.on(io.socket.client.Socket.EVENT_DISCONNECT, disconnectListener)
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
-        try {
-            if (pr && pr.gl && pr.gl.getExtension('WEBGL_lose_context')) pr.gl.getExtension('WEBGL_lose_context').loseContext();
-        } catch (e2) { /* ignore */ }
     }
 
-    function renderCarsPanel() {
-        $('carsTitle').textContent = I18.t('cars_title');
-        $('carsClose').setAttribute('aria-label', I18.t('close'));
-        var list = $('carsList');
-        list.innerHTML = '';
-        CAR_TYPES.forEach(function (t) {
-            var card = document.createElement('div');
-            card.className = 'card' + (selectedType === t ? ' sel' : '');
-            card.setAttribute('data-type', t);
-            var pv = previews && previews[t];
-            var media = pv ? '<img class="pv" alt="" src="' + pv + '">' : '<div class="pv" style="aspect-ratio:8/5;display:flex;align-items:center;justify-content:center"><div style="width:62%">' + CAR_ICONS[t] + '</div></div>';
-            card.innerHTML = media +
-                '<div class="nm">' + CAR_ICONS[t] + '<span>' + I18.t(t) + '</span></div>' +
-                '<div class="ht">' + I18.t(t + '_hint') + '</div>';
-            var btn = document.createElement('button');
-            btn.type = 'button';
-            if (selectedType === t) {
-                btn.className = 'btn spawn';
-                btn.textContent = I18.t('spawn');
-                btn.addEventListener('click', function (e) {
-                    e.stopPropagation();
-                    btn.classList.add('pressed');
-                    setTimeout(function () { btn.classList.remove('pressed'); }, 180);
-                    // Короткий «клік», потім машина з'являється
-                    setTimeout(function () { spawnCar(t); }, 120);
-                });
+    private fun safeLang(): String = lang.filter { it.isLetter() }.take(5).ifEmpty { "uk" }
+
+    /** Мова написів і налаштування камери для гри (game.js -> KishkaGame.config). */
+    private fun applyConfig() {
+        js("KishkaGame.config({lang:'" + safeLang() + "',invertCamera:" + BloxGame.invertCamera + "})")
+    }
+
+    fun setInvertCamera(value: Boolean) {
+        BloxGame.saveInvertCamera(appContext, value)
+        applyConfig()
+    }
+
+    inner class Bridge {
+        @JavascriptInterface
+        fun ready() {
+            main.post {
+                if (!disposed) {
+                    pageReady = true
+                    pendingFirstJoin = true
+                    applyConfig()
+                    join(true)
+                }
+            }
+        }
+
+        /** Діагностика гри: потрапляє в Logcat (і в звіти про помилки), а не лише в консоль WebView. */
+        @JavascriptInterface
+        fun log(text: String) {
+            Log.i(BLOX_TAG, "game: " + text.take(300))
+        }
+
+        /** Причина, чому гру не запущено: «webgl: ...» або «script: ...». */
+        @JavascriptInterface
+        fun failReason(text: String) {
+            val kind = text.substringBefore(':').trim()
+            val detail = text.substringAfter(':', "").trim().take(120)
+            main.post { failGame(if (kind == "script") "err_script" else "err_webgl", detail) }
+        }
+
+        /** Мій стан і стан моєї машини одним JSON: {x,y,z,ry,a,d,c?}. Сервер усе перевіряє ще раз. */
+        @JavascriptInterface
+        fun sendState(json: String) {
+            if (disposed) return
+            val o = try {
+                JSONObject(json)
+            } catch (e: Exception) {
+                Log.w(BLOX_TAG, "sendState: гра надіслала некоректний JSON")
+                return
+            }
+            lx = o.optDouble("x", lx); ly = o.optDouble("y", ly); lz = o.optDouble("z", lz); lry = o.optDouble("ry", lry)
+            if (!joinedOnce) return
+            try {
+                val s = KishkaManager.getSocket()
+                if (!s.connected()) return
+                s.emit("blox_game_state", o)
+            } catch (e: Exception) {
+                Log.w(BLOX_TAG, "sendState: " + e.message)
+            }
+        }
+
+        /** Створити мою машину (sedan | van | truck). Результат повертається в KishkaGame.carResult. */
+        @JavascriptInterface
+        fun carSpawn(type: String, x: Double, y: Double, z: Double, ry: Double) {
+            main.post { spawnCar(type, x, y, z, ry) }
+        }
+
+        @JavascriptInterface
+        fun carRemove() {
+            main.post {
+                try {
+                    if (!disposed && joinedOnce) KishkaManager.getSocket().emit("blox_car_remove", JSONObject())
+                } catch (e: Exception) {
+                    Log.w(BLOX_TAG, "carRemove: " + e.message)
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun started() {
+            main.post { if (!disposed) worldStarted = true }
+        }
+
+        @JavascriptInterface
+        fun fail() {
+            main.post { failGame("err_webgl") }
+        }
+
+        @JavascriptInterface
+        fun state(x: Double, y: Double, z: Double, ry: Double, a: Int) {
+            lx = x; ly = y; lz = z; lry = ry
+            if (!joinedOnce || disposed) return
+            try {
+                val s = KishkaManager.getSocket()
+                if (!s.connected()) return
+                s.emit("blox_game_state", JSONObject().put("x", x).put("y", y).put("z", z).put("ry", ry).put("a", a))
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    fun createWebView(ctx: Context): WebView {
+        val wv = WebView(ctx)
+        wv.setBackgroundColor(android.graphics.Color.BLACK)
+        wv.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            allowFileAccess = true
+            allowContentAccess = false
+            cacheMode = WebSettings.LOAD_NO_CACHE
+            mediaPlaybackRequiresUserGesture = false
+            setSupportZoom(false)
+            builtInZoomControls = false
+            displayZoomControls = false
+        }
+        wv.isVerticalScrollBarEnabled = false
+        wv.isHorizontalScrollBarEnabled = false
+        wv.overScrollMode = android.view.View.OVER_SCROLL_NEVER
+        wv.webViewClient = object : WebViewClient() {
+            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                if (request?.isForMainFrame == true) {
+                    main.post { failGame("err_game_files", (error?.description ?: "").toString().take(80)) }
+                }
+            }
+        }
+        // Помилки JavaScript гри — в Logcat
+        wv.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(message: ConsoleMessage?): Boolean {
+                if (message != null && message.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                    Log.w(BLOX_TAG, "js: " + message.message() + " (" + message.sourceId().substringAfterLast('/') + ":" + message.lineNumber() + ")")
+                }
+                return true
+            }
+        }
+        wv.addJavascriptInterface(Bridge(), "Android")
+        webView = wv
+        // Гра запускається з установлених файлів. Перед цим перевіряємо, що вони на місці й цілі (нова версія — лише кнопкою «Оновити»)
+        BloxInstall.verifyForPlay(appContext) { ok ->
+            if (disposed) return@verifyForPlay
+            if (!ok) {
+                failGame("err_game_files")
             } else {
-                btn.className = 'btn pick';
-                btn.textContent = I18.t('select');
-                btn.addEventListener('click', function (e) { e.stopPropagation(); selectCar(t); });
-            }
-            card.appendChild(btn);
-            card.addEventListener('click', function () { if (selectedType !== t) selectCar(t); });
-            list.appendChild(card);
-        });
-    }
-
-    function selectCar(t) { selectedType = t; renderCarsPanel(); }
-    function openPanel() {
-        if (driving) return;
-        if (!previews) makePreviews();
-        if (!selectedType) selectedType = myCar ? myCar.type : CAR_TYPES[0];
-        renderCarsPanel();
-        $('carsPanel').classList.remove('hidden');
-        releaseAll();
-    }
-    function closePanel() { $('carsPanel').classList.add('hidden'); }
-    function panelOpen() { return !$('carsPanel').classList.contains('hidden'); }
-
-    function applyLangToStaticUI() {
-        $('carsBtnText').textContent = I18.t('cars');
-        $('carsBtn').setAttribute('aria-label', I18.t('cars'));
-        $('gas').setAttribute('aria-label', I18.t('gas'));
-        $('rev').setAttribute('aria-label', I18.t('reverse'));
-        $('left').setAttribute('aria-label', I18.t('left'));
-        $('right').setAttribute('aria-label', I18.t('right'));
-        if (panelOpen()) renderCarsPanel();
-        updateCarAct();
-    }
-
-    // ---------------------------------------------------------------- керування пальцями
-    var holds = [];
-    function bindHold(el, setter) {
-        var ptr = null;
-        el.addEventListener('pointerdown', function (e) {
-            if (ptr !== null) return;
-            ptr = e.pointerId;
-            try { el.setPointerCapture(e.pointerId); } catch (x) { /* ignore */ }
-            el.classList.add('down');
-            setter(true);
-            e.preventDefault();
-        });
-        function end(e) {
-            if (ptr === null || e.pointerId !== ptr) return;
-            ptr = null;
-            el.classList.remove('down');
-            setter(false);
-        }
-        el.addEventListener('pointerup', end);
-        el.addEventListener('pointercancel', end);
-        el.addEventListener('lostpointercapture', end);
-        el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
-        holds.push(function () {
-            if (ptr !== null) { ptr = null; el.classList.remove('down'); setter(false); }
-        });
-    }
-    function releaseAll() {
-        for (var i = 0; i < holds.length; i++) holds[i]();
-        input.sx = 0; input.sy = 0; input.jump = false; input.keys = {};
-        var kn = $('knob');
-        if (kn) kn.style.transform = 'translate(0px,0px)';
-        stickPtr = null;
-    }
-
-    var stickEl = $('stick'), knobEl = $('knob');
-    var stickPtr = null, stickCx = 0, stickCy = 0, stickR = 52;
-
-    function updateStick(e) {
-        var dx = e.clientX - stickCx, dy = e.clientY - stickCy;
-        var len = Math.sqrt(dx * dx + dy * dy);
-        if (len > stickR) { dx = dx / len * stickR; dy = dy / len * stickR; }
-        knobEl.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
-        input.sx = dx / stickR;
-        input.sy = -dy / stickR;
-    }
-    function endStick(e) {
-        if (stickPtr === null || e.pointerId !== stickPtr) return;
-        stickPtr = null;
-        input.sx = 0; input.sy = 0;
-        knobEl.style.transform = 'translate(0px,0px)';
-    }
-    stickEl.addEventListener('pointerdown', function (e) {
-        if (stickPtr !== null) return;
-        stickPtr = e.pointerId;
-        try { stickEl.setPointerCapture(e.pointerId); } catch (x) { /* ignore */ }
-        var rc = stickEl.getBoundingClientRect();
-        stickCx = rc.left + rc.width / 2; stickCy = rc.top + rc.height / 2;
-        stickR = rc.width * 0.42;
-        updateStick(e);
-        e.preventDefault();
-    });
-    stickEl.addEventListener('pointermove', function (e) { if (e.pointerId === stickPtr) updateStick(e); });
-    stickEl.addEventListener('pointerup', endStick);
-    stickEl.addEventListener('pointercancel', endStick);
-    stickEl.addEventListener('lostpointercapture', endStick);
-
-    bindHold($('jump'), function (on) { input.jump = on; });
-    bindHold($('gas'), function (on) { input.gas = on; });
-    bindHold($('rev'), function (on) { input.rev = on; });
-    bindHold($('left'), function (on) { input.left = on; });
-    bindHold($('right'), function (on) { input.right = on; });
-
-    $('carsBtn').addEventListener('click', function () { if (panelOpen()) closePanel(); else openPanel(); });
-    $('carsClose').addEventListener('click', closePanel);
-    $('carAct').addEventListener('click', function () {
-        if (driving) setDriving(false);
-        else if (carNearMe()) setDriving(true);
-        else toast(I18.t('car_far'));
-    });
-    ['carsPanel', 'carsBtn', 'carAct'].forEach(function (id) {
-        $(id).addEventListener('pointerdown', function (e) { e.stopPropagation(); });
-    });
-
-    // Камера: один палець — повертає, два пальці — наближення/віддалення
-    var camPtrs = {}, camCount = 0, pinchLast = 0;
-    function pinchDistance() {
-        var ids = Object.keys(camPtrs);
-        if (ids.length < 2) return 0;
-        var a = camPtrs[ids[0]], b = camPtrs[ids[1]];
-        var dx = a.x - b.x, dy = a.y - b.y;
-        return Math.sqrt(dx * dx + dy * dy);
-    }
-    canvas.addEventListener('pointerdown', function (e) {
-        camPtrs[e.pointerId] = { x: e.clientX, y: e.clientY };
-        camCount = Object.keys(camPtrs).length;
-        if (camCount === 2) pinchLast = pinchDistance();
-        try { canvas.setPointerCapture(e.pointerId); } catch (x) { /* ignore */ }
-        e.preventDefault();
-    });
-    canvas.addEventListener('pointermove', function (e) {
-        var p = camPtrs[e.pointerId];
-        if (!p) return;
-        var dx = e.clientX - p.x, dy = e.clientY - p.y;
-        p.x = e.clientX; p.y = e.clientY;
-        if (camCount >= 2) {
-            var d = pinchDistance();
-            if (pinchLast > 0 && d > 0) Cam.pinch(cam, pinchLast, d);
-            pinchLast = d;
-        } else {
-            Cam.drag(cam, dx, dy);
-            lastDragAt = nowMs();
-        }
-    });
-    function endCam(e) {
-        if (!camPtrs[e.pointerId]) return;
-        delete camPtrs[e.pointerId];
-        camCount = Object.keys(camPtrs).length;
-        pinchLast = camCount === 2 ? pinchDistance() : 0;
-    }
-    canvas.addEventListener('pointerup', endCam);
-    canvas.addEventListener('pointercancel', endCam);
-    canvas.addEventListener('lostpointercapture', endCam);
-    canvas.addEventListener('wheel', function (e) { Cam.wheel(cam, e.deltaY); e.preventDefault(); }, { passive: false });
-
-    window.addEventListener('keydown', function (e) { input.keys[e.code] = true; });
-    window.addEventListener('keyup', function (e) { input.keys[e.code] = false; });
-    window.addEventListener('blur', releaseAll);
-    document.addEventListener('visibilitychange', function () { if (document.hidden) releaseAll(); });
-    window.addEventListener('resize', resize);
-    window.addEventListener('orientationchange', function () { setTimeout(resize, 150); });
-
-    // ---------------------------------------------------------------- головний цикл
-    var lastT = 0;
-    function frame(now) {
-        window.requestAnimationFrame(frame);
-        if (!started || !R) { lastT = now; return; }
-        var dt = (now - lastT) / 1000;
-        lastT = now;
-        if (!(dt > 0)) return;
-        dt = Math.min(dt, 0.1);
-
-        stepLocal(dt);
-        // поза мого персонажа
-        var mode = driving ? 3 : (walker.a === 2 ? 2 : (walker.a === 1 ? 1 : 0));
-        updatePose(myPose, mode, walker.speed || 16, dt, driving && myCar ? myCar.steer / 0.6 : 0);
-        updateRemotes(dt);
-        sendState(dt);
-        updateCamera(dt);
-        render();
-        drawTags();
-        adaptQuality(dt);
-        if (!driving && (now | 0) % 6 === 0) updateCarAct();
-        if (!firstFrameDone) {
-            firstFrameDone = true;
-            call(N.started);
-        }
-    }
-
-    // ---------------------------------------------------------------- зв'язок із застосунком
-    window.KishkaGame = {
-        config: function (o) {
-            if (!o) return;
-            if (o.lang) I18.setLang(o.lang);
-            if (o.invertCamera !== undefined) { settings.invertCamera = !!o.invertCamera; cam.invert = settings.invertCamera; }
-            applyLangToStaticUI();
-        },
-        start: function (data) { begin(data, false); },
-        resync: function (data) { begin(data, true); },
-        roster: function (data) { if (data && data.players) applyRoster(data.players); },
-        tick: function (arr) {
-            if (!arr) return;
-            for (var i = 0; i < arr.length; i++) {
-                var t = arr[i], id = t[0];
-                if (id === myId) continue;
-                var r = remotes[id] || addRemote(id, '');
-                if (!r) continue;
-                remoteSnap(r, +t[1], +t[2], +t[3], +t[4], t[5] | 0, t[6] | 0, !r.has);
-            }
-        },
-        cars: function (data) { if (data && data.cars) applyCars(data.cars); },
-        carTick: function (arr) {
-            if (!arr) return;
-            for (var i = 0; i < arr.length; i++) {
-                var t = arr[i], id = t[0];
-                if (id === myId) continue;
-                var rc = remoteCars[id];
-                if (!rc || rc.cid !== t[1]) continue;
-                carSnap(rc, +t[2], +t[3], +t[4], +t[5], +t[6], +t[7], false);
-            }
-        },
-        carResult: function (res) {
-            if (!pendingSpawn) return;
-            pendingSpawn = false;
-            if (res && res.ok) {
-                if (myCar) myCar.cid = res.cid;
-                lastCarSent = '';
-            } else {
-                nlog('сервер не створив машину: ' + (res && res.code));
-                removeMyCarLocal();
-                toast(I18.t(res && res.code === 'rate' ? 'car_wait' : 'car_failed'));
+                wv.loadUrl("file://" + BloxInstall.file(appContext, "game.html").absolutePath)
             }
         }
-    };
+        return wv
+    }
 
-    // Для перевірки у браузері й автотестах
-    window.KishkaGameDebug = {
-        state: function () {
-            return { started: started, driving: driving, car: myCar, walker: walker, cam: { yaw: cam.yaw, pitch: cam.pitch, dist: cam.dist, eyeDist: cam.eyeDist }, tier: TIER, scale: renderScale, remotes: Object.keys(remotes).length, remoteCars: Object.keys(remoteCars).length };
-        },
-        spawn: spawnCar, drive: function (on) { setDriving(on); }, cam: cam, input: input
-    };
-
-    window.addEventListener('error', function (e) {
-        nlog('помилка сторінки: ' + (e && e.message) + ' (' + (e && e.filename) + ':' + (e && e.lineno) + ')');
-    });
-
-    function boot() {
+    /**
+     * Вхід у гру на сервері. Відповідь чекаємо не нескінченно: якщо за JOIN_TIMEOUT_MS ack не прийшов, пробуємо ще
+     * (перший вхід — до MAX_FIRST_ATTEMPTS разів, потім помилка й вихід на сторінку гри).
+     */
+    private fun join(first: Boolean) {
+        if (disposed) return
+        val token = ++joinToken
         try {
-            resize();
-            tagsCtx = tagsCanvas.getContext('2d');
-            R = createRenderer(canvas, { aa: TIER_CFG.aa, fogNear: 150, fogFar: TIER_CFG.fogFar });
-            buildAssets();
-        } catch (e) {
-            nfail('webgl', e && e.message ? e.message : String(e));
-            return;
+            val socket = KishkaManager.getSocket()
+            if (socket.connected()) {
+                val payload = JSONObject().put("email", email).put("game", BloxGame.GAME_ID)
+                if (!first) payload.put("x", lx).put("y", ly).put("z", lz).put("ry", lry)
+                socket.emit("blox_game_join", payload, Ack { args ->
+                    val res = args.firstOrNull() as? JSONObject
+                    main.post { if (token == joinToken) onJoinResult(res, first) }
+                })
+            } else {
+                Log.w(BLOX_TAG, "вхід у гру: сокет не підключений, чекаємо з'єднання (спроба " + (firstAttempts + 1) + ")")
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            if (first) failGame("err_server_down", e.message ?: "")
+            return
         }
-        canvas.addEventListener('webglcontextlost', function (e) { e.preventDefault(); started = false; nlog('WebGL-контекст втрачено'); }, false);
-        canvas.addEventListener('webglcontextrestored', function () {
-            try { R = createRenderer(canvas, { aa: TIER_CFG.aa, fogNear: 150, fogFar: TIER_CFG.fogFar }); buildAssets(); started = !!walker; nlog('WebGL-контекст відновлено'); }
-            catch (e) { nfail('webgl', 'не вдалося відновити: ' + (e && e.message)); }
-        }, false);
-        applyLangToStaticUI();
-        nlog('гра запущена, якість ' + TIER + ', кроки рельєфу ' + TIER_CFG.cell);
-        window.requestAnimationFrame(frame);
-        if (N.ready) call(N.ready);
-        else if (standalone) {
-            setTimeout(function () {
-                window.KishkaGame.start({ id: 1, nick: 'Player', x: 0, y: 1, z: 0, players: [], cars: [] });
-            }, 50);
+        main.postDelayed({
+            if (disposed || token != joinToken) return@postDelayed
+            if (first && !joinedOnce) {
+                firstAttempts++
+                if (firstAttempts >= MAX_FIRST_ATTEMPTS) {
+                    Log.w(BLOX_TAG, "вхід у гру: сервер не відповів за " + (JOIN_TIMEOUT_MS * MAX_FIRST_ATTEMPTS / 1000) + " с")
+                    failGame(if (connected()) "join_timeout" else "err_server_down")
+                } else {
+                    join(true)
+                }
+            } else {
+                join(false)
+            }
+        }, JOIN_TIMEOUT_MS)
+    }
+
+    private fun onJoinResult(res: JSONObject?, first: Boolean) {
+        if (disposed) return
+        joinToken++ // відповідь отримано: таймер очікування більше не спрацює
+        if (res == null || !res.optBoolean("success", false)) {
+            val code = res?.optString("code", "") ?: ""
+            Log.w(BLOX_TAG, "вхід у гру відхилено сервером, code=" + code)
+            // Тимчасові причини (сокет ще не назвався, збій бази) — пробуємо ще кілька разів
+            val temporary = code == "not_identified" || code == "error"
+            if (temporary && joinRetries < MAX_JOIN_RETRIES) {
+                joinRetries++
+                main.postDelayed({ if (!disposed) join(first) }, JOIN_RETRY_MS)
+                return
+            }
+            failGame(if (code in JOIN_CODES) "join_" + code else "err_game_join", code)
+            return
+        }
+        joinRetries = 0
+        joinedOnce = true
+        pendingFirstJoin = false
+        val myId = res.optInt("id", -1)
+        BloxGame.myId = myId
+        val list = ArrayList<BloxPlayerInfo>()
+        list.add(BloxPlayerInfo(myId, res.optString("nick", "")))
+        val others = res.optJSONArray("players")
+        if (others != null) {
+            for (i in 0 until others.length()) {
+                val o = others.optJSONObject(i) ?: continue
+                list.add(BloxPlayerInfo(o.optInt("id", -1), o.optString("nick", "")))
+            }
+        }
+        BloxGame.players = list
+        js(if (first) "KishkaGame.start($res)" else "KishkaGame.resync($res)")
+    }
+
+    private fun updatePlayers(arr: JSONArray?) {
+        if (arr == null || disposed) return
+        val list = ArrayList<BloxPlayerInfo>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            list.add(BloxPlayerInfo(o.optInt("id", -1), o.optString("nick", "")))
+        }
+        // Себе — першим у списку
+        val me = BloxGame.myId
+        BloxGame.players = list.sortedBy { if (it.id == me) 0 else 1 }
+    }
+
+    private fun js(code: String) {
+        main.post { if (!disposed) webView?.evaluateJavascript(code, null) }
+    }
+
+    fun pause() {
+        webView?.onPause()
+    }
+
+    fun resume() {
+        webView?.onResume()
+    }
+
+    private fun connected(): Boolean = try {
+        KishkaManager.getSocket().connected()
+    } catch (e: Exception) {
+        false
+    }
+
+    /** Створення машини: сервер відповідає ACK; не відповів за 5 с — гра отримує причину «timeout». */
+    private fun spawnCar(type: String, x: Double, y: Double, z: Double, ry: Double) {
+        if (disposed) return
+        if (!joinedOnce || !connected()) {
+            Log.w(BLOX_TAG, "spawn машини: немає входу в гру або зв'язку з сервером")
+            js("KishkaGame.carResult({ok:false,code:'offline'})")
+            return
+        }
+        val token = ++spawnToken
+        val answered = java.util.concurrent.atomic.AtomicBoolean(false)
+        try {
+            val payload = JSONObject().put("type", type).put("x", x).put("y", y).put("z", z).put("ry", ry)
+            KishkaManager.getSocket().emit("blox_car_spawn", payload, Ack { args ->
+                if (!answered.compareAndSet(false, true)) return@Ack
+                val res = args.firstOrNull() as? JSONObject
+                val ok = res?.optBoolean("success", false) == true
+                val out = JSONObject().put("ok", ok).put("cid", res?.optInt("cid", 0) ?: 0).put("code", res?.optString("code", "") ?: "")
+                if (!ok) Log.w(BLOX_TAG, "spawn машини відхилено сервером: code=" + out.optString("code"))
+                js("KishkaGame.carResult($out)")
+            })
+            main.postDelayed({
+                if (token == spawnToken && answered.compareAndSet(false, true)) {
+                    Log.w(BLOX_TAG, "spawn машини: сервер не відповів (немає ACK)")
+                    js("KishkaGame.carResult({ok:false,code:'timeout'})")
+                }
+            }, 5000)
+        } catch (e: Exception) {
+            Log.w(BLOX_TAG, "spawn машини: " + e.message)
+            js("KishkaGame.carResult({ok:false,code:'error'})")
         }
     }
 
-    boot();
-})();
+    /** Чому гра не запустилась за відведений час: файли гри, сервер чи графіка. */
+    fun timeoutReason(): String = when {
+        !pageReady -> "err_game_files"
+        !joinedOnce -> if (connected()) "join_timeout" else "err_server_down"
+        else -> "err_webgl"
+    }
+
+    /** Закриває гру з конкретною причиною (а не загальним «перевірте інтернет»). */
+    fun failGame(key: String = "err_error", detail: String = "") {
+        if (disposed) return
+        Log.w(BLOX_TAG, "гру закрито: " + key + (if (detail.isNotEmpty()) " (" + detail + ")" else ""))
+        val text = BloxStrings.get(key, lang)
+        Notice.show(if (detail.isNotEmpty() && key != "err_game_join") text + "\n(" + detail + ")" else text)
+        exitGame(true)
+    }
+
+    /** Вихід з гри: сервер прибирає гравця зі списку, застосунок повертає вкладки й вертикальне положення. */
+    fun exitGame(tellServer: Boolean) {
+        if (disposed) return
+        if (tellServer) {
+            try {
+                KishkaManager.getSocket().emit("blox_game_leave", JSONObject())
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        BloxGame.exit()
+    }
+
+    fun dispose() {
+        if (disposed) return
+        disposed = true
+        try {
+            val s = KishkaManager.getSocket()
+            s.off("blox_game_tick", tickListener)
+            s.off("blox_game_roster", rosterListener)
+            s.off("blox_game_cars", carsListener)
+            s.off("blox_car_tick", carTickListener)
+            s.off("blox_game_kicked", kickedListener)
+            s.off(io.socket.client.Socket.EVENT_CONNECT, connectListener)
+            s.off(io.socket.client.Socket.EVENT_DISCONNECT, disconnectListener)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        val wv = webView
+        webView = null
+        if (wv != null) {
+            try {
+                wv.stopLoading()
+                wv.removeJavascriptInterface("Android")
+                (wv.parent as? ViewGroup)?.removeView(wv)
+                wv.removeAllViews()
+                wv.destroy()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+}
+
+/**
+ * Гра на весь екран: сірий екран завантаження («Joining the game»), потім 3D-світ. Зверху зліва — кругла кнопка
+ * з аватаркою KishkaBlox, яка відкриває напівпрозоре меню зі списком гравців і кнопкою Leave.
+ */
+@Composable
+fun BloxGameScreen(lang: String, email: String) {
+    val context = LocalContext.current
+    val b: (String) -> String = { key -> BloxStrings.get(key, lang) }
+    val configuration = LocalConfiguration.current
+
+    var menuOpen by remember { mutableStateOf(false) }
+    var confirmLeave by remember { mutableStateOf(false) }
+    var minTimePassed by remember { mutableStateOf(false) }
+    val controller = remember {
+        BloxGame.loadSettings(context)
+        BloxGameController(context.applicationContext, email, lang)
+    }
+
+    // Ігрове положення пристрою (горизонтальне, як у Brawl Stars і Roblox), системні панелі сховано
+    DisposableEffect(Unit) {
+        val activity = context.findActivity()
+        val window = activity?.window
+        var insets: WindowInsetsControllerCompat? = null
+        if (activity != null && window != null) {
+            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            val ctrl = WindowCompat.getInsetsController(window, window.decorView)
+            ctrl.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            ctrl.hide(WindowInsetsCompat.Type.systemBars())
+            insets = ctrl
+        }
+        onDispose {
+            insets?.show(WindowInsetsCompat.Type.systemBars())
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    // Згорнули застосунок — світ не малюється (економимо батарею); гравець лишається в грі
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> controller.pause()
+                Lifecycle.Event.ON_RESUME -> controller.resume()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    DisposableEffect(Unit) { onDispose { controller.dispose() } }
+
+    // Екран завантаження показується щонайменше 1 секунду; далі — скільки потрібно інтернету
+    LaunchedEffect(Unit) {
+        delay(1000)
+        minTimePassed = true
+    }
+    // Гра не завантажилась за 45 секунд — виходимо з повідомленням
+    LaunchedEffect(Unit) {
+        delay(45_000)
+        if (!controller.worldStarted) controller.failGame(controller.timeoutReason(), "45 с")
+    }
+
+    val showLoading = !(controller.worldStarted && minTimePassed)
+
+    // Вікно гри з'являється плавно, а сірий екран завантаження так само плавно зникає
+    val appear = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { appear.animateTo(1f, tween(700)) }
+    val loadingAlpha by animateFloatAsState(if (showLoading) 1f else 0f, tween(600), label = "bloxLoading")
+
+    BackHandler {
+        when {
+            confirmLeave -> confirmLeave = false
+            showLoading -> controller.exitGame(true)
+            menuOpen -> menuOpen = false
+            else -> menuOpen = true
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black).graphicsLayer { alpha = appear.value }) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { ctx -> controller.createWebView(ctx) }
+        )
+
+        if (!showLoading) {
+            if (menuOpen) {
+                // Затемнення за панеллю: тап поза панеллю закриває меню
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0x66000000))
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                            menuOpen = false
+                            confirmLeave = false
+                        }
+                )
+                // Велика панель меню в стилі Roblox: на всю висоту зліва, список гравців, налаштування, «Вийти з гри» внизу
+                val panelWidth = (configuration.screenWidthDp * 0.62f).coerceIn(300f, 520f).dp
+                Surface(
+                    shape = RoundedCornerShape(topEnd = 22.dp, bottomEnd = 22.dp),
+                    color = Color(0xEB16161B),
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .fillMaxHeight()
+                        .width(panelWidth)
+                        .pointerInput(Unit) { detectTapGestures { } }
+                ) {
+                    Column(modifier = Modifier.fillMaxSize().padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 14.dp)) {
+                        // Шапка: місце під круглу кнопку меню (вона лежить поверх), заголовок із кількістю й хрестик
+                        Row(modifier = Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Spacer(modifier = Modifier.width(58.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(b("players"), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    String.format(b("players_count"), BloxGame.players.size),
+                                    color = Color(0xFFB9B9C4),
+                                    fontSize = 13.sp,
+                                    maxLines = 1
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    menuOpen = false
+                                    confirmLeave = false
+                                },
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Icon(Icons.Default.Close, contentDescription = b("close"), tint = Color.White, modifier = Modifier.size(28.dp))
+                            }
+                        }
+                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0x33FFFFFF)))
+                        // Список гравців: прокручується, коли гравців багато
+                        LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                            items(BloxGame.players, key = { it.id }) { player ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier.size(38.dp).clip(CircleShape).background(Color(0xFFBDBDC7)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            player.nick.take(1).uppercase(),
+                                            color = Color(0xFF2B2B33),
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Text(
+                                        player.nick,
+                                        color = Color.White,
+                                        fontSize = 17.sp,
+                                        fontWeight = if (player.id == BloxGame.myId) FontWeight.Bold else FontWeight.Normal,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                    if (player.id == BloxGame.myId) {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("(" + b("you") + ")", color = Color(0xFFB9B9C4), fontSize = 14.sp, maxLines = 1)
+                                    }
+                                }
+                            }
+                        }
+                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0x33FFFFFF)))
+                        // Інверсія камери (за замовчуванням вимкнена)
+                        Row(
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(b("invert_camera"), color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Switch(
+                                checked = BloxGame.invertCamera,
+                                onCheckedChange = { controller.setInvertCamera(it) },
+                                colors = SwitchDefaults.colors(checkedTrackColor = Color(0xFF34A853))
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        // Помітна кнопка внизу панелі; підтвердження — тут же, без маленького вікна посередині екрана
+                        if (!confirmLeave) {
+                            Button(
+                                onClick = { confirmLeave = true },
+                                modifier = Modifier.fillMaxWidth().height(56.dp),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD93025))
+                            ) {
+                                Text(b("leave"), fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        } else {
+                            Text(b("leave_text"), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                OutlinedButton(
+                                    onClick = { confirmLeave = false },
+                                    modifier = Modifier.weight(1f).height(52.dp),
+                                    shape = RoundedCornerShape(14.dp)
+                                ) {
+                                    Text(b("no"), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                }
+                                Button(
+                                    onClick = {
+                                        confirmLeave = false
+                                        menuOpen = false
+                                        controller.exitGame(true)
+                                    },
+                                    modifier = Modifier.weight(1f).height(52.dp),
+                                    shape = RoundedCornerShape(14.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD93025))
+                                ) {
+                                    Text(b("yes"), fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Кругла кнопка меню з аватаркою KishkaBlox вгорі зліва поверх гри (малюється ПІСЛЯ панелі, тож лишається клікабельною)
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = 12.dp, top = 10.dp)
+                    .size(46.dp)
+                    .clip(CircleShape)
+                    .background(Color(0x66000000))
+                    .clickable {
+                        menuOpen = !menuOpen
+                        if (!menuOpen) confirmLeave = false
+                    }
+            ) {
+                AsyncImage(
+                    model = bloxImageModel("kishkablox.png", KISHKABLOX_LOGO_URL),
+                    contentDescription = b("menu"),
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().padding(3.dp).clip(CircleShape)
+                )
+            }
+        }
+
+        // Сірий екран завантаження: аватарка зверху, назва посередині, знизу посередині «Joining the game»
+        if (loadingAlpha > 0.01f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = loadingAlpha }
+                    .background(Color(0xFF3A3B3E))
+                    .pointerInput(Unit) { detectTapGestures { } }
+            ) {
+                Column(modifier = Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                    AsyncImage(
+                        model = bloxImageModel("realistic_cars.jpg", REALISTIC_CARS_URL),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(104.dp).clip(RoundedCornerShape(12.dp))
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(BloxGame.GAME_TITLE, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                }
+                Column(
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    CircularProgressIndicator(color = Color.White, strokeWidth = 2.5.dp, modifier = Modifier.size(26.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        b("joining"),
+                        color = Color(0xFFD2D2D8),
+                        fontSize = 16.sp
+                    )
+                }
+            }
+        }
+    }
+}
