@@ -133,7 +133,7 @@ test('синхронізація позиції, повороту й пози: �
     const ticks = b.events('blox_game_tick').flat();
     const mine = ticks.filter((t) => t[0] === ra.id);
     const last = mine[mine.length - 1];
-    assert.deepStrictEqual(last, [ra.id, 10.12, 4, -20.5, 1.5, 1]);
+    assert.deepStrictEqual(last, [ra.id, 10.12, 4, -20.5, 1.5, 1, 0]);
     // Поза «у повітрі» теж передається
     a.send('blox_game_state', { x: 10.123, y: 9, z: -20.5, ry: 1.5, a: 2 });
     await sleep(50);
