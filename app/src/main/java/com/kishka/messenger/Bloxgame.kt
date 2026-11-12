@@ -10,7 +10,9 @@ import android.util.Log
 import android.os.Looper
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -30,6 +32,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -44,6 +47,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -52,6 +56,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -109,6 +115,23 @@ object BloxGame {
     var myId by mutableStateOf(-1)
     var players by mutableStateOf<List<BloxPlayerInfo>>(emptyList())
 
+    /** Налаштування «Інверсія камери»: за замовчуванням вимкнено (палець угору = камера вгору). Зберігається на пристрої. */
+    var invertCamera by mutableStateOf(false)
+        private set
+
+    private const val SETTINGS_PREFS = "kishkablox_settings"
+
+    fun loadSettings(context: Context) {
+        invertCamera = context.applicationContext.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
+            .getBoolean("invert_camera", false)
+    }
+
+    fun saveInvertCamera(context: Context, value: Boolean) {
+        invertCamera = value
+        context.applicationContext.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
+            .edit().putBoolean("invert_camera", value).apply()
+    }
+
     fun enter() {
         players = emptyList()
         myId = -1
@@ -144,6 +167,9 @@ private const val MAX_FIRST_ATTEMPTS = 3
 /** Повтор після відповіді сервера з тимчасовою причиною (сокет ще не назвався, збій бази). */
 private const val JOIN_RETRY_MS = 1500L
 private const val MAX_JOIN_RETRIES = 3
+
+/** Коди відмови сервера на вхід у гру, для яких є окремий переклад (join_<код> у BloxStrings). */
+private val JOIN_CODES = setOf("not_logged_in", "not_identified", "game_full", "unknown_game", "bad_payload", "error")
 
 private fun Context.findActivity(): Activity? {
     var c: Context? = this
@@ -265,6 +291,9 @@ private class BloxGameController(private val appContext: Context, private val em
 
     @Volatile private var disposed = false
     @Volatile private var joinedOnce = false
+    /** Сторінка гри (game.html) викликала ready(): файли гри завантажились і WebGL запустився. */
+    @Volatile private var pageReady = false
+    private var spawnToken = 0
     /** Сторінка гри готова, але сервер ще не підтвердив перший вхід. */
     @Volatile private var pendingFirstJoin = false
     private var joinToken = 0
@@ -286,9 +315,27 @@ private class BloxGameController(private val appContext: Context, private val em
             js("KishkaGame.roster($obj)")
         }
     }
-    private val kickedListener = Emitter.Listener {
-        // Цей акаунт зайшов у гру з іншого пристрою
-        main.post { exitGame(false) }
+    private val carsListener = Emitter.Listener { args ->
+        val obj = args.firstOrNull() as? JSONObject
+        if (obj != null) js("KishkaGame.cars($obj)")
+    }
+    private val carTickListener = Emitter.Listener { args ->
+        val arr = args.firstOrNull() as? JSONArray
+        if (arr != null) js("KishkaGame.carTick($arr)")
+    }
+    private val kickedListener = Emitter.Listener { args ->
+        // Цей акаунт зайшов у гру з іншого пристрою (або сервер не отримував від гри даних 60 с)
+        val reason = (args.firstOrNull() as? JSONObject)?.optString("reason", "") ?: ""
+        Log.w(BLOX_TAG, "сервер відключив від гри: reason=" + reason)
+        main.post {
+            if (!disposed) {
+                Notice.show(BloxStrings.get(if (reason == "timeout") "kicked_timeout" else "kicked_other", lang))
+                exitGame(false)
+            }
+        }
+    }
+    private val disconnectListener = Emitter.Listener { args ->
+        Log.w(BLOX_TAG, "зв'язок із сервером втрачено: " + (args.firstOrNull() ?: "?"))
     }
     private val connectListener = Emitter.Listener {
         // Зв'язок із сервером відновився: сервер забув нас, коли той обірвався, — заходимо знову на тому ж місці
@@ -300,11 +347,26 @@ private class BloxGameController(private val appContext: Context, private val em
             val s = KishkaManager.getSocket()
             s.on("blox_game_tick", tickListener)
             s.on("blox_game_roster", rosterListener)
+            s.on("blox_game_cars", carsListener)
+            s.on("blox_car_tick", carTickListener)
             s.on("blox_game_kicked", kickedListener)
             s.on(io.socket.client.Socket.EVENT_CONNECT, connectListener)
+            s.on(io.socket.client.Socket.EVENT_DISCONNECT, disconnectListener)
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    private fun safeLang(): String = lang.filter { it.isLetter() }.take(5).ifEmpty { "uk" }
+
+    /** Мова написів і налаштування камери для гри (game.js -> KishkaGame.config). */
+    private fun applyConfig() {
+        js("KishkaGame.config({lang:'" + safeLang() + "',invertCamera:" + BloxGame.invertCamera + "})")
+    }
+
+    fun setInvertCamera(value: Boolean) {
+        BloxGame.saveInvertCamera(appContext, value)
+        applyConfig()
     }
 
     inner class Bridge {
@@ -312,8 +374,62 @@ private class BloxGameController(private val appContext: Context, private val em
         fun ready() {
             main.post {
                 if (!disposed) {
+                    pageReady = true
                     pendingFirstJoin = true
+                    applyConfig()
                     join(true)
+                }
+            }
+        }
+
+        /** Діагностика гри: потрапляє в Logcat (і в звіти про помилки), а не лише в консоль WebView. */
+        @JavascriptInterface
+        fun log(text: String) {
+            Log.i(BLOX_TAG, "game: " + text.take(300))
+        }
+
+        /** Причина, чому гру не запущено: «webgl: ...» або «script: ...». */
+        @JavascriptInterface
+        fun failReason(text: String) {
+            val kind = text.substringBefore(':').trim()
+            val detail = text.substringAfter(':', "").trim().take(120)
+            main.post { failGame(if (kind == "script") "err_script" else "err_webgl", detail) }
+        }
+
+        /** Мій стан і стан моєї машини одним JSON: {x,y,z,ry,a,d,c?}. Сервер усе перевіряє ще раз. */
+        @JavascriptInterface
+        fun sendState(json: String) {
+            if (disposed) return
+            val o = try {
+                JSONObject(json)
+            } catch (e: Exception) {
+                Log.w(BLOX_TAG, "sendState: гра надіслала некоректний JSON")
+                return
+            }
+            lx = o.optDouble("x", lx); ly = o.optDouble("y", ly); lz = o.optDouble("z", lz); lry = o.optDouble("ry", lry)
+            if (!joinedOnce) return
+            try {
+                val s = KishkaManager.getSocket()
+                if (!s.connected()) return
+                s.emit("blox_game_state", o)
+            } catch (e: Exception) {
+                Log.w(BLOX_TAG, "sendState: " + e.message)
+            }
+        }
+
+        /** Створити мою машину (sedan | van | truck). Результат повертається в KishkaGame.carResult. */
+        @JavascriptInterface
+        fun carSpawn(type: String, x: Double, y: Double, z: Double, ry: Double) {
+            main.post { spawnCar(type, x, y, z, ry) }
+        }
+
+        @JavascriptInterface
+        fun carRemove() {
+            main.post {
+                try {
+                    if (!disposed && joinedOnce) KishkaManager.getSocket().emit("blox_car_remove", JSONObject())
+                } catch (e: Exception) {
+                    Log.w(BLOX_TAG, "carRemove: " + e.message)
                 }
             }
         }
@@ -325,7 +441,7 @@ private class BloxGameController(private val appContext: Context, private val em
 
         @JavascriptInterface
         fun fail() {
-            main.post { failGame() }
+            main.post { failGame("err_webgl") }
         }
 
         @JavascriptInterface
@@ -362,16 +478,27 @@ private class BloxGameController(private val appContext: Context, private val em
         wv.overScrollMode = android.view.View.OVER_SCROLL_NEVER
         wv.webViewClient = object : WebViewClient() {
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
-                if (request?.isForMainFrame == true) main.post { failGame() }
+                if (request?.isForMainFrame == true) {
+                    main.post { failGame("err_game_files", (error?.description ?: "").toString().take(80)) }
+                }
+            }
+        }
+        // Помилки JavaScript гри — в Logcat
+        wv.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(message: ConsoleMessage?): Boolean {
+                if (message != null && message.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                    Log.w(BLOX_TAG, "js: " + message.message() + " (" + message.sourceId().substringAfterLast('/') + ":" + message.lineNumber() + ")")
+                }
+                return true
             }
         }
         wv.addJavascriptInterface(Bridge(), "Android")
         webView = wv
-        // Спершу тихо докачуємо оновлення гри (якщо є), потім вантажимо сторінку з установлених файлів
-        BloxInstall.syncLatest(appContext) { ok ->
-            if (disposed) return@syncLatest
+        // Гра запускається з установлених файлів. Перед цим перевіряємо, що вони на місці й цілі (нова версія — лише кнопкою «Оновити»)
+        BloxInstall.verifyForPlay(appContext) { ok ->
+            if (disposed) return@verifyForPlay
             if (!ok) {
-                failGame()
+                failGame("err_game_files")
             } else {
                 wv.loadUrl("file://" + BloxInstall.file(appContext, "game.html").absolutePath)
             }
@@ -400,7 +527,7 @@ private class BloxGameController(private val appContext: Context, private val em
             }
         } catch (e: Exception) {
             e.printStackTrace()
-            if (first) failGame()
+            if (first) failGame("err_server_down", e.message ?: "")
             return
         }
         main.postDelayed({
@@ -409,7 +536,7 @@ private class BloxGameController(private val appContext: Context, private val em
                 firstAttempts++
                 if (firstAttempts >= MAX_FIRST_ATTEMPTS) {
                     Log.w(BLOX_TAG, "вхід у гру: сервер не відповів за " + (JOIN_TIMEOUT_MS * MAX_FIRST_ATTEMPTS / 1000) + " с")
-                    failGame()
+                    failGame(if (connected()) "join_timeout" else "err_server_down")
                 } else {
                     join(true)
                 }
@@ -432,7 +559,7 @@ private class BloxGameController(private val appContext: Context, private val em
                 main.postDelayed({ if (!disposed) join(first) }, JOIN_RETRY_MS)
                 return
             }
-            failGame()
+            failGame(if (code in JOIN_CODES) "join_" + code else "err_game_join", code)
             return
         }
         joinRetries = 0
@@ -477,9 +604,57 @@ private class BloxGameController(private val appContext: Context, private val em
         webView?.onResume()
     }
 
-    private fun failGame() {
+    private fun connected(): Boolean = try {
+        KishkaManager.getSocket().connected()
+    } catch (e: Exception) {
+        false
+    }
+
+    /** Створення машини: сервер відповідає ACK; не відповів за 5 с — гра отримує причину «timeout». */
+    private fun spawnCar(type: String, x: Double, y: Double, z: Double, ry: Double) {
         if (disposed) return
-        Notice.show(BloxStrings.get("err_error", lang))
+        if (!joinedOnce || !connected()) {
+            Log.w(BLOX_TAG, "spawn машини: немає входу в гру або зв'язку з сервером")
+            js("KishkaGame.carResult({ok:false,code:'offline'})")
+            return
+        }
+        val token = ++spawnToken
+        val answered = java.util.concurrent.atomic.AtomicBoolean(false)
+        try {
+            val payload = JSONObject().put("type", type).put("x", x).put("y", y).put("z", z).put("ry", ry)
+            KishkaManager.getSocket().emit("blox_car_spawn", payload, Ack { args ->
+                if (!answered.compareAndSet(false, true)) return@Ack
+                val res = args.firstOrNull() as? JSONObject
+                val ok = res?.optBoolean("success", false) == true
+                val out = JSONObject().put("ok", ok).put("cid", res?.optInt("cid", 0) ?: 0).put("code", res?.optString("code", "") ?: "")
+                if (!ok) Log.w(BLOX_TAG, "spawn машини відхилено сервером: code=" + out.optString("code"))
+                js("KishkaGame.carResult($out)")
+            })
+            main.postDelayed({
+                if (token == spawnToken && answered.compareAndSet(false, true)) {
+                    Log.w(BLOX_TAG, "spawn машини: сервер не відповів (немає ACK)")
+                    js("KishkaGame.carResult({ok:false,code:'timeout'})")
+                }
+            }, 5000)
+        } catch (e: Exception) {
+            Log.w(BLOX_TAG, "spawn машини: " + e.message)
+            js("KishkaGame.carResult({ok:false,code:'error'})")
+        }
+    }
+
+    /** Чому гра не запустилась за відведений час: файли гри, сервер чи графіка. */
+    fun timeoutReason(): String = when {
+        !pageReady -> "err_game_files"
+        !joinedOnce -> if (connected()) "join_timeout" else "err_server_down"
+        else -> "err_webgl"
+    }
+
+    /** Закриває гру з конкретною причиною (а не загальним «перевірте інтернет»). */
+    fun failGame(key: String = "err_error", detail: String = "") {
+        if (disposed) return
+        Log.w(BLOX_TAG, "гру закрито: " + key + (if (detail.isNotEmpty()) " (" + detail + ")" else ""))
+        val text = BloxStrings.get(key, lang)
+        Notice.show(if (detail.isNotEmpty() && key != "err_game_join") text + "\n(" + detail + ")" else text)
         exitGame(true)
     }
 
@@ -503,8 +678,11 @@ private class BloxGameController(private val appContext: Context, private val em
             val s = KishkaManager.getSocket()
             s.off("blox_game_tick", tickListener)
             s.off("blox_game_roster", rosterListener)
+            s.off("blox_game_cars", carsListener)
+            s.off("blox_car_tick", carTickListener)
             s.off("blox_game_kicked", kickedListener)
             s.off(io.socket.client.Socket.EVENT_CONNECT, connectListener)
+            s.off(io.socket.client.Socket.EVENT_DISCONNECT, disconnectListener)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -537,7 +715,10 @@ fun BloxGameScreen(lang: String, email: String) {
     var menuOpen by remember { mutableStateOf(false) }
     var confirmLeave by remember { mutableStateOf(false) }
     var minTimePassed by remember { mutableStateOf(false) }
-    val controller = remember { BloxGameController(context.applicationContext, email, lang) }
+    val controller = remember {
+        BloxGame.loadSettings(context)
+        BloxGameController(context.applicationContext, email, lang)
+    }
 
     // Ігрове положення пристрою (горизонтальне, як у Brawl Stars і Roblox), системні панелі сховано
     DisposableEffect(Unit) {
@@ -583,10 +764,7 @@ fun BloxGameScreen(lang: String, email: String) {
     // Гра не завантажилась за 45 секунд — виходимо з повідомленням
     LaunchedEffect(Unit) {
         delay(45_000)
-        if (!controller.worldStarted) {
-            Notice.show(b("err_error"))
-            controller.exitGame(true)
-        }
+        if (!controller.worldStarted) controller.failGame(controller.timeoutReason(), "45 с")
     }
 
     val showLoading = !(controller.worldStarted && minTimePassed)
@@ -612,7 +790,141 @@ fun BloxGameScreen(lang: String, email: String) {
         )
 
         if (!showLoading) {
-            // Кругла кнопка з аватаркою KishkaBlox
+            if (menuOpen) {
+                // Затемнення за панеллю: тап поза панеллю закриває меню
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0x66000000))
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                            menuOpen = false
+                            confirmLeave = false
+                        }
+                )
+                // Велика панель меню в стилі Roblox: на всю висоту зліва, список гравців, налаштування, «Вийти з гри» внизу
+                val panelWidth = (configuration.screenWidthDp * 0.62f).coerceIn(300f, 520f).dp
+                Surface(
+                    shape = RoundedCornerShape(topEnd = 22.dp, bottomEnd = 22.dp),
+                    color = Color(0xEB16161B),
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .fillMaxHeight()
+                        .width(panelWidth)
+                        .pointerInput(Unit) { detectTapGestures { } }
+                ) {
+                    Column(modifier = Modifier.fillMaxSize().padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 14.dp)) {
+                        // Шапка: місце під круглу кнопку меню (вона лежить поверх), заголовок із кількістю й хрестик
+                        Row(modifier = Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Spacer(modifier = Modifier.width(58.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(b("players"), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    String.format(b("players_count"), BloxGame.players.size),
+                                    color = Color(0xFFB9B9C4),
+                                    fontSize = 13.sp,
+                                    maxLines = 1
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    menuOpen = false
+                                    confirmLeave = false
+                                },
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Icon(Icons.Default.Close, contentDescription = b("close"), tint = Color.White, modifier = Modifier.size(28.dp))
+                            }
+                        }
+                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0x33FFFFFF)))
+                        // Список гравців: прокручується, коли гравців багато
+                        LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                            items(BloxGame.players, key = { it.id }) { player ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier.size(38.dp).clip(CircleShape).background(Color(0xFFBDBDC7)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            player.nick.take(1).uppercase(),
+                                            color = Color(0xFF2B2B33),
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Text(
+                                        player.nick,
+                                        color = Color.White,
+                                        fontSize = 17.sp,
+                                        fontWeight = if (player.id == BloxGame.myId) FontWeight.Bold else FontWeight.Normal,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                    if (player.id == BloxGame.myId) {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("(" + b("you") + ")", color = Color(0xFFB9B9C4), fontSize = 14.sp, maxLines = 1)
+                                    }
+                                }
+                            }
+                        }
+                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0x33FFFFFF)))
+                        // Інверсія камери (за замовчуванням вимкнена)
+                        Row(
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(b("invert_camera"), color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Switch(
+                                checked = BloxGame.invertCamera,
+                                onCheckedChange = { controller.setInvertCamera(it) },
+                                colors = SwitchDefaults.colors(checkedTrackColor = Color(0xFF34A853))
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        // Помітна кнопка внизу панелі; підтвердження — тут же, без маленького вікна посередині екрана
+                        if (!confirmLeave) {
+                            Button(
+                                onClick = { confirmLeave = true },
+                                modifier = Modifier.fillMaxWidth().height(56.dp),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD93025))
+                            ) {
+                                Text(b("leave"), fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        } else {
+                            Text(b("leave_text"), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                OutlinedButton(
+                                    onClick = { confirmLeave = false },
+                                    modifier = Modifier.weight(1f).height(52.dp),
+                                    shape = RoundedCornerShape(14.dp)
+                                ) {
+                                    Text(b("no"), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                }
+                                Button(
+                                    onClick = {
+                                        confirmLeave = false
+                                        menuOpen = false
+                                        controller.exitGame(true)
+                                    },
+                                    modifier = Modifier.weight(1f).height(52.dp),
+                                    shape = RoundedCornerShape(14.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD93025))
+                                ) {
+                                    Text(b("yes"), fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Кругла кнопка меню з аватаркою KishkaBlox вгорі зліва поверх гри (малюється ПІСЛЯ панелі, тож лишається клікабельною)
             Box(
                 modifier = Modifier
                     .align(Alignment.TopStart)
@@ -620,64 +932,17 @@ fun BloxGameScreen(lang: String, email: String) {
                     .size(46.dp)
                     .clip(CircleShape)
                     .background(Color(0x66000000))
-                    .clickable { menuOpen = !menuOpen }
+                    .clickable {
+                        menuOpen = !menuOpen
+                        if (!menuOpen) confirmLeave = false
+                    }
             ) {
                 AsyncImage(
                     model = bloxImageModel("kishkablox.png", KISHKABLOX_LOGO_URL),
-                    contentDescription = null,
+                    contentDescription = b("menu"),
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize().padding(3.dp).clip(CircleShape)
                 )
-            }
-
-            if (menuOpen) {
-                // Тап поза меню закриває його
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { menuOpen = false }
-                )
-                val maxHeight = (configuration.screenHeightDp - 84).coerceAtLeast(160).dp
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = Color(0xB3101012),
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(start = 12.dp, top = 64.dp)
-                        .width(300.dp)
-                        .heightIn(max = maxHeight)
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
-                            items(BloxGame.players, key = { it.id }) { player ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Box(modifier = Modifier.size(32.dp).clip(CircleShape).background(Color(0xFFBDBDC7)))
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Text(
-                                        player.nick,
-                                        color = Color.White,
-                                        fontSize = 15.sp,
-                                        fontWeight = if (player.id == BloxGame.myId) FontWeight.Bold else FontWeight.Normal,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Button(
-                            onClick = { confirmLeave = true },
-                            modifier = Modifier.fillMaxWidth().height(44.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD93025))
-                        ) {
-                            Text(b("leave"), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                    }
-                }
             }
         }
 
@@ -711,41 +976,6 @@ fun BloxGameScreen(lang: String, email: String) {
                         color = Color(0xFFD2D2D8),
                         fontSize = 16.sp
                     )
-                }
-            }
-        }
-    }
-
-    if (confirmLeave) {
-        Dialog(onDismissRequest = { confirmLeave = false }) {
-            Surface(shape = RoundedCornerShape(24.dp), color = Color.White, shadowElevation = 8.dp) {
-                Column(
-                    modifier = Modifier.padding(24.dp).widthIn(min = 260.dp, max = 400.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(b("leave_text"), fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = Color.Black, textAlign = TextAlign.Center)
-                    Spacer(modifier = Modifier.height(20.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        OutlinedButton(
-                            onClick = { confirmLeave = false },
-                            modifier = Modifier.weight(1f).height(46.dp),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Text(b("no"), fontWeight = FontWeight.SemiBold, maxLines = 1)
-                        }
-                        Button(
-                            onClick = {
-                                confirmLeave = false
-                                menuOpen = false
-                                controller.exitGame(true)
-                            },
-                            modifier = Modifier.weight(1f).height(46.dp),
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD93025))
-                        ) {
-                            Text(b("yes"), fontWeight = FontWeight.SemiBold, maxLines = 1)
-                        }
-                    }
                 }
             }
         }
