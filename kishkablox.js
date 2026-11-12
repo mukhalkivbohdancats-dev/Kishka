@@ -16,7 +16,7 @@
 //   blox_add_friend { email, nick }              -> { success, code?, relation? }
 //   blox_respond    { email, nick, accept }      -> { success, code? }
 //   blox_delete_friend { email, nick }           -> { success, code? }
-// Гра (ігрова кімната, див. blox_game_server.js): blox_game_join / blox_game_state / blox_game_leave -> blox_game_roster / blox_game_tick / blox_game_kicked
+// Гра (ігрова кімната, див. blox_game_server.js): blox_game_join / blox_game_state / blox_game_leave / blox_car_spawn / blox_car_remove -> blox_game_roster / blox_game_tick / blox_game_cars / blox_car_tick / blox_game_kicked
 // HTTP-маршрути установки гри (їх викликає застосунок, див. Bloxinstall.kt):
 //   GET /blox/manifest.json       -> { version, files: [{ name, size, sha256 }], total }
 //   GET /blox/files/<ім'я>        -> байти файла (розмір точно дорівнює size з маніфесту)
@@ -87,7 +87,8 @@ const BLOX_MIME = {
     '.woff2': 'font/woff2'
 };
 // Без цих двох файлів гра не запуститься: тоді маніфест повертає 503 замість неповного списку
-const BLOX_REQUIRED_FILES = ['game.html', 'game.js'];
+// Усі файли гри: сторінка, головний скрипт, світ/рельєф, фізика, камера, переклади й процедурні 3D-моделі (персонаж і три машини)
+const BLOX_REQUIRED_FILES = ['game.html', 'game.js', 'world.js', 'physics.js', 'camera.js', 'i18n.js', 'models.js'];
 // Застосунок бере ці файли з телефона під такими іменами (Bloxgame.kt -> bloxImageModel), а в репозиторії вони лежать в Assets/
 const BLOX_ASSET_ALIASES = [
     { name: 'kishkablox.png', source: 'Kishkablox.png' },
@@ -327,7 +328,7 @@ function createBloxFiles(options) {
         logStartup();
     }
 
-    return { handle, register, buildManifest, scan, gameDir, assetsDir };
+    return { handle, register, buildManifest, scan, gameDir, assetsDir, required: BLOX_REQUIRED_FILES.slice() };
 }
 
 function cleanEmail(value) {
