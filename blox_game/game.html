@@ -5,86 +5,164 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Realistic cars</title>
 <style>
+  :root {
+    --safe-l: env(safe-area-inset-left, 0px);
+    --safe-r: env(safe-area-inset-right, 0px);
+    --safe-b: env(safe-area-inset-bottom, 0px);
+    --safe-t: env(safe-area-inset-top, 0px);
+  }
   html, body {
-    margin: 0;
-    padding: 0;
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
+    margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
     background: #8fc2f5;
-    -webkit-user-select: none;
-    user-select: none;
-    -webkit-touch-callout: none;
-    -webkit-tap-highlight-color: transparent;
-    touch-action: none;
-    overscroll-behavior: none;
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+    touch-action: none; overscroll-behavior: none;
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   }
-  canvas {
-    position: fixed;
-    left: 0;
-    top: 0;
-    width: 100%;
-    height: 100%;
-    display: block;
-    touch-action: none;
-  }
+  canvas#c, canvas#tags { position: fixed; left: 0; top: 0; width: 100%; height: 100%; display: block; touch-action: none; }
   #tags { pointer-events: none; }
+  .hidden { display: none !important; }
 
-  /* Джойстик (як у Roblox): зліва знизу */
+  /* ---------- Джойстик (зліва знизу) і стрибок (справа знизу) ---------- */
   #stick {
-    position: fixed;
-    left: calc(env(safe-area-inset-left, 0px) + 36px);
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 36px);
-    width: 132px;
-    height: 132px;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.16);
-    border: 2px solid rgba(255, 255, 255, 0.38);
-    touch-action: none;
+    position: fixed; left: calc(var(--safe-l) + 30px); bottom: calc(var(--safe-b) + 22px);
+    width: clamp(92px, 32vh, 128px); height: clamp(92px, 32vh, 128px);
+    border-radius: 50%; background: rgba(255,255,255,0.16); border: 2px solid rgba(255,255,255,0.38); touch-action: none;
   }
   #knob {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 60px;
-    height: 60px;
-    margin: -30px 0 0 -30px;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.52);
-    border: 2px solid rgba(255, 255, 255, 0.7);
-    will-change: transform;
+    position: absolute; left: 50%; top: 50%; width: 46%; height: 46%; margin: -23% 0 0 -23%;
+    border-radius: 50%; background: rgba(255,255,255,0.52); border: 2px solid rgba(255,255,255,0.7); will-change: transform;
   }
-
-  /* Кнопка стрибка (як у Roblox): справа знизу */
   #jump {
-    position: fixed;
-    right: calc(env(safe-area-inset-right, 0px) + 44px);
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 44px);
-    width: 88px;
-    height: 88px;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.2);
-    border: 2px solid rgba(255, 255, 255, 0.45);
-    touch-action: none;
+    position: fixed; right: calc(var(--safe-r) + 30px); bottom: calc(var(--safe-b) + 30px);
+    width: 88px; height: 88px; border-radius: 50%;
+    background: rgba(255,255,255,0.2); border: 2px solid rgba(255,255,255,0.45); touch-action: none;
   }
-  #jump.down { background: rgba(255, 255, 255, 0.42); }
-  #jump svg {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 40px;
-    height: 40px;
-    margin: -20px 0 0 -20px;
+  #jump.down { background: rgba(255,255,255,0.42); }
+  .ico { position: absolute; left: 50%; top: 50%; width: 46%; height: 46%; transform: translate(-50%, -50%); pointer-events: none; }
+
+  /* ---------- Кнопка «Cars» (зліва приблизно посередині) ---------- */
+  #carsBtn {
+    position: fixed; left: calc(var(--safe-l) + 12px); top: calc(50% - 30px);
+    width: 62px; height: 62px; border-radius: 18px; border: 1.5px solid rgba(255,255,255,0.5);
+    background: linear-gradient(160deg, rgba(60,70,95,0.78), rgba(25,30,45,0.78));
+    box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+    color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+    font-size: 11px; font-weight: 700; letter-spacing: .2px; padding: 0; touch-action: manipulation; cursor: pointer;
   }
+  #carsBtn svg { width: 32px; height: 22px; }
+  #carsBtn:active { transform: scale(0.93); }
+
+  /* ---------- Вікно вибору машин: велике, напівпрозоре, не на весь екран ---------- */
+  #carsPanel {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: min(88vw, 760px); max-height: 82vh; box-sizing: border-box;
+    padding: 58px 16px 16px; border-radius: 24px;
+    background: rgba(18, 21, 30, 0.55);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    border: 1.5px solid rgba(255,255,255,0.28); box-shadow: 0 10px 40px rgba(0,0,0,0.45);
+    color: #fff; overflow-y: auto; touch-action: pan-y; z-index: 20;
+    animation: pop .18s ease-out;
+  }
+  @keyframes pop { from { opacity: 0; transform: translate(-50%, -48%) scale(.96); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
+  #carsTitle { position: absolute; left: 70px; right: 70px; top: 12px; height: 40px; line-height: 40px; text-align: center; font-size: 19px; font-weight: 800; }
+  #carsClose {
+    position: absolute; left: 10px; top: 10px; width: 44px; height: 44px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.85);
+    background: #e5484d; color: #fff; font-size: 22px; font-weight: 900; line-height: 1; padding: 0; cursor: pointer; touch-action: manipulation;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.4);
+  }
+  #carsClose:active { transform: scale(0.92); }
+  #carsList { display: flex; gap: 12px; justify-content: center; align-items: stretch; flex-wrap: wrap; }
+  .card {
+    flex: 1 1 190px; max-width: 235px; min-width: 150px; box-sizing: border-box; padding: 10px; border-radius: 18px;
+    background: rgba(255,255,255,0.10); border: 2px solid rgba(255,255,255,0.18);
+    display: flex; flex-direction: column; align-items: center; gap: 6px; cursor: pointer; touch-action: manipulation;
+    transition: background .15s, border-color .15s, transform .15s;
+  }
+  .card.sel { background: rgba(255,255,255,0.20); border-color: #7be08a; transform: translateY(-2px); }
+  .card img.pv { width: 100%; aspect-ratio: 8 / 5; object-fit: contain; display: block; }
+  .card .nm { display: flex; align-items: center; gap: 6px; font-size: 16px; font-weight: 800; }
+  .card .nm svg { width: 26px; height: 16px; flex: none; }
+  .card .ht { font-size: 12px; opacity: .8; text-align: center; min-height: 15px; }
+  .btn {
+    width: 100%; height: 42px; border-radius: 14px; border: 0; font-size: 16px; font-weight: 800; color: #fff; cursor: pointer; touch-action: manipulation;
+  }
+  .btn.pick { background: rgba(255,255,255,0.22); border: 1.5px solid rgba(255,255,255,0.4); }
+  .btn.spawn { background: linear-gradient(180deg, #3fcf5a, #1fa83c); box-shadow: 0 3px 0 #137a2a, 0 6px 14px rgba(0,0,0,0.35); transition: transform .08s, box-shadow .08s; }
+  .btn.spawn:active, .btn.spawn.pressed { transform: translateY(3px) scale(0.97); box-shadow: 0 0 0 #137a2a, 0 2px 8px rgba(0,0,0,0.35); }
+
+  /* ---------- Керування машиною ---------- */
+  .ctl {
+    position: fixed; border-radius: 50%; display: none; touch-action: none;
+    background: rgba(255,255,255,0.20); border: 2px solid rgba(255,255,255,0.5);
+  }
+  .ctl.down { background: rgba(255,255,255,0.46); }
+  body.driving .ctl { display: block; }
+  #gas { right: calc(var(--safe-r) + 22px); bottom: calc(var(--safe-b) + 22px); width: 96px; height: 96px; background: rgba(80,210,110,0.30); border-color: rgba(150,255,170,0.8); }
+  #gas.down { background: rgba(80,210,110,0.62); }
+  #rev { right: calc(var(--safe-r) + 134px); bottom: calc(var(--safe-b) + 22px); width: 80px; height: 80px; }
+  #left { left: calc(var(--safe-l) + 22px); bottom: calc(var(--safe-b) + 22px); width: 84px; height: 84px; }
+  #right { left: calc(var(--safe-l) + 122px); bottom: calc(var(--safe-b) + 22px); width: 84px; height: 84px; }
+  #carAct {
+    position: fixed; right: calc(var(--safe-r) + 22px); bottom: calc(var(--safe-b) + 132px); height: 46px; padding: 0 18px; border-radius: 23px;
+    border: 1.5px solid rgba(255,255,255,0.6); background: rgba(25,30,45,0.72); color: #fff; font-size: 15px; font-weight: 800;
+    display: none; align-items: center; cursor: pointer; touch-action: manipulation; box-shadow: 0 3px 12px rgba(0,0,0,0.35);
+  }
+  body.driving #stick, body.driving #jump { display: none; }
+  body.driving #carAct, #carAct.show { display: flex; }
+  body.driving #carsBtn { display: none; }
+
+  /* ---------- Підказка зверху ---------- */
+  #toast {
+    position: fixed; left: 50%; top: calc(var(--safe-t) + 14px); transform: translateX(-50%); max-width: 70vw;
+    padding: 9px 16px; border-radius: 16px; background: rgba(20,24,34,0.82); color: #fff; font-size: 14px; font-weight: 700;
+    opacity: 0; transition: opacity .25s; pointer-events: none; text-align: center; z-index: 30;
+  }
+  #toast.show { opacity: 1; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <canvas id="tags"></canvas>
+
 <div id="stick"><div id="knob"></div></div>
 <div id="jump">
-  <svg viewBox="0 0 24 24"><path d="M12 4 L4.5 13 H9.5 V20 H14.5 V13 H19.5 Z" fill="rgba(255,255,255,0.92)"/></svg>
+  <svg class="ico" viewBox="0 0 24 24"><path d="M12 4 L4.5 13 H9.5 V20 H14.5 V13 H19.5 Z" fill="rgba(255,255,255,0.92)"/></svg>
 </div>
+
+<button id="carsBtn" type="button" aria-label="Cars">
+  <svg viewBox="0 0 48 30" fill="none"><path d="M4 21v-5l4-9h26l6 9h4v5h-4a5 5 0 0 1-10 0H17a5 5 0 0 1-10 0H4z" fill="#fff"/><circle cx="12" cy="22" r="3.4" fill="#2a3045"/><circle cx="35" cy="22" r="3.4" fill="#2a3045"/><path d="M12 9h9v7h-13zM24 9h8l4 7H24z" fill="#8fb4e8"/></svg>
+  <span id="carsBtnText">Cars</span>
+</button>
+
+<div id="carsPanel" class="hidden">
+  <button id="carsClose" type="button" aria-label="Close">X</button>
+  <div id="carsTitle"></div>
+  <div id="carsList"></div>
+</div>
+
+<div class="ctl" id="left" aria-label="Left">
+  <svg class="ico" viewBox="0 0 24 24"><path d="M15 4 L6 12 L15 20 L15 15 H20 V9 H15 Z" fill="rgba(255,255,255,0.95)"/></svg>
+</div>
+<div class="ctl" id="right" aria-label="Right">
+  <svg class="ico" viewBox="0 0 24 24"><path d="M9 4 L18 12 L9 20 L9 15 H4 V9 H9 Z" fill="rgba(255,255,255,0.95)"/></svg>
+</div>
+<div class="ctl" id="rev" aria-label="Reverse">
+  <svg class="ico" viewBox="0 0 24 24"><path d="M4 9 L12 18 L20 9 H15 V4 H9 V9 Z" fill="rgba(255,255,255,0.95)"/></svg>
+</div>
+<div class="ctl" id="gas" aria-label="Gas">
+  <svg class="ico" viewBox="0 0 24 24"><path d="M12 3 L3.5 13 H9 V21 H15 V13 H20.5 Z" fill="rgba(255,255,255,0.97)"/></svg>
+</div>
+<button id="carAct" type="button"></button>
+
+<div id="toast"></div>
+
+<!-- Порядок важливий: світ -> фізика -> камера -> переклади -> моделі -> гра -->
+<script src="world.js"></script>
+<script src="physics.js"></script>
+<script src="camera.js"></script>
+<script src="i18n.js"></script>
+<script src="models.js"></script>
 <script src="game.js"></script>
 </body>
 </html>
