@@ -132,7 +132,43 @@ object BloxStrings {
             "get_started" to "Розпочати",
             "joining" to "Приєднання до гри",
             "leave" to "Вийти з гри",
-            "leave_text" to "Ви точно хочете вийти з гри?"
+            "leave_text" to "Ви точно хочете вийти з гри?",
+            "menu" to "Меню",
+            "close" to "Закрити",
+            "players" to "Гравці",
+            "players_count" to "Гравців: %d",
+            "you" to "ви",
+            "invert_camera" to "Інверсія камери",
+            "update_available" to "Доступна нова версія гри",
+            "update_btn" to "Оновити",
+            "update_hint" to "Нові файли гри буде завантажено й перевірено. Поточна версія працює, доки оновлення не завершиться.",
+            "update_downloading" to "Завантаження оновлення",
+            "update_verifying" to "Перевірка файлів",
+            "update_installing" to "Установлення",
+            "update_done" to "Гру оновлено",
+            "update_failed" to "Не вдалося оновити. Стара версія гри залишилась робочою",
+            "update_err_net" to "Немає зв'язку із сервером гри. Перевірте інтернет.",
+            "update_err_server" to "Сервер гри відповів помилкою.",
+            "update_err_manifest" to "Сервер віддав некоректний список файлів гри.",
+            "update_err_file" to "На сервері немає потрібного файла гри.",
+            "update_err_hash" to "Файл гри пошкоджено під час завантаження: перевірка не пройдена.",
+            "update_err_disk" to "Не вдалося зберегти файли гри на телефон (можливо, немає місця).",
+            "update_err_busy" to "Оновлення неможливе, поки відкрита гра.",
+            "update_err_unknown" to "Невідома помилка оновлення.",
+            "err_game_files" to "Файли гри відсутні або пошкоджені. Відкрийте вкладку KishkaBlox і натисніть «Установити» або «Оновити».",
+            "err_game_join" to "Сервер не пустив у гру.",
+            "join_not_logged_in" to "Ви не ввійшли в акаунт KishkaBlox.",
+            "join_not_identified" to "Сервер ще не впізнав ваш акаунт Kishka. Спробуйте ще раз за кілька секунд.",
+            "join_game_full" to "У грі немає вільних місць.",
+            "join_unknown_game" to "Цієї гри немає на сервері. Оновіть застосунок.",
+            "join_bad_payload" to "Сервер не зрозумів запит на вхід у гру.",
+            "join_error" to "Помилка сервера під час входу в гру. Спробуйте пізніше.",
+            "join_timeout" to "Сервер не відповів на вхід у гру. Спробуйте ще раз.",
+            "err_server_down" to "Немає зв'язку із сервером Kishka. Гру не запущено.",
+            "err_webgl" to "Не вдалося запустити 3D-графіку (WebGL) на цьому пристрої.",
+            "err_script" to "Помилка у файлах гри. Оновіть гру у вкладці KishkaBlox.",
+            "kicked_other" to "Ви зайшли в гру з іншого пристрою.",
+            "kicked_timeout" to "Вас відключено від гри: сервер не отримував даних від гри."
         ),
         "ru" to mapOf(
             "tab" to "KishkaBlox",
@@ -175,7 +211,43 @@ object BloxStrings {
             "get_started" to "Начать",
             "joining" to "Присоединение к игре",
             "leave" to "Выйти из игры",
-            "leave_text" to "Вы точно хотите выйти из игры?"
+            "leave_text" to "Вы точно хотите выйти из игры?",
+            "menu" to "Меню",
+            "close" to "Закрыть",
+            "players" to "Игроки",
+            "players_count" to "Игроков: %d",
+            "you" to "вы",
+            "invert_camera" to "Инверсия камеры",
+            "update_available" to "Доступна новая версия игры",
+            "update_btn" to "Обновить",
+            "update_hint" to "Новые файлы игры будут загружены и проверены. Текущая версия работает, пока обновление не завершится.",
+            "update_downloading" to "Загрузка обновления",
+            "update_verifying" to "Проверка файлов",
+            "update_installing" to "Установка",
+            "update_done" to "Игра обновлена",
+            "update_failed" to "Не удалось обновить. Старая версия игры осталась рабочей",
+            "update_err_net" to "Нет связи с сервером игры. Проверьте интернет.",
+            "update_err_server" to "Сервер игры ответил ошибкой.",
+            "update_err_manifest" to "Сервер вернул некорректный список файлов игры.",
+            "update_err_file" to "На сервере нет нужного файла игры.",
+            "update_err_hash" to "Файл игры повреждён при загрузке: проверка не пройдена.",
+            "update_err_disk" to "Не удалось сохранить файлы игры на телефон (возможно, нет места).",
+            "update_err_busy" to "Обновление невозможно, пока открыта игра.",
+            "update_err_unknown" to "Неизвестная ошибка обновления.",
+            "err_game_files" to "Файлы игры отсутствуют или повреждены. Откройте вкладку KishkaBlox и нажмите «Установить» или «Обновить».",
+            "err_game_join" to "Сервер не пустил в игру.",
+            "join_not_logged_in" to "Вы не вошли в аккаунт KishkaBlox.",
+            "join_not_identified" to "Сервер ещё не узнал ваш аккаунт Kishka. Попробуйте ещё раз через несколько секунд.",
+            "join_game_full" to "В игре нет свободных мест.",
+            "join_unknown_game" to "Этой игры нет на сервере. Обновите приложение.",
+            "join_bad_payload" to "Сервер не понял запрос на вход в игру.",
+            "join_error" to "Ошибка сервера при входе в игру. Попробуйте позже.",
+            "join_timeout" to "Сервер не ответил на вход в игру. Попробуйте ещё раз.",
+            "err_server_down" to "Нет связи с сервером Kishka. Игра не запущена.",
+            "err_webgl" to "Не удалось запустить 3D-графику (WebGL) на этом устройстве.",
+            "err_script" to "Ошибка в файлах игры. Обновите игру во вкладке KishkaBlox.",
+            "kicked_other" to "Вы зашли в игру с другого устройства.",
+            "kicked_timeout" to "Вы отключены от игры: сервер не получал данных от игры."
         ),
         "en" to mapOf(
             "tab" to "KishkaBlox",
@@ -217,8 +289,44 @@ object BloxStrings {
             "install_error" to "Could not install. Check the internet and try again",
             "get_started" to "Get started",
             "joining" to "Joining the game",
-            "leave" to "Leave",
-            "leave_text" to "Are you sure you want to leave the game?"
+            "leave" to "Leave game",
+            "leave_text" to "Are you sure you want to leave the game?",
+            "menu" to "Menu",
+            "close" to "Close",
+            "players" to "Players",
+            "players_count" to "Players: %d",
+            "you" to "you",
+            "invert_camera" to "Invert camera",
+            "update_available" to "A new game version is available",
+            "update_btn" to "Update",
+            "update_hint" to "The new game files will be downloaded and verified. The current version keeps working until the update finishes.",
+            "update_downloading" to "Downloading the update",
+            "update_verifying" to "Verifying files",
+            "update_installing" to "Installing",
+            "update_done" to "Game updated",
+            "update_failed" to "Could not update. The old game version still works",
+            "update_err_net" to "Cannot reach the game server. Check your internet.",
+            "update_err_server" to "The game server answered with an error.",
+            "update_err_manifest" to "The server returned an invalid list of game files.",
+            "update_err_file" to "The server does not have a required game file.",
+            "update_err_hash" to "A game file was damaged while downloading: verification failed.",
+            "update_err_disk" to "Could not save the game files on the phone (maybe no free space).",
+            "update_err_busy" to "Cannot update while the game is open.",
+            "update_err_unknown" to "Unknown update error.",
+            "err_game_files" to "The game files are missing or damaged. Open the KishkaBlox tab and tap Install or Update.",
+            "err_game_join" to "The server did not let you into the game.",
+            "join_not_logged_in" to "You are not logged in to your KishkaBlox account.",
+            "join_not_identified" to "The server does not recognize your Kishka account yet. Try again in a few seconds.",
+            "join_game_full" to "The game has no free slots.",
+            "join_unknown_game" to "The server does not have this game. Update the app.",
+            "join_bad_payload" to "The server did not understand the request to join the game.",
+            "join_error" to "Server error while joining the game. Try again later.",
+            "join_timeout" to "The server did not answer the request to join the game. Try again.",
+            "err_server_down" to "No connection to the Kishka server. The game did not start.",
+            "err_webgl" to "Could not start 3D graphics (WebGL) on this device.",
+            "err_script" to "There is an error in the game files. Update the game in the KishkaBlox tab.",
+            "kicked_other" to "You joined the game from another device.",
+            "kicked_timeout" to "You were disconnected from the game: the server got no data from it."
         )
     )
 
@@ -459,6 +567,14 @@ fun KishkabloxTab(lang: String, email: String, displayName: String, avatarUrl: S
 
     // Спершу — «Установити KishkaBlox?». Установка робиться один раз; після «Розпочати» вкладка відкривається одразу.
     LaunchedEffect(Unit) { BloxInstall.check(context) }
+
+    // Є нова версія гри на сервері? Перевіряємо, коли вкладку відкрито й коли повернулись із гри.
+    // Сервер недоступний — кнопку «Оновити» не показуємо (її не можна обґрунтувати).
+    LaunchedEffect(BloxInstall.phase, BloxGame.active) {
+        if (!BloxGame.active && (BloxInstall.phase == BloxInstall.Phase.READY || BloxInstall.phase == BloxInstall.Phase.INSTALLED)) {
+            BloxInstall.checkForUpdate(context)
+        }
+    }
 
     if (BloxInstall.phase == BloxInstall.Phase.READY) {
         KishkabloxMain(lang = lang, email = email, displayName = displayName, avatarUrl = avatarUrl)
@@ -743,11 +859,15 @@ private fun BloxHome(lang: String, avatarUrl: String) {
         } else {
             Row(modifier = Modifier.fillMaxSize()) {
                 BloxRail(lang = lang, page = page, onSelect = { page = it })
-                Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                    if (page == 0) {
-                        BloxHomePage(lang = lang, avatarUrl = avatarUrl, onAddFriends = { addFriendsOpen = true }, onOpenGame = { BloxGame.detailOpen = true })
-                    } else {
-                        BloxMorePage(lang = lang)
+                Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                    // Нова версія гри: кнопка «Оновити», прогрес, помилка з причиною або підтвердження
+                    BloxUpdateBanner(lang = lang)
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        if (page == 0) {
+                            BloxHomePage(lang = lang, avatarUrl = avatarUrl, onAddFriends = { addFriendsOpen = true }, onOpenGame = { BloxGame.detailOpen = true })
+                        } else {
+                            BloxMorePage(lang = lang)
+                        }
                     }
                 }
             }
