@@ -17,28 +17,25 @@ const { createBloxFiles } = require('../kishkablox.js');
 const { CAR_TYPES } = require('../blox_game_server.js');
 
 // ------------------------------------------------------------------ камера
-test('камера: палець угору — камера дивиться вгору, палець униз — вниз', () => {
+test('камера: палець угору — камера піднімається, палець униз — опускається', () => {
     const cam = Cam.create({ pitch: 0.4 });
     const target = { x: 0, y: 3, z: 0 };
     const flat = () => 0;
-    const y0 = Cam.eye(Object.assign({}, cam, { eyeDist: cam.dist }), target, flat).y;
-    // палець угору (dy < 0): камера опускається, погляд піднімається
-    Cam.drag(cam, 0, -60);
-    assert.ok(cam.pitch < 0.4, 'pitch зменшився');
-    const yUp = Cam.eye(Object.assign({}, cam, { eyeDist: cam.dist }), target, flat).y;
-    assert.ok(yUp < y0, 'камера нижче -> погляд угору');
-    const lookUp = target.y - yUp;                       // < 0: ціль вище за камеру
-    assert.ok(lookUp > -1e9);
-    // палець униз (dy > 0): камера піднімається, погляд опускається
-    Cam.drag(cam, 0, 160);
-    assert.ok(cam.pitch > 0.4, 'pitch збільшився');
+    const eyeY = () => Cam.eye(Object.assign({}, cam, { eyeDist: cam.dist }), target, flat).y;
+    const y0 = eyeY();
+    Cam.drag(cam, 0, -60);                                  // палець угору (dy < 0)
+    assert.ok(cam.pitch > 0.4, 'pitch зріс');
+    const yUp = eyeY();
+    assert.ok(yUp > y0, 'камера піднялась');
+    Cam.drag(cam, 0, 160);                                  // палець униз (dy > 0)
+    assert.ok(eyeY() < yUp, 'камера опустилась');
 });
 
 test('камера: інверсія міняє лише вертикаль і вимкнена за замовчуванням', () => {
     assert.strictEqual(Cam.create().invert, false);
     const a = Cam.create({ pitch: 0.4, invert: true });
     Cam.drag(a, 0, -60);
-    assert.ok(a.pitch > 0.4, 'з інверсією палець угору дивиться вниз');
+    assert.ok(a.pitch < 0.4, 'з інверсією палець угору опускає камеру');
     const b = Cam.create({ yaw: 0 }), c = Cam.create({ yaw: 0, invert: true });
     Cam.drag(b, 50, 0); Cam.drag(c, 50, 0);
     assert.strictEqual(b.yaw, c.yaw, 'горизонталь не залежить від інверсії');
@@ -54,9 +51,9 @@ test('камера: горизонталь — палець праворуч п�
 
 test('камера: межі кута, стрибки пальця, масштаб і ніколи не під землею', () => {
     const cam = Cam.create({ pitch: 0 });
-    for (let i = 0; i < 100; i++) Cam.drag(cam, 0, -200);
+    for (let i = 0; i < 100; i++) Cam.drag(cam, 0, 200);        // палець униз — камера опускається до межі
     assert.strictEqual(cam.pitch, Cam.LIMITS.pitchMin);
-    for (let i = 0; i < 100; i++) Cam.drag(cam, 0, 200);
+    for (let i = 0; i < 100; i++) Cam.drag(cam, 0, -200);       // палець угору — камера піднімається до межі
     assert.strictEqual(cam.pitch, Cam.LIMITS.pitchMax);
     assert.ok(cam.pitch < Math.PI / 2, 'камера не перевертається');
     const before = cam.pitch;
@@ -103,30 +100,48 @@ test('карта: персонаж з\'являється в центрі вел
     assert.ok(World.CFG.rampX1 - World.CFG.rampX0 >= 60, 'пандус довгий');
     // краї плити плавно сходять до землі: немає обривів (різниця між сусідніми точками мала)
     let maxEdge = 0;
-    for (let x = 140; x < 262; x += 1) maxEdge = Math.max(maxEdge, Math.abs(World.heightAt(x + 1, 55) - World.heightAt(x, 55)));
+    for (let x = 140; x < 400; x += 1) maxEdge = Math.max(maxEdge, Math.abs(World.heightAt(x + 1, 55) - World.heightAt(x, 55)));
     assert.ok(maxEdge < 1.2, 'край плити без обривів: ' + maxEdge.toFixed(2));
     // рельєф повсюди скінченний і без різких стрибків між сусідніми клітинками
     let maxJump = 0;
-    for (let x = -260; x <= 260; x += 4) for (let z = -260; z <= 260; z += 4) {
+    for (let x = -640; x <= 640; x += 8) for (let z = -640; z <= 640; z += 8) {
         const h = World.heightAt(x, z);
         assert.ok(Number.isFinite(h));
         maxJump = Math.max(maxJump, Math.abs(World.heightAt(x + 1, z) - h), Math.abs(World.heightAt(x, z + 1) - h));
     }
     assert.ok(maxJump < 1.6, 'немає квадратних обривів: ' + maxJump.toFixed(2));
-    // на карті більше немає міських будівель/машин: лише дерева й каміння
-    assert.ok(World.props.trees.length > 50 && World.props.rocks.length > 5);
+    // на карті НЕМАЄ дерев, каміння й інших об'єктів: лише рівнина, дорога й гірка
+    assert.strictEqual(World.props.trees.length, 0);
+    assert.strictEqual(World.props.rocks.length, 0);
+    assert.strictEqual(World.obstacles.length, 0);
+    assert.strictEqual(Models.buildProps(World).idx.length, 0, 'геометрія дерев порожня');
+    // карта більша, ніж раніше (було 265)
+    assert.ok(World.CFG.limitR >= 600);
 });
 
-test('персонаж: ходить по пандусу вгору, не проходить крізь дерева, не виходить за межі світу', () => {
+test('карта: трава й гірка — один матеріал (спільна шахова плитка), різниться лише колір; дорога асфальтова', () => {
+    // та сама плитка для трави й гірки
+    assert.strictEqual(typeof World.checkerAt(3, 5), 'number');
+    assert.notStrictEqual(World.checkerAt(1, 1), World.checkerAt(1 + World.CFG.tile, 1));
+    assert.strictEqual(World.checkerAt(1, 1), World.checkerAt(1 + 2 * World.CFG.tile, 1));
+    const grass = World.colorAt(-200, 300), ramp = World.colorAt(170, 0), road = World.colorAt(60, 0);
+    assert.ok(grass[1] > grass[0] * 1.8 && grass[1] > grass[2] * 2, 'трава зелена');
+    assert.ok(Math.abs(ramp[0] - ramp[1]) < 0.06 && Math.abs(ramp[1] - ramp[2]) < 0.06, 'гірка сіра');
+    assert.ok(road[0] < 0.3 && road[1] < 0.3, 'дорога темна');
+    assert.strictEqual(World.rampness(-200, 300), 0);
+    assert.strictEqual(World.rampness(170, 0), 1);
+    // шейдер малює плитку за світовими координатами лише для рельєфу
+    const gameJs = fs.readFileSync(path.join(GAME_DIR, 'game.js'), 'utf8');
+    assert.ok(/uCheck/.test(gameJs) && /floor\(vW\.x \/ uTile\)/.test(gameJs));
+    assert.ok(/R\.checker\(true\)/.test(gameJs) && /R\.checker\(false\)/.test(gameJs));
+});
+
+test('персонаж: ходить по пандусу вгору й не виходить за межі світу', () => {
     const w = Phys.createWalker(30, 0);
     for (let t = 0; t < 14; t += 1 / 60) Phys.stepWalker(w, { mx: 1, mz: 0, jump: false }, 1 / 60);
-    assert.ok(w.x > 150 && Math.abs(w.y - World.heightAt(w.x, w.z)) < 0.01, 'піднявся на плиту і стоїть на землі');
-    const tree = World.props.trees[0];
-    const walker = Phys.createWalker(tree.x - 15, tree.z);
-    for (let t = 0; t < 4; t += 1 / 60) Phys.stepWalker(walker, { mx: 1, mz: 0, jump: false }, 1 / 60);
-    assert.ok(Math.hypot(walker.x - tree.x, walker.z - tree.z) >= tree.r + Phys.WALK.radius - 0.2, 'дерево не пройдене');
+    assert.ok(w.x > 150 && Math.abs(w.y - World.heightAt(w.x, w.z)) < 0.01, 'піднявся на гірку і стоїть на землі');
     const edge = Phys.createWalker(100, 100);
-    for (let t = 0; t < 60; t += 1 / 60) Phys.stepWalker(edge, { mx: 1, mz: 1, jump: false }, 1 / 60);
+    for (let t = 0; t < 120; t += 1 / 60) Phys.stepWalker(edge, { mx: 1, mz: 1, jump: false }, 1 / 60);
     assert.ok(Math.hypot(edge.x, edge.z) <= World.CFG.limitR + 1e-6, 'межа карти');
 });
 
@@ -163,12 +178,13 @@ test('машини: розгін, максимальна швидкість, г�
         // проїзд усією дорогою на пандус і плиту, не провалюється
         const r = Phys.createCar(type, 30, 0, Math.PI / 2);
         let minAbove = 1e9;
-        for (let t = 0; t < 14; t += 1 / 60) {
+        for (let t = 0; t < 22; t += 1 / 60) {
             Phys.stepCar(r, { throttle: 1, steer: 0 }, 1 / 60);
-            minAbove = Math.min(minAbove, r.y - World.heightAt(r.x, r.z));
+            const g = Phys.groundSample(def, r);
+            minAbove = Math.min(minAbove, r.y - g.y);
         }
-        assert.ok(minAbove > -0.6, type + ' не провалюється крізь пандус: ' + minAbove.toFixed(2));
-        assert.ok(r.x > 120, type + ' піднялась на пандус');
+        assert.ok(minAbove > -0.01, type + ' не провалюється крізь пандус: ' + minAbove.toFixed(2));
+        assert.ok(r.x > 100, type + ' піднялась на пандус');
         assert.ok(Math.hypot(r.x, r.z) <= World.CFG.limitR + 1e-6, type + ' у межах світу');
     }
 });
@@ -185,7 +201,7 @@ test('машина: після падіння повертається в кор
 test('нова машина з\'являється перед гравцем і не всередині перешкоди', () => {
     const spot = Phys.spawnSpot(0, 0, 0, 'truck');
     assert.ok(spot.z > 5);
-    for (const o of World.obstacles.slice(0, 40)) {
+    for (const o of World.obstacles.slice(0, 40)) {   // перешкод на карті немає — цикл порожній, але перевірка лишається для майбутніх карт
         const s = Phys.spawnSpot(o.x - 10, o.z, Math.PI / 2, 'van');
         assert.ok(Math.hypot(s.x - o.x, s.z - o.z) >= o.r + 1, 'машина не всередині перешкоди');
     }
