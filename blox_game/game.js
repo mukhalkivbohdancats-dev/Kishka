@@ -19,10 +19,12 @@
 //   KishkaGame.roster({players:[{id,nick}]})           хто зараз у грі
 //   KishkaGame.tick([[id,x,y,z,ry,a,d],...])           стани гравців (10 разів на секунду)
 //   KishkaGame.cars({cars:[{id,cid,type,x,y,z,ry}]})   повний список машин у кімнаті
-//   KishkaGame.carTick([[id,cid,x,y,z,ry,speed,steer],...])  рух машин
+//   KishkaGame.carTick([[id,cid,x,y,z,ry,speed,steer,kmh],...])  рух машин (kmh — швидкість для спідометра, рахує сервер)
 //   KishkaGame.carResult({ok,cid,code})                результат створення моєї машини
 //
-// Керування, як у Roblox: джойстик зліва, кнопка стрибка справа, палець по екрану — камера (палець угору = погляд угору),
+//   KishkaGame.respawn({x,y,z,ry})                    повернути мого персонажа на майданчик (меню Respawn)
+//
+// Керування, як у Roblox: джойстик зліва, кнопка стрибка справа, палець по екрану — камера (палець угору = камера вгору),
 // два пальці — наближення/віддалення. У машині: газ і назад праворуч знизу, повороти ліворуч знизу.
 // =====================================================================
 (function () {
@@ -82,9 +84,9 @@
     }
     var TIER = detectTier();
     var TIER_CFG = [
-        { cell: 3, dpr: 1.0, aa: false, far: 520, fogFar: 420 },
-        { cell: 2, dpr: 1.5, aa: true, far: 700, fogFar: 520 },
-        { cell: 1.5, dpr: 2.0, aa: true, far: 800, fogFar: 600 }
+        { cell: 5, dpr: 1.0, aa: false, far: 560, fogFar: 440 },
+        { cell: 4, dpr: 1.5, aa: true, far: 720, fogFar: 540 },
+        { cell: 3, dpr: 2.0, aa: true, far: 820, fogFar: 620 }
     ][TIER];
 
     // ---------------------------------------------------------------- матриці (column-major, як у WebGL)
@@ -157,13 +159,18 @@
         '#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n' +
         'varying vec3 vN;\nvarying vec3 vW;\nvarying vec3 vC;\n' +
         'uniform vec3 uTint;\nuniform vec3 uLight;\nuniform vec3 uCam;\nuniform vec3 uFog;\nuniform vec2 uFogR;\n' +
-        'uniform float uAlpha;\nuniform float uSpec;\n' +
+        'uniform float uAlpha;\nuniform float uSpec;\nuniform float uCheck;\nuniform float uTile;\n' +
         'void main() {\n' +
         '  vec3 n = normalize(vN);\n' +
         '  vec3 L = normalize(uLight);\n' +
         '  float d = max(dot(n, L), 0.0);\n' +
         '  float hemi = 0.5 + 0.5 * n.y;\n' +
         '  vec3 c = vC * uTint;\n' +
+        '  if (uCheck > 0.5) {\n' +
+        '    float k = mod(floor(vW.x / uTile) + floor(vW.z / uTile), 2.0);\n' +
+        '    float fd = 1.0 - smoothstep(120.0, 280.0, length(vW - uCam));\n' +
+        '    c *= 1.0 + (k - 0.5) * 0.17 * fd;\n' +
+        '  }\n' +
         '  vec3 amb = mix(vec3(0.36, 0.34, 0.32), vec3(0.64, 0.72, 0.86), hemi) * 0.8;\n' +
         '  vec3 sun = vec3(1.0, 0.95, 0.86) * (0.72 * d);\n' +
         '  vec3 lit = c * (amb + sun);\n' +
@@ -211,7 +218,7 @@
         }
         var prog = program(VS, FS, ['aPos', 'aNrm', 'aCol']);
         var loc = {};
-        ['uVP', 'uM', 'uN', 'uTint', 'uLight', 'uCam', 'uFog', 'uFogR', 'uAlpha', 'uSpec'].forEach(function (n) { loc[n] = gl.getUniformLocation(prog, n); });
+        ['uVP', 'uM', 'uN', 'uTint', 'uLight', 'uCam', 'uFog', 'uFogR', 'uAlpha', 'uSpec', 'uCheck', 'uTile'].forEach(function (n) { loc[n] = gl.getUniformLocation(prog, n); });
         var skyProg = program(SKY_VS, SKY_FS, ['aP']);
         var skyLoc = { uHor: gl.getUniformLocation(skyProg, 'uHor'), uTop: gl.getUniformLocation(skyProg, 'uTop'), uHorizon: gl.getUniformLocation(skyProg, 'uHorizon') };
         var skyBuf = gl.createBuffer();
@@ -267,9 +274,14 @@
             gl.uniform3f(loc.uFog, FOG[0], FOG[1], FOG[2]);
             gl.uniform2f(loc.uFogR, o.fogNear || 160, o.fogFar || 420);
             cur = null;
+            gl.uniform1f(loc.uCheck, 0);
+            gl.uniform1f(loc.uTile, World.CFG.tile || 8);
             gl.disable(gl.BLEND);
             gl.depthMask(true);
         }
+
+        // Шахова плитка: вмикається лише для рельєфу (трава й гірка — один матеріал)
+        function checker(on) { gl.uniform1f(loc.uCheck, on ? 1 : 0); }
 
         function sky(horizonNdc) {
             gl.useProgram(skyProg);
@@ -313,7 +325,7 @@
             else gl.disable(gl.POLYGON_OFFSET_FILL);
         }
 
-        return { gl: gl, id: id, mesh: mesh, begin: begin, sky: sky, draw: draw, blend: blend, offset: offset };
+        return { gl: gl, id: id, mesh: mesh, begin: begin, sky: sky, draw: draw, blend: blend, offset: offset, checker: checker };
     }
 
     // ---------------------------------------------------------------- стан гри
@@ -334,6 +346,7 @@
     var pendingSpawn = false;
     var lastSpawnAt = -1e9;
     var remotes = {};                     // id -> гравець
+    var hiddenIds = {};                   // id гравців, яких я заблокував у меню: їх персонажі й ніки не малюються (лише в мене)
     var remoteCars = {};                  // id власника -> машина
     var myPose = null;
     var cam = Cam.create({ yaw: 0, pitch: 0.35, dist: 14 });
@@ -442,7 +455,7 @@
 
     function carMatrix(out, c) {
         M.ident(out);
-        M.translate(out, c.x, c.y, c.z);
+        M.translate(out, c.x, c.y + (c.sy || 0), c.z);
         M.rotateY(out, c.ry);
         M.rotateX(out, -(c.pitch || 0));
         M.rotateZ(out, -(c.roll || 0));
@@ -506,7 +519,7 @@
             };
         });
         if (terrain.length === 0) {
-            terrain = Models.buildTerrain(World, TIER_CFG.cell, 40);
+            terrain = Models.buildTerrain(World, TIER_CFG.cell, 32);
             propsGeo = Models.buildProps(World);
             decalsGeo = Models.buildDecals(World);
             discGeo = buildDisc();
@@ -748,12 +761,24 @@
         return { mx: fx * sy + rx * sx, mz: fz * sy + rz * sx, mag: mag };
     }
 
+    // Інші машини в кімнаті (для зіткнень): позиція, поворот, тип і швидкість із останнього знімка
+    var otherCars = [];
+    function collectOtherCars() {
+        otherCars.length = 0;
+        for (var id in remoteCars) {
+            var rc = remoteCars[id];
+            otherCars.push({ x: rc.x, y: rc.y, z: rc.z, ry: rc.ry, type: rc.type, speed: rc.speed || 0 });
+        }
+        return otherCars;
+    }
+
     function stepLocal(dt) {
         var k = input.keys;
+        collectOtherCars();
         if (driving && myCar) {
             var th = (input.gas || k.ArrowUp || k.KeyW ? 1 : 0) - (input.rev || k.ArrowDown || k.KeyS ? 1 : 0);
             var st = (input.right || k.ArrowRight || k.KeyD ? 1 : 0) - (input.left || k.ArrowLeft || k.KeyA ? 1 : 0);
-            Phys.stepMany(dt, function (h) { Phys.stepCar(myCar, { throttle: th, steer: st }, h); });
+            Phys.stepMany(dt, function (h) { Phys.stepCar(myCar, { throttle: th, steer: st }, h, otherCars); });
             walker.x = myCar.x; walker.y = myCar.y; walker.z = myCar.z; walker.ry = myCar.ry;
             walker.a = 0; walker.speed = 0;
             return;
@@ -765,7 +790,7 @@
         });
         // Припаркована машина докочується до зупинки
         if (myCar && (Math.abs(myCar.speed) > 0.05 || myCar.air)) {
-            Phys.stepMany(dt, function (h) { Phys.stepCar(myCar, { throttle: 0, steer: 0 }, h); });
+            Phys.stepMany(dt, function (h) { Phys.stepCar(myCar, { throttle: 0, steer: 0 }, h, otherCars); });
         }
     }
 
@@ -859,12 +884,14 @@
             var d = Math.sqrt(dx * dx + dz * dz);
             if (d > maxD + c.radius) continue;
             if (d > c.radius && (dx * fx + dz * fz) / d < -0.35 - c.radius / d) continue;
+            R.checker(true);
             R.draw(c.mesh, M.ident(stk), null, 1, 0);
         }
+        R.checker(false);
         R.offset(true);
         R.draw(R.decalsMesh, M.ident(stk), null, 1, 0);
         R.offset(false);
-        R.draw(R.propsMesh, M.ident(stk), null, 1, 0);
+        if (propsGeo && propsGeo.idx.length > 0) R.draw(R.propsMesh, M.ident(stk), null, 1, 0);
 
         // Машини й персонажі
         var hideMe = !driving && eye.dist < 1.8;
@@ -879,7 +906,7 @@
         var drawnBase = new Float32Array(16);
         for (id in remotes) {
             var r = remotes[id];
-            if (!r.has) continue;
+            if (!r.has || hiddenIds[id]) continue;
             if (r.d === 1 && remoteCars[id]) { drawSeated(R, remoteCars[id], r.pose); continue; }
             M.ident(drawnBase); M.translate(drawnBase, r.x, r.y, r.z); M.rotateY(drawnBase, r.ry);
             drawChar(R, drawnBase, r.pose);
@@ -923,7 +950,7 @@
         var id;
         for (id in remotes) {
             var r = remotes[id];
-            if (!r.has || !r.nick) continue;
+            if (!r.has || !r.nick || hiddenIds[id]) continue;
             var inCar = r.d === 1 && remoteCars[id];
             list.push({ nick: r.nick, x: r.x, y: inCar ? r.y + (carModels[remoteCars[id].type] ? carModels[remoteCars[id].type].height : 4) + 1.2 : r.y + 5.9, z: r.z });
         }
@@ -974,6 +1001,29 @@
         } else {
             perf.goodFor = 0;
         }
+    }
+
+    // ---------------------------------------------------------------- спідометр
+    // Показує справжню швидкість моєї машини: студи/с -> км/год (Phys.kmh), стрілка до 200 км/год, передача D1..Dn / N / R.
+    var SPEEDO_MAX = 200;
+    var SPEEDO_ARC = 367.57;                  // довжина дуги 270° для r = 78
+    var speedoEls = null, speedoLast = { kmh: -1, gear: -99, lang: '' };
+    function updateSpeedo() {
+        if (!speedoEls) {
+            speedoEls = { num: $('spdNum'), bar: $('spdBar'), gear: $('spdGear'), unit: $('spdUnit'), box: $('speedo') };
+        }
+        var v = driving && myCar ? Phys.kmh(myCar.speed) : 0;
+        var gear = driving && myCar ? Phys.gearOf(myCar.type, myCar.speed) : 0;
+        var lang = I18.lang;
+        if (v === speedoLast.kmh && gear === speedoLast.gear && lang === speedoLast.lang) return;
+        speedoLast.kmh = v; speedoLast.gear = gear; speedoLast.lang = lang;
+        var p = clamp(v / SPEEDO_MAX, 0, 1);
+        speedoEls.num.textContent = String(v);
+        speedoEls.bar.setAttribute('stroke-dasharray', (p * SPEEDO_ARC).toFixed(1) + ' 490.09');
+        speedoEls.bar.setAttribute('stroke', 'hsl(' + Math.round(130 - 130 * p) + ',78%,55%)');   // зелений -> жовтий -> червоний
+        speedoEls.gear.textContent = gear < 0 ? 'R' : (gear === 0 ? 'N' : 'D' + gear);
+        speedoEls.unit.textContent = I18.t('kmh');
+        speedoEls.box.setAttribute('aria-label', I18.t('speedometer') + ': ' + v);
     }
 
     // ---------------------------------------------------------------- підказка зверху
@@ -1052,31 +1102,17 @@
             card.className = 'card' + (selectedType === t ? ' sel' : '');
             card.setAttribute('data-type', t);
             var pv = previews && previews[t];
-            var media = pv ? '<img class="pv" alt="" src="' + pv + '">' : '<div class="pv" style="aspect-ratio:8/5;display:flex;align-items:center;justify-content:center"><div style="width:62%">' + CAR_ICONS[t] + '</div></div>';
-            card.innerHTML = media +
+            var media = pv ? '<img class="pv" alt="" src="' + pv + '">' : '<div style="width:62%">' + CAR_ICONS[t] + '</div>';
+            card.innerHTML = '<div class="pvw">' + media + '</div>' +
                 '<div class="nm">' + CAR_ICONS[t] + '<span>' + I18.t(t) + '</span></div>' +
-                '<div class="ht">' + I18.t(t + '_hint') + '</div>';
-            var btn = document.createElement('button');
-            btn.type = 'button';
-            if (selectedType === t) {
-                btn.className = 'btn spawn';
-                btn.textContent = I18.t('spawn');
-                btn.addEventListener('click', function (e) {
-                    e.stopPropagation();
-                    btn.classList.add('pressed');
-                    setTimeout(function () { btn.classList.remove('pressed'); }, 180);
-                    // Короткий «клік», потім машина з'являється
-                    setTimeout(function () { spawnCar(t); }, 120);
-                });
-            } else {
-                btn.className = 'btn pick';
-                btn.textContent = I18.t('select');
-                btn.addEventListener('click', function (e) { e.stopPropagation(); selectCar(t); });
-            }
-            card.appendChild(btn);
+                '<div class="ht">' + I18.t(t + '_hint') + '</div>' +
+                '<div class="st">' + (selectedType === t ? I18.t('selected') : '') + '</div>';
             card.addEventListener('click', function () { if (selectedType !== t) selectCar(t); });
             list.appendChild(card);
         });
+        var sp = $('spawnBtn');
+        sp.textContent = I18.t('spawn');
+        sp.disabled = !selectedType;
     }
 
     function selectCar(t) { selectedType = t; renderCarsPanel(); }
@@ -1098,6 +1134,7 @@
         $('rev').setAttribute('aria-label', I18.t('reverse'));
         $('left').setAttribute('aria-label', I18.t('left'));
         $('right').setAttribute('aria-label', I18.t('right'));
+        speedoLast.lang = '';
         if (panelOpen()) renderCarsPanel();
         updateCarAct();
     }
@@ -1176,12 +1213,19 @@
 
     $('carsBtn').addEventListener('click', function () { if (panelOpen()) closePanel(); else openPanel(); });
     $('carsClose').addEventListener('click', closePanel);
+    $('spawnBtn').addEventListener('click', function () {
+        var btn = $('spawnBtn'), t = selectedType;
+        if (!t) return;
+        btn.classList.add('pressed');
+        setTimeout(function () { btn.classList.remove('pressed'); }, 180);
+        setTimeout(function () { spawnCar(t); }, 120);      // короткий «клік», потім машина з'являється
+    });
     $('carAct').addEventListener('click', function () {
         if (driving) setDriving(false);
         else if (carNearMe()) setDriving(true);
         else toast(I18.t('car_far'));
     });
-    ['carsPanel', 'carsBtn', 'carAct'].forEach(function (id) {
+    ['carsPanel', 'carsBtn', 'carAct', 'speedo'].forEach(function (id) {
         $(id).addEventListener('pointerdown', function (e) { e.stopPropagation(); });
     });
 
@@ -1249,6 +1293,7 @@
         updatePose(myPose, mode, walker.speed || 16, dt, driving && myCar ? myCar.steer / 0.6 : 0);
         updateRemotes(dt);
         sendState(dt);
+        updateSpeedo();
         updateCamera(dt);
         render();
         drawTags();
@@ -1291,6 +1336,32 @@
                 if (!rc || rc.cid !== t[1]) continue;
                 carSnap(rc, +t[2], +t[3], +t[4], +t[5], +t[6], +t[7], false);
             }
+        },
+        // Меню «лупа»: камера повертається до обраного гравця
+        lookAt: function (id) {
+            var r = remotes[id];
+            if (!r || !r.has || !walker) return;
+            var dx = r.x - walker.x, dz = r.z - walker.z;
+            if (dx * dx + dz * dz < 0.01) return;
+            cam.yaw = Math.atan2(-dx, -dz);
+        },
+        // Меню «заблокувати»: персонаж гравця більше не показується (лише мені)
+        hidePlayer: function (id, hidden) {
+            if (hidden) hiddenIds[id] = true; else delete hiddenIds[id];
+        },
+        // Меню «Respawn»: сервер підтвердив нове місце — виходимо з машини й ставимо персонажа на майданчик
+        respawn: function (data) {
+            if (!walker) return;
+            var s0 = World.spawnPoint();
+            var x = data && isFinite(+data.x) ? +data.x : s0.x, z = data && isFinite(+data.z) ? +data.z : s0.z;
+            if (driving) setDriving(false, true);
+            walker.x = x; walker.z = z; walker.y = World.heightAt(x, z) + 0.3; walker.vy = 0; walker.onGround = false;
+            walker.ry = data && isFinite(+data.ry) ? +data.ry : walker.ry;
+            cam.yaw = walker.ry + Math.PI;
+            lastSent = '';
+            releaseAll();
+            toast(I18.t('respawned'));
+            updateCarAct();
         },
         carResult: function (res) {
             if (!pendingSpawn) return;
