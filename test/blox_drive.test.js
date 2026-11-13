@@ -290,3 +290,14 @@ test('димовий запуск game.js (імітація браузера): �
         assert.ok(!g.calls.some((c) => c[0] === 'log' && /ПОМИЛКА|Error|TypeError/.test(String(c[1]))), 'у логах гри немає помилок JS');
     });
 });
+
+test('Android: BloxGameController не private-in-file, а функція меню з ним — internal (помилка компіляції Kotlin)', () => {
+    const dir = path.join(__dirname, '..', 'app', 'src', 'main', 'java', 'com', 'kishka', 'messenger');
+    const game = fs.readFileSync(path.join(dir, 'Bloxgame.kt'), 'utf8');
+    const menu = fs.readFileSync(path.join(dir, 'Bloxmenu.kt'), 'utf8');
+    assert.ok(/^internal class BloxGameController\(/m.test(game), 'клас контролера видимий з Bloxmenu.kt');
+    assert.ok(!/private class BloxGameController/.test(game));
+    assert.ok(/^internal fun BoxScope\.BloxRobloxMenu\(/m.test(menu), 'публічна функція не відкриває internal-тип');
+    // кожна функція меню, що приймає контролер, має бути internal або private
+    for (const m of menu.matchAll(/^(?!private|internal)[^\n]*fun [^\n]*BloxGameController/gm)) assert.fail('публічна функція з BloxGameController: ' + m[0]);
+});
