@@ -71,6 +71,7 @@ function setup(extra) {
         now: () => clock.t,
         tickMs: 10,
         graceMs: 200,
+        motionCheck: false,
         getNick: async (email) => {
             if (logged && !logged.has(email)) return null;
             return email.split('@')[0];
