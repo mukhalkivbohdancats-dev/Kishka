@@ -249,7 +249,7 @@ private fun TabButton(icon: ImageVector, label: String, selected: Boolean, compa
  * initialTab: 0 = People. Скарги/respawn/блок виконує контролер гри (сервер + JS), друзі — BloxAuth.
  */
 @Composable
-fun BoxScope.BloxRobloxMenu(lang: String, controller: BloxGameController, initialTab: Int, onClose: () -> Unit) {
+internal fun BoxScope.BloxRobloxMenu(lang: String, controller: BloxGameController, initialTab: Int, onClose: () -> Unit) {
     val context = LocalContext.current
     val b: (String) -> String = { key -> BloxStrings.get(key, lang) }
     val cfg = LocalConfiguration.current
