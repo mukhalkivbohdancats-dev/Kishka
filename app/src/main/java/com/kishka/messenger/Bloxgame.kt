@@ -282,7 +282,7 @@ fun BloxGameDetail(onBack: () -> Unit, onPlay: () -> Unit) {
  *  WebView -> застосунок: ready (сторінка готова), started (перший кадр), state (мій стан), fail (немає WebGL).
  *  Сервер -> WebView: start / resync / roster / tick (див. blox_game/game.js).
  */
-private class BloxGameController(private val appContext: Context, private val email: String, private val lang: String) {
+internal class BloxGameController(private val appContext: Context, private val email: String, private val lang: String) {
     private val main = Handler(Looper.getMainLooper())
     private var webView: WebView? = null
 
