@@ -17,10 +17,10 @@
             selected: 'Вибрано',
             spawn: 'Створити',
             sedan: 'Автомобіль',
-            van: 'Мінівен',
+            van: 'Фургон',
             truck: 'Вантажівка',
-            sedan_hint: 'Швидкий і маневрений',
-            van_hint: 'Просторий і стійкий',
+            sedan_hint: 'Звичайний автомобіль: швидкий і маневрений',
+            van_hint: 'Компактний фургон: просторий і стійкий',
             truck_hint: 'Повільна, але потужна',
             exit_car: 'Вийти з машини',
             enter_car: 'Сісти в машину',
@@ -35,7 +35,10 @@
             car_far: 'Підійдіть ближче до своєї машини',
             net_lost: 'Немає зв\'язку із сервером',
             net_back: 'Зв\'язок відновлено',
-            cars_title: 'Оберіть машину'
+            cars_title: 'Оберіть машину',
+            kmh: 'КМ/ГОД',
+            speedometer: 'Спідометр',
+            respawned: 'Ви повернулись на майданчик'
         },
         ru: {
             cars: 'Машины',
@@ -44,10 +47,10 @@
             selected: 'Выбрано',
             spawn: 'Создать',
             sedan: 'Автомобиль',
-            van: 'Минивэн',
+            van: 'Фургон',
             truck: 'Грузовик',
-            sedan_hint: 'Быстрый и манёвренный',
-            van_hint: 'Просторный и устойчивый',
+            sedan_hint: 'Обычный автомобиль: быстрый и манёвренный',
+            van_hint: 'Компактный фургон: просторный и устойчивый',
             truck_hint: 'Медленный, но мощный',
             exit_car: 'Выйти из машины',
             enter_car: 'Сесть в машину',
@@ -62,7 +65,10 @@
             car_far: 'Подойдите ближе к своей машине',
             net_lost: 'Нет связи с сервером',
             net_back: 'Связь восстановлена',
-            cars_title: 'Выберите машину'
+            cars_title: 'Выберите машину',
+            kmh: 'КМ/Ч',
+            speedometer: 'Спидометр',
+            respawned: 'Вы вернулись на площадку'
         },
         en: {
             cars: 'Cars',
@@ -71,10 +77,10 @@
             selected: 'Selected',
             spawn: 'Spawn',
             sedan: 'Car',
-            van: 'Minibus',
+            van: 'Van',
             truck: 'Truck',
-            sedan_hint: 'Fast and agile',
-            van_hint: 'Roomy and stable',
+            sedan_hint: 'Regular car: fast and agile',
+            van_hint: 'Compact van: roomy and stable',
             truck_hint: 'Slow but powerful',
             exit_car: 'Exit car',
             enter_car: 'Enter car',
@@ -89,7 +95,10 @@
             car_far: 'Move closer to your car',
             net_lost: 'No connection to the server',
             net_back: 'Connection restored',
-            cars_title: 'Choose a car'
+            cars_title: 'Choose a car',
+            kmh: 'KM/H',
+            speedometer: 'Speedometer',
+            respawned: 'You returned to the platform'
         }
     };
 
