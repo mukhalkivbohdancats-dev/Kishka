@@ -64,7 +64,7 @@ test('spawn: інший гравець бачить машину зі списк
     for (const c of [a, b]) {
         const list = c.last('blox_game_cars');
         assert.strictEqual(list.count, 1);
-        assert.deepStrictEqual(list.cars[0], { id: ra.id, cid: r.cid, type: 'van', x: 7, y: 1, z: 3, ry: 0.5 });
+        assert.deepStrictEqual(list.cars[0], { id: ra.id, cid: r.cid, type: 'van', x: 7, y: 1, z: 3, ry: 0.5, kmh: 0 });
     }
     const c = io.connect('carl@x.com');
     const rc = await join(c, 'carl@x.com');
@@ -120,7 +120,7 @@ test('стан гравця й машини: інший клієнт отрим�
     const tick = b.events('blox_game_tick').flat().filter((t) => t[0] === ra.id).pop();
     assert.deepStrictEqual(tick, [ra.id, 6, 1, 7, 0.5, 0, 1]);
     const ct = b.events('blox_car_tick').flat().filter((t) => t[0] === ra.id).pop();
-    assert.deepStrictEqual(ct, [ra.id, r.cid, 6, 1, 7, 0.5, 31.5, -0.2]);
+    assert.deepStrictEqual(ct, [ra.id, r.cid, 6, 1, 7, 0.5, 31.5, -0.2, 32]);
     // вийшов з машини: d=0, машина стоїть
     a.send('blox_game_state', { x: 9, y: 1, z: 7, ry: 0.5, a: 1, d: 0 });
     await sleep(40);
@@ -158,13 +158,13 @@ test('перевірка чисел: sanitizeState / sanitizeCar', () => {
     const ok = { x: 1, y: 2, z: 3, ry: 4, a: 1, d: 0 };
     assert.ok(sanitizeState(ok));
     for (const bad of [
-        { ...ok, x: Infinity }, { ...ok, y: NaN }, { ...ok, z: '3' }, { ...ok, x: 301 }, { ...ok, y: 81 }, { ...ok, a: 3 }, { ...ok, d: 2 },
+        { ...ok, x: Infinity }, { ...ok, y: NaN }, { ...ok, z: '3' }, { ...ok, x: 701 }, { ...ok, y: 121 }, { ...ok, a: 3 }, { ...ok, d: 2 },
         { ...ok, c: { t: 'sedan', x: 1, y: 1, z: 1, ry: 0, s: 1 } },
         { ...ok, c: { t: 'boat', x: 1, y: 1, z: 1, ry: 0, s: 1, st: 0 } },
-        { ...ok, c: { t: 'sedan', x: 1, y: 1, z: 1, ry: 0, s: 100, st: 0 } },
+        { ...ok, c: { t: 'sedan', x: 1, y: 1, z: 1, ry: 0, s: 201, st: 0 } },
         { ...ok, c: { t: 'sedan', x: 1, y: 1, z: 1, ry: 0, s: 1, st: 5 } }
     ]) assert.strictEqual(sanitizeState(bad), null, JSON.stringify(bad));
-    assert.strictEqual(sanitizeCar({ t: 'van', x: 0, y: 0, z: 0, ry: 0, s: -90, st: 1.2 }).t, 'van');
+    assert.strictEqual(sanitizeCar({ t: 'van', x: 0, y: 0, z: 0, ry: 0, s: -200, st: 1.2 }).t, 'van');
 });
 
 test('вихід з гри прибирає гравця й машину і оновлює список', async () => {
