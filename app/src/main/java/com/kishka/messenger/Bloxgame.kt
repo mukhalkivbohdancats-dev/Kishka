@@ -642,6 +642,65 @@ private class BloxGameController(private val appContext: Context, private val em
         }
     }
 
+    /**
+     * Меню «Respawn»: сервер повертає персонажа на майданчик (виходить з машини), гра ставить його туди ж.
+     * onResult(true) — готово; false — сервер не відповів за 5 с або відхилив (з причиною в Logcat).
+     */
+    fun respawn(onResult: (Boolean) -> Unit) {
+        val answered = java.util.concurrent.atomic.AtomicBoolean(false)
+        try {
+            KishkaManager.getSocket().emit("blox_game_respawn", JSONObject(), Ack { args ->
+                if (!answered.compareAndSet(false, true)) return@Ack
+                val res = args.firstOrNull() as? JSONObject
+                val ok = res?.optBoolean("success", false) == true
+                if (ok) {
+                    js("KishkaGame.respawn({x:" + res!!.optDouble("x", 0.0) + ",y:" + res.optDouble("y", 0.0) + ",z:" + res.optDouble("z", 0.0) + ",ry:" + res.optDouble("ry", 0.0) + "})")
+                } else {
+                    Log.w(BLOX_TAG, "respawn відхилено сервером: code=" + (res?.optString("code", "") ?: "немає відповіді"))
+                }
+                main.post { onResult(ok) }
+            })
+            main.postDelayed({
+                if (answered.compareAndSet(false, true)) {
+                    Log.w(BLOX_TAG, "respawn: сервер не відповів (немає ACK)")
+                    onResult(false)
+                }
+            }, 5000)
+        } catch (e: Exception) {
+            Log.w(BLOX_TAG, "respawn: " + e.message)
+            onResult(false)
+        }
+    }
+
+    /** Меню «лупа»: камера повертається до гравця. */
+    fun lookAtPlayer(id: Int) = js("KishkaGame.lookAt($id)")
+
+    /** Меню «заблокувати»: персонаж гравця не малюється (лише в мене). */
+    fun blockPlayer(id: Int, blocked: Boolean) = js("KishkaGame.hidePlayer($id,$blocked)")
+
+    /** Меню «скарга»: сервер пише скаргу в журнал Render. */
+    fun reportPlayer(id: Int, onResult: (Boolean) -> Unit) {
+        val answered = java.util.concurrent.atomic.AtomicBoolean(false)
+        try {
+            KishkaManager.getSocket().emit("blox_game_report", JSONObject().put("target", id), Ack { args ->
+                if (!answered.compareAndSet(false, true)) return@Ack
+                val res = args.firstOrNull() as? JSONObject
+                val ok = res?.optBoolean("success", false) == true
+                if (!ok) Log.w(BLOX_TAG, "скаргу відхилено сервером: code=" + (res?.optString("code", "") ?: "немає відповіді"))
+                main.post { onResult(ok) }
+            })
+            main.postDelayed({
+                if (answered.compareAndSet(false, true)) {
+                    Log.w(BLOX_TAG, "скарга: сервер не відповів (немає ACK)")
+                    onResult(false)
+                }
+            }, 5000)
+        } catch (e: Exception) {
+            Log.w(BLOX_TAG, "скарга: " + e.message)
+            onResult(false)
+        }
+    }
+
     /** Чому гра не запустилась за відведений час: файли гри, сервер чи графіка. */
     fun timeoutReason(): String = when {
         !pageReady -> "err_game_files"
@@ -713,6 +772,7 @@ fun BloxGameScreen(lang: String, email: String) {
     val configuration = LocalConfiguration.current
 
     var menuOpen by remember { mutableStateOf(false) }
+    var menuTab by remember { mutableStateOf(0) }
     var confirmLeave by remember { mutableStateOf(false) }
     var minTimePassed by remember { mutableStateOf(false) }
     val controller = remember {
@@ -791,159 +851,27 @@ fun BloxGameScreen(lang: String, email: String) {
 
         if (!showLoading) {
             if (menuOpen) {
-                // Затемнення за панеллю: тап поза панеллю закриває меню
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color(0x66000000))
-                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                            menuOpen = false
-                            confirmLeave = false
-                        }
-                )
-                // Велика панель меню в стилі Roblox: на всю висоту зліва, список гравців, налаштування, «Вийти з гри» внизу
-                val panelWidth = (configuration.screenWidthDp * 0.62f).coerceIn(300f, 520f).dp
-                Surface(
-                    shape = RoundedCornerShape(topEnd = 22.dp, bottomEnd = 22.dp),
-                    color = Color(0xEB16161B),
-                    modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .fillMaxHeight()
-                        .width(panelWidth)
-                        .pointerInput(Unit) { detectTapGestures { } }
-                ) {
-                    Column(modifier = Modifier.fillMaxSize().padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 14.dp)) {
-                        // Шапка: місце під круглу кнопку меню (вона лежить поверх), заголовок із кількістю й хрестик
-                        Row(modifier = Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Spacer(modifier = Modifier.width(58.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(b("players"), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(
-                                    String.format(b("players_count"), BloxGame.players.size),
-                                    color = Color(0xFFB9B9C4),
-                                    fontSize = 13.sp,
-                                    maxLines = 1
-                                )
-                            }
-                            IconButton(
-                                onClick = {
-                                    menuOpen = false
-                                    confirmLeave = false
-                                },
-                                modifier = Modifier.size(48.dp)
-                            ) {
-                                Icon(Icons.Default.Close, contentDescription = b("close"), tint = Color.White, modifier = Modifier.size(28.dp))
-                            }
-                        }
-                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0x33FFFFFF)))
-                        // Список гравців: прокручується, коли гравців багато
-                        LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                            items(BloxGame.players, key = { it.id }) { player ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Box(
-                                        modifier = Modifier.size(38.dp).clip(CircleShape).background(Color(0xFFBDBDC7)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            player.nick.take(1).uppercase(),
-                                            color = Color(0xFF2B2B33),
-                                            fontSize = 16.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Text(
-                                        player.nick,
-                                        color = Color.White,
-                                        fontSize = 17.sp,
-                                        fontWeight = if (player.id == BloxGame.myId) FontWeight.Bold else FontWeight.Normal,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f, fill = false)
-                                    )
-                                    if (player.id == BloxGame.myId) {
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("(" + b("you") + ")", color = Color(0xFFB9B9C4), fontSize = 14.sp, maxLines = 1)
-                                    }
-                                }
-                            }
-                        }
-                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0x33FFFFFF)))
-                        // Інверсія камери (за замовчуванням вимкнена)
-                        Row(
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(b("invert_camera"), color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            Switch(
-                                checked = BloxGame.invertCamera,
-                                onCheckedChange = { controller.setInvertCamera(it) },
-                                colors = SwitchDefaults.colors(checkedTrackColor = Color(0xFF34A853))
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        // Помітна кнопка внизу панелі; підтвердження — тут же, без маленького вікна посередині екрана
-                        if (!confirmLeave) {
-                            Button(
-                                onClick = { confirmLeave = true },
-                                modifier = Modifier.fillMaxWidth().height(56.dp),
-                                shape = RoundedCornerShape(14.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD93025))
-                            ) {
-                                Text(b("leave"), fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                        } else {
-                            Text(b("leave_text"), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                OutlinedButton(
-                                    onClick = { confirmLeave = false },
-                                    modifier = Modifier.weight(1f).height(52.dp),
-                                    shape = RoundedCornerShape(14.dp)
-                                ) {
-                                    Text(b("no"), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                                }
-                                Button(
-                                    onClick = {
-                                        confirmLeave = false
-                                        menuOpen = false
-                                        controller.exitGame(true)
-                                    },
-                                    modifier = Modifier.weight(1f).height(52.dp),
-                                    shape = RoundedCornerShape(14.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD93025))
-                                ) {
-                                    Text(b("yes"), fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                                }
-                            }
-                        }
-                    }
+                // Меню в стилі Roblox (див. Bloxmenu.kt): вкладки People/Settings/Gallery/Report/Help, гравці, Leave/Respawn/Resume
+                BloxRobloxMenu(lang = lang, controller = controller, initialTab = menuTab) {
+                    menuOpen = false
+                    confirmLeave = false
                 }
             }
 
-            // Кругла кнопка меню з аватаркою KishkaBlox вгорі зліва поверх гри (малюється ПІСЛЯ панелі, тож лишається клікабельною)
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(start = 12.dp, top = 10.dp)
-                    .size(46.dp)
-                    .clip(CircleShape)
-                    .background(Color(0x66000000))
-                    .clickable {
-                        menuOpen = !menuOpen
-                        if (!menuOpen) confirmLeave = false
-                    }
-            ) {
-                AsyncImage(
-                    model = bloxImageModel("kishkablox.png", KISHKABLOX_LOGO_URL),
-                    contentDescription = b("menu"),
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().padding(3.dp).clip(CircleShape)
-                )
-            }
+            // Верхній ряд зліва: велика кругла кнопка-логотип і «таблетка» з кнопками (малюється ПІСЛЯ панелі, тож лишається клікабельною)
+            BloxTopBar(
+                lang = lang,
+                menuOpen = menuOpen,
+                onToggle = {
+                    menuTab = 0
+                    menuOpen = !menuOpen
+                    if (!menuOpen) confirmLeave = false
+                },
+                onPeople = {
+                    menuTab = 0
+                    menuOpen = true
+                }
+            )
         }
 
         // Сірий екран завантаження: аватарка зверху, назва посередині, знизу посередині «Joining the game»
