@@ -76,6 +76,7 @@ function setup(extra) {
         now: () => clock.t,
         tickMs: 10,
         graceMs: 200,
+        motionCheck: false,
         getNick: async (email) => {
             if (logged && !logged.has(email)) return null;
             return email.split('@')[0];
@@ -276,7 +277,7 @@ test('некоректні координати й пози відкидають
         { x: 1e9, y: 4, z: 0, ry: 0, a: 0 },
         { x: 0, y: 9999, z: 0, ry: 0, a: 0 },
         { x: 0, y: -500, z: 0, ry: 0, a: 0 },
-        { x: 0, y: 4, z: 301, ry: 0, a: 0 },
+        { x: 0, y: 4, z: 701, ry: 0, a: 0 },
         { x: 0, y: 4, z: 0, ry: 5000, a: 0 },
         { x: 0, y: 4, z: 0, ry: 0, a: 7 },
         { x: 0, y: 4, z: 0, ry: 0, a: 1.5 },
