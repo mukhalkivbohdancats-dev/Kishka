@@ -53,43 +53,75 @@
   #carsBtn svg { width: 32px; height: 22px; }
   #carsBtn:active { transform: scale(0.93); }
 
-  /* ---------- Вікно вибору машин: велике, напівпрозоре, не на весь екран ---------- */
+  /* ---------- Вікно вибору машин: велике плаваюче, напівпрозоре, по центру, НЕ на весь екран ---------- */
   #carsPanel {
     position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
-    width: min(88vw, 760px); max-height: 82vh; box-sizing: border-box;
-    padding: 58px 16px 16px; border-radius: 24px;
-    background: rgba(18, 21, 30, 0.55);
-    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
-    border: 1.5px solid rgba(255,255,255,0.28); box-shadow: 0 10px 40px rgba(0,0,0,0.45);
-    color: #fff; overflow-y: auto; touch-action: pan-y; z-index: 20;
-    animation: pop .18s ease-out;
+    width: min(94vw, 1040px); height: min(88vh, 640px); box-sizing: border-box;
+    padding: 14px 18px 16px; border-radius: 28px;
+    display: flex; flex-direction: column; gap: 10px;
+    background: rgba(16, 19, 28, 0.62);
+    -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+    border: 1.5px solid rgba(255,255,255,0.3); box-shadow: 0 14px 50px rgba(0,0,0,0.5);
+    color: #fff; touch-action: pan-y; z-index: 20;
+    animation: pop .2s ease-out;
   }
   @keyframes pop { from { opacity: 0; transform: translate(-50%, -48%) scale(.96); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
-  #carsTitle { position: absolute; left: 70px; right: 70px; top: 12px; height: 40px; line-height: 40px; text-align: center; font-size: 19px; font-weight: 800; }
+  #carsHead { position: relative; flex: none; height: 46px; display: flex; align-items: center; justify-content: center; }
+  #carsTitle { font-size: 22px; font-weight: 800; letter-spacing: .3px; }
   #carsClose {
-    position: absolute; left: 10px; top: 10px; width: 44px; height: 44px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.85);
+    position: absolute; left: 0; top: 1px; width: 44px; height: 44px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.85);
     background: #e5484d; color: #fff; font-size: 22px; font-weight: 900; line-height: 1; padding: 0; cursor: pointer; touch-action: manipulation;
     box-shadow: 0 3px 10px rgba(0,0,0,0.4);
   }
   #carsClose:active { transform: scale(0.92); }
-  #carsList { display: flex; gap: 12px; justify-content: center; align-items: stretch; flex-wrap: wrap; }
+  #carsList { flex: 1 1 auto; min-height: 0; display: flex; gap: 14px; align-items: stretch; overflow-x: auto; overflow-y: hidden; padding: 2px; }
   .card {
-    flex: 1 1 190px; max-width: 235px; min-width: 150px; box-sizing: border-box; padding: 10px; border-radius: 18px;
-    background: rgba(255,255,255,0.10); border: 2px solid rgba(255,255,255,0.18);
-    display: flex; flex-direction: column; align-items: center; gap: 6px; cursor: pointer; touch-action: manipulation;
-    transition: background .15s, border-color .15s, transform .15s;
+    flex: 1 1 0; min-width: 190px; box-sizing: border-box; padding: 12px; border-radius: 22px;
+    background: rgba(255,255,255,0.10); border: 2.5px solid rgba(255,255,255,0.18);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; cursor: pointer; touch-action: manipulation;
+    transition: background .15s, border-color .15s, transform .15s, box-shadow .15s; min-height: 0;
   }
-  .card.sel { background: rgba(255,255,255,0.20); border-color: #7be08a; transform: translateY(-2px); }
-  .card img.pv { width: 100%; aspect-ratio: 8 / 5; object-fit: contain; display: block; }
-  .card .nm { display: flex; align-items: center; gap: 6px; font-size: 16px; font-weight: 800; }
-  .card .nm svg { width: 26px; height: 16px; flex: none; }
-  .card .ht { font-size: 12px; opacity: .8; text-align: center; min-height: 15px; }
-  .btn {
-    width: 100%; height: 42px; border-radius: 14px; border: 0; font-size: 16px; font-weight: 800; color: #fff; cursor: pointer; touch-action: manipulation;
+  .card.sel { background: rgba(255,255,255,0.22); border-color: #4be36b; transform: translateY(-3px); box-shadow: 0 0 0 3px rgba(75,227,107,0.28), 0 8px 22px rgba(0,0,0,0.35); }
+  .card .pvw { flex: 1 1 auto; min-height: 0; width: 100%; display: flex; align-items: center; justify-content: center; }
+  .card img.pv { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+  .card .nm { flex: none; display: flex; align-items: center; gap: 8px; font-size: 19px; font-weight: 800; }
+  .card .nm svg { width: 30px; height: 19px; flex: none; }
+  .card .ht { flex: none; font-size: 13px; opacity: .82; text-align: center; min-height: 16px; }
+  .card .st { flex: none; font-size: 12px; font-weight: 700; color: #9bf0ad; min-height: 15px; }
+
+  /* Велика зелена кнопка Spawn: пульсує й «блищить», вдавлюється при натисканні */
+  #spawnBtn {
+    position: relative; flex: none; width: 100%; height: clamp(50px, 10vh, 68px); border: 0; border-radius: 20px; overflow: hidden;
+    font-size: clamp(19px, 3.4vh, 25px); font-weight: 900; letter-spacing: 1px; text-transform: uppercase; color: #fff; cursor: pointer; touch-action: manipulation;
+    background: linear-gradient(180deg, #4ee06a, #1fae3d);
+    box-shadow: 0 5px 0 #137a2a, 0 10px 22px rgba(0,0,0,0.38);
+    text-shadow: 0 2px 3px rgba(0,0,0,0.35);
+    animation: spawnPulse 1.5s ease-in-out infinite;
+    transition: transform .08s, box-shadow .08s;
   }
-  .btn.pick { background: rgba(255,255,255,0.22); border: 1.5px solid rgba(255,255,255,0.4); }
-  .btn.spawn { background: linear-gradient(180deg, #3fcf5a, #1fa83c); box-shadow: 0 3px 0 #137a2a, 0 6px 14px rgba(0,0,0,0.35); transition: transform .08s, box-shadow .08s; }
-  .btn.spawn:active, .btn.spawn.pressed { transform: translateY(3px) scale(0.97); box-shadow: 0 0 0 #137a2a, 0 2px 8px rgba(0,0,0,0.35); }
+  #spawnBtn::after {
+    content: ''; position: absolute; top: 0; left: -60%; width: 40%; height: 100%;
+    background: linear-gradient(100deg, transparent, rgba(255,255,255,0.45), transparent);
+    transform: skewX(-18deg); animation: spawnShine 2.4s ease-in-out infinite;
+  }
+  #spawnBtn:active, #spawnBtn.pressed { transform: translateY(4px) scale(0.985); box-shadow: 0 1px 0 #137a2a, 0 4px 10px rgba(0,0,0,0.35); }
+  @keyframes spawnPulse { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.12); } }
+  @keyframes spawnShine { 0% { left: -60%; } 55%, 100% { left: 130%; } }
+
+  /* ---------- Спідометр: між кнопками повороту (ліворуч) і газу (праворуч) ---------- */
+  #speedo {
+    position: fixed; left: 50%; bottom: calc(var(--safe-b) + 14px); transform: translateX(-50%);
+    width: clamp(116px, calc(100vw - 460px), 214px); aspect-ratio: 200 / 176; display: none; pointer-events: none; z-index: 5;
+  }
+  body.driving #speedo { display: block; }
+  #speedo svg { width: 100%; height: 100%; display: block; overflow: visible; }
+  #spdBg { fill: rgba(10,14,24,0.5); }
+  #spdTrack { fill: none; stroke: rgba(255,255,255,0.22); stroke-width: 11; stroke-linecap: round; }
+  #spdBar { fill: none; stroke: #5bd36f; stroke-width: 11; stroke-linecap: round; }
+  #spdNum { fill: #fff; font-weight: 800; font-size: 56px; text-anchor: middle; font-family: inherit; }
+  #spdUnit { fill: rgba(255,255,255,0.82); font-weight: 700; font-size: 15px; text-anchor: middle; letter-spacing: 1px; }
+  #spdGear { fill: #ffd24a; font-weight: 800; font-size: 19px; text-anchor: middle; }
+  .spdTick { stroke: rgba(255,255,255,0.5); stroke-width: 2; }
 
   /* ---------- Керування машиною ---------- */
   .ctl {
@@ -136,9 +168,23 @@
 </button>
 
 <div id="carsPanel" class="hidden">
-  <button id="carsClose" type="button" aria-label="Close">X</button>
-  <div id="carsTitle"></div>
+  <div id="carsHead">
+    <button id="carsClose" type="button" aria-label="Close">X</button>
+    <div id="carsTitle"></div>
+  </div>
   <div id="carsList"></div>
+  <button id="spawnBtn" type="button"></button>
+</div>
+
+<div id="speedo" aria-label="Speedometer">
+  <svg viewBox="0 0 200 176">
+    <circle id="spdBg" cx="100" cy="98" r="92"/>
+    <circle id="spdTrack" cx="100" cy="98" r="78" stroke-dasharray="367.57 490.09" transform="rotate(135 100 98)"/>
+    <circle id="spdBar" cx="100" cy="98" r="78" stroke-dasharray="0 490.09" transform="rotate(135 100 98)"/>
+    <text id="spdGear" x="100" y="62">N</text>
+    <text id="spdNum" x="100" y="116">0</text>
+    <text id="spdUnit" x="100" y="138">KM/H</text>
+  </svg>
 </div>
 
 <div class="ctl" id="left" aria-label="Left">
