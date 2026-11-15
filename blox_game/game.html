@@ -26,7 +26,7 @@
   /* ---------- Джойстик (зліва знизу) і стрибок (справа знизу) ---------- */
   #stick {
     position: fixed; left: calc(var(--safe-l) + 30px); bottom: calc(var(--safe-b) + 22px);
-    width: clamp(92px, 32vh, 128px); height: clamp(92px, 32vh, 128px);
+    width: 112px; height: 112px;
     border-radius: 50%; background: rgba(255,255,255,0.16); border: 2px solid rgba(255,255,255,0.38); touch-action: none;
   }
   #knob {
@@ -54,9 +54,11 @@
   #carsBtn:active { transform: scale(0.93); }
 
   /* ---------- Вікно вибору машин: велике плаваюче, напівпрозоре, по центру, НЕ на весь екран ---------- */
+  /* Без CSS min()/clamp(): старі Android WebView їх не розуміють, і вікно ставало завтовшки кілька міліметрів.
+     Розмір задає ще й JS (layoutPanel у game.js) у пікселях. */
   #carsPanel {
-    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
-    width: min(94vw, 1040px); height: min(88vh, 640px); box-sizing: border-box;
+    position: fixed; left: 0; right: 0; top: 0; bottom: 0; margin: auto;
+    width: 84%; max-width: 980px; min-width: 560px; height: 80%; max-height: 620px; min-height: 300px; box-sizing: border-box;
     padding: 14px 18px 16px; border-radius: 28px;
     display: flex; flex-direction: column; gap: 10px;
     background: rgba(16, 19, 28, 0.62);
@@ -65,7 +67,8 @@
     color: #fff; touch-action: pan-y; z-index: 20;
     animation: pop .2s ease-out;
   }
-  @keyframes pop { from { opacity: 0; transform: translate(-50%, -48%) scale(.96); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
+  #carsPanel.hidden { display: none; }
+  @keyframes pop { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: scale(1); } }
   #carsHead { position: relative; flex: none; height: 46px; display: flex; align-items: center; justify-content: center; }
   #carsTitle { font-size: 22px; font-weight: 800; letter-spacing: .3px; }
   #carsClose {
@@ -76,7 +79,7 @@
   #carsClose:active { transform: scale(0.92); }
   #carsList { flex: 1 1 auto; min-height: 0; display: flex; gap: 14px; align-items: stretch; overflow-x: auto; overflow-y: hidden; padding: 2px; }
   .card {
-    flex: 1 1 0; min-width: 190px; box-sizing: border-box; padding: 12px; border-radius: 22px;
+    flex: 1 1 0%; min-width: 190px; box-sizing: border-box; padding: 12px; border-radius: 22px;
     background: rgba(255,255,255,0.10); border: 2.5px solid rgba(255,255,255,0.18);
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; cursor: pointer; touch-action: manipulation;
     transition: background .15s, border-color .15s, transform .15s, box-shadow .15s; min-height: 0;
@@ -91,8 +94,8 @@
 
   /* Велика зелена кнопка Spawn: пульсує й «блищить», вдавлюється при натисканні */
   #spawnBtn {
-    position: relative; flex: none; width: 100%; height: clamp(50px, 10vh, 68px); border: 0; border-radius: 20px; overflow: hidden;
-    font-size: clamp(19px, 3.4vh, 25px); font-weight: 900; letter-spacing: 1px; text-transform: uppercase; color: #fff; cursor: pointer; touch-action: manipulation;
+    position: relative; flex: none; width: 100%; height: 62px; border: 0; border-radius: 20px; overflow: hidden;
+    font-size: 23px; font-weight: 900; letter-spacing: 1px; text-transform: uppercase; color: #fff; cursor: pointer; touch-action: manipulation;
     background: linear-gradient(180deg, #4ee06a, #1fae3d);
     box-shadow: 0 5px 0 #137a2a, 0 10px 22px rgba(0,0,0,0.38);
     text-shadow: 0 2px 3px rgba(0,0,0,0.35);
@@ -111,8 +114,9 @@
   /* ---------- Спідометр: між кнопками повороту (ліворуч) і газу (праворуч) ---------- */
   #speedo {
     position: fixed; left: 50%; bottom: calc(var(--safe-b) + 14px); transform: translateX(-50%);
-    width: clamp(116px, calc(100vw - 460px), 214px); aspect-ratio: 200 / 176; display: none; pointer-events: none; z-index: 5;
+    width: 190px; height: 167px; display: none; pointer-events: none; z-index: 5;
   }
+  @media (max-width: 760px) { #speedo { width: 140px; height: 123px; } }
   body.driving #speedo { display: block; }
   #speedo svg { width: 100%; height: 100%; display: block; overflow: visible; }
   #spdBg { fill: rgba(10,14,24,0.5); }
@@ -133,6 +137,14 @@
   #gas { right: calc(var(--safe-r) + 22px); bottom: calc(var(--safe-b) + 22px); width: 96px; height: 96px; background: rgba(80,210,110,0.30); border-color: rgba(150,255,170,0.8); }
   #gas.down { background: rgba(80,210,110,0.62); }
   #rev { right: calc(var(--safe-r) + 134px); bottom: calc(var(--safe-b) + 22px); width: 80px; height: 80px; }
+  #hand { right: calc(var(--safe-r) + 226px); bottom: calc(var(--safe-b) + 22px); width: 66px; height: 66px; display: none; }
+  body.driving #hand { display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 900; font-size: 24px; }
+  #flipBtn {
+    position: fixed; right: calc(var(--safe-r) + 22px); bottom: calc(var(--safe-b) + 186px); height: 46px; padding: 0 18px; border-radius: 23px;
+    border: 1.5px solid rgba(255,255,255,0.6); background: rgba(229,72,77,0.88); color: #fff; font-size: 15px; font-weight: 800;
+    display: none; align-items: center; cursor: pointer; touch-action: manipulation; box-shadow: 0 3px 12px rgba(0,0,0,0.35); z-index: 6;
+  }
+  #flipBtn.show { display: flex; }
   #left { left: calc(var(--safe-l) + 22px); bottom: calc(var(--safe-b) + 22px); width: 84px; height: 84px; }
   #right { left: calc(var(--safe-l) + 122px); bottom: calc(var(--safe-b) + 22px); width: 84px; height: 84px; }
   #carAct {
@@ -196,6 +208,8 @@
 <div class="ctl" id="rev" aria-label="Reverse">
   <svg class="ico" viewBox="0 0 24 24"><path d="M4 9 L12 18 L20 9 H15 V4 H9 V9 Z" fill="rgba(255,255,255,0.95)"/></svg>
 </div>
+<div class="ctl" id="hand" aria-label="Handbrake">P</div>
+<button id="flipBtn" type="button"></button>
 <div class="ctl" id="gas" aria-label="Gas">
   <svg class="ico" viewBox="0 0 24 24"><path d="M12 3 L3.5 13 H9 V21 H15 V13 H20.5 Z" fill="rgba(255,255,255,0.97)"/></svg>
 </div>
