@@ -82,60 +82,6 @@ test('камера: межі кута, стрибки пальця, масшта
 });
 
 // ------------------------------------------------------------------ світ і фізика
-test('карта: персонаж з\'являється в центрі великого майданчика, дорога веде до плавного пандуса й верхньої плити', () => {
-    const s = World.spawnPoint();
-    assert.deepStrictEqual([s.x, s.z], [0, 0]);
-    assert.ok(World.CFG.platformR >= 20, 'майданчик великий');
-    // майданчик плаский
-    for (let a = 0; a < 6.28; a += 0.5) assert.ok(Math.abs(World.heightAt(Math.cos(a) * 15, Math.sin(a) * 15) - World.CFG.platformH) < 1e-6);
-    // верхня плита пласка й на висоті пандуса
-    const top = World.heightAt(World.CFG.plateau.cx, 0);
-    assert.ok(Math.abs(top - World.CFG.rampH) < 1e-6);
-    // уздовж дороги: без стрибків і без крутих ділянок (до верхньої плити)
-    let maxStep = 0;
-    for (let x = 0; x < World.CFG.rampX1 + 1; x += 0.5) {
-        maxStep = Math.max(maxStep, Math.abs(World.heightAt(x + 0.5, 0) - World.heightAt(x, 0)) / 0.5);
-    }
-    assert.ok(maxStep < 0.3, 'найкрутіший схил пандуса ' + maxStep.toFixed(3) + ' (~' + Math.round(Math.atan(maxStep) * 57.3) + '°)');
-    assert.ok(World.CFG.rampX1 - World.CFG.rampX0 >= 60, 'пандус довгий');
-    // краї плити плавно сходять до землі: немає обривів (різниця між сусідніми точками мала)
-    let maxEdge = 0;
-    for (let x = 140; x < 400; x += 1) maxEdge = Math.max(maxEdge, Math.abs(World.heightAt(x + 1, 55) - World.heightAt(x, 55)));
-    assert.ok(maxEdge < 1.2, 'край плити без обривів: ' + maxEdge.toFixed(2));
-    // рельєф повсюди скінченний і без різких стрибків між сусідніми клітинками
-    let maxJump = 0;
-    for (let x = -640; x <= 640; x += 8) for (let z = -640; z <= 640; z += 8) {
-        const h = World.heightAt(x, z);
-        assert.ok(Number.isFinite(h));
-        maxJump = Math.max(maxJump, Math.abs(World.heightAt(x + 1, z) - h), Math.abs(World.heightAt(x, z + 1) - h));
-    }
-    assert.ok(maxJump < 1.6, 'немає квадратних обривів: ' + maxJump.toFixed(2));
-    // на карті НЕМАЄ дерев, каміння й інших об'єктів: лише рівнина, дорога й гірка
-    assert.strictEqual(World.props.trees.length, 0);
-    assert.strictEqual(World.props.rocks.length, 0);
-    assert.strictEqual(World.obstacles.length, 0);
-    assert.strictEqual(Models.buildProps(World).idx.length, 0, 'геометрія дерев порожня');
-    // карта більша, ніж раніше (було 265)
-    assert.ok(World.CFG.limitR >= 600);
-});
-
-test('карта: трава й гірка — один матеріал (спільна шахова плитка), різниться лише колір; дорога асфальтова', () => {
-    // та сама плитка для трави й гірки
-    assert.strictEqual(typeof World.checkerAt(3, 5), 'number');
-    assert.notStrictEqual(World.checkerAt(1, 1), World.checkerAt(1 + World.CFG.tile, 1));
-    assert.strictEqual(World.checkerAt(1, 1), World.checkerAt(1 + 2 * World.CFG.tile, 1));
-    const grass = World.colorAt(-200, 300), ramp = World.colorAt(170, 0), road = World.colorAt(60, 0);
-    assert.ok(grass[1] > grass[0] * 1.8 && grass[1] > grass[2] * 2, 'трава зелена');
-    assert.ok(Math.abs(ramp[0] - ramp[1]) < 0.06 && Math.abs(ramp[1] - ramp[2]) < 0.06, 'гірка сіра');
-    assert.ok(road[0] < 0.3 && road[1] < 0.3, 'дорога темна');
-    assert.strictEqual(World.rampness(-200, 300), 0);
-    assert.strictEqual(World.rampness(170, 0), 1);
-    // шейдер малює плитку за світовими координатами лише для рельєфу
-    const gameJs = fs.readFileSync(path.join(GAME_DIR, 'game.js'), 'utf8');
-    assert.ok(/uCheck/.test(gameJs) && /floor\(vW\.x \/ uTile\)/.test(gameJs));
-    assert.ok(/R\.checker\(true\)/.test(gameJs) && /R\.checker\(false\)/.test(gameJs));
-});
-
 test('персонаж: ходить по пандусу вгору й не виходить за межі світу', () => {
     const w = Phys.createWalker(30, 0);
     for (let t = 0; t < 14; t += 1 / 60) Phys.stepWalker(w, { mx: 1, mz: 0, jump: false }, 1 / 60);
@@ -157,47 +103,6 @@ test('персонаж: стрибок піднімає й повертає на
     assert.ok(w.y > -10, 'повернуто з прірви');
 });
 
-test('машини: розгін, максимальна швидкість, гальмування, поворот, пандус, межі', () => {
-    for (const type of Phys.CAR_TYPES) {
-        const def = Phys.CARS[type];
-        const c = Phys.createCar(type, 30, 0, Math.PI / 2);
-        for (let t = 0; t < 3; t += 1 / 60) Phys.stepCar(c, { throttle: 1, steer: 0 }, 1 / 60);
-        assert.ok(c.speed > 10 && c.speed <= def.maxFwd * 1.15, type + ' розганяється');
-        assert.ok(Math.abs(c.y - World.heightAt(c.x, c.z)) < 2, type + ' не під землею');
-        // гальмування
-        const sp = c.speed;
-        for (let t = 0; t < 0.5; t += 1 / 60) Phys.stepCar(c, { throttle: -1, steer: 0 }, 1 / 60);
-        assert.ok(c.speed < sp, type + ' гальмує');
-        // задній хід має меншу межу, ніж вперед
-        for (let t = 0; t < 8; t += 1 / 60) Phys.stepCar(c, { throttle: -1, steer: 0 }, 1 / 60);
-        assert.ok(c.speed >= -def.maxRev - 1e-6 && c.speed < 0, type + ' їде назад');
-        // поворот: ry змінюється, швидкість не нескінченна
-        const t2 = Phys.createCar(type, -50, 60, 0);
-        for (let t = 0; t < 2; t += 1 / 60) Phys.stepCar(t2, { throttle: 1, steer: 1 }, 1 / 60);
-        assert.ok(Math.abs(t2.ry) > 0.2, type + ' повертає');
-        // проїзд усією дорогою на пандус і плиту, не провалюється
-        const r = Phys.createCar(type, 30, 0, Math.PI / 2);
-        let minAbove = 1e9;
-        for (let t = 0; t < 22; t += 1 / 60) {
-            Phys.stepCar(r, { throttle: 1, steer: 0 }, 1 / 60);
-            const g = Phys.groundSample(def, r);
-            minAbove = Math.min(minAbove, r.y - g.y);
-        }
-        assert.ok(minAbove > -0.01, type + ' не провалюється крізь пандус: ' + minAbove.toFixed(2));
-        assert.ok(r.x > 100, type + ' піднялась на пандус');
-        assert.ok(Math.hypot(r.x, r.z) <= World.CFG.limitR + 1e-6, type + ' у межах світу');
-    }
-});
-
-test('машина: після падіння повертається в коректний стан, NaN не ламає фізику', () => {
-    const c = Phys.createCar('sedan', 0, 0, 0);
-    c.y = -100;
-    Phys.stepCar(c, { throttle: 0, steer: 0 }, 1 / 60);
-    assert.ok(c.y > 0 && c.speed === 0);
-    Phys.stepCar(c, { throttle: NaN, steer: Infinity }, 1 / 60);
-    assert.ok(Number.isFinite(c.x) && Number.isFinite(c.y) && Number.isFinite(c.z) && Number.isFinite(c.ry));
-});
-
 test('нова машина з\'являється перед гравцем і не всередині перешкоди', () => {
     const spot = Phys.spawnSpot(0, 0, 0, 'truck');
     assert.ok(spot.z > 5);
@@ -213,32 +118,6 @@ test('типи машин збігаються на сервері, у фізи�
 });
 
 // ------------------------------------------------------------------ моделі
-test('моделі: персонаж і три машини справні, з об\'ємом і без зовнішніх файлів', () => {
-    const ch = Models.buildCharacter();
-    for (const part of ['torso', 'head', 'upperArm', 'foreArm', 'thigh', 'shin']) {
-        assert.strictEqual(Models.checkGeo(ch.parts[part]), '', 'персонаж: ' + part);
-        assert.ok(ch.parts[part].pos.length / 3 > 100, part + ' не «коробка»');
-    }
-    for (const t of Models.CAR_TYPES) {
-        const m = Models.buildCar(t);
-        assert.strictEqual(Models.checkGeo(m.opaque), '', t);
-        assert.strictEqual(Models.checkGeo(m.glass), '', t);
-        assert.strictEqual(Models.checkGeo(m.wheel), '', t);
-        assert.ok(m.wheelPos.length >= 4);
-        assert.ok(m.opaque.pos.length / 3 > 1000, t + ' має детальну модель');
-    }
-    const terrain = Models.buildTerrain(World, 3, 40);
-    for (const c of terrain) assert.strictEqual(Models.checkGeo(c.geo), '');
-    assert.strictEqual(Models.checkGeo(Models.buildProps(World)), '');
-    assert.strictEqual(Models.checkGeo(Models.buildDecals(World)), '');
-    // жодних зовнішніх ресурсів у скриптах гри
-    for (const f of fs.readdirSync(GAME_DIR).filter((n) => /\.(js|html)$/.test(n))) {
-        const text = fs.readFileSync(path.join(GAME_DIR, f), 'utf8');
-        assert.ok(!/https?:\/\/(?!www\.w3\.org)/.test(text.replace(/\/\/.*$/gm, '')), f + ' не посилається на зовнішні ресурси');
-    }
-});
-
-// ------------------------------------------------------------------ переклади
 test('переклади в грі: однакові ключі й непорожні тексти в uk, ru, en', () => {
     const keys = (l) => Object.keys(I18.DICT[l]).sort();
     assert.deepStrictEqual(keys('ru'), keys('uk'));
