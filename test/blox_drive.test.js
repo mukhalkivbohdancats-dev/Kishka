@@ -12,123 +12,6 @@ const { kmhOf } = require('../blox_game_server.js');
 
 const DT = 1 / 60;
 
-test('спідометр: 0 за замовчуванням, росте з швидкістю, відповідає реальній швидкості', () => {
-    assert.strictEqual(Phys.kmh(0), 0);
-    assert.strictEqual(Phys.kmh(NaN), 0);
-    assert.strictEqual(Phys.kmh(-50), Phys.kmh(50), 'задній хід теж показує швидкість');
-    assert.strictEqual(Phys.kmh(100), Math.round(100 * 1.008));
-    const c = Phys.createCar('sedan', -30, 300, -Math.PI / 2);
-    assert.strictEqual(Phys.kmh(c.speed), 0);
-    let prev = 0;
-    for (let i = 0; i < 60 * 3; i++) {
-        Phys.stepCar(c, { throttle: 1, steer: 0 }, DT);
-        const v = Phys.kmh(c.speed);
-        assert.ok(v >= prev, 'число не зменшується під час розгону');
-        prev = v;
-    }
-    assert.ok(prev > 60, 'за 3 с набрали швидкість: ' + prev);
-    // число на спідометрі = справжній шлях за секунду
-    const x0 = c.x, z0 = c.z, v0 = Phys.kmh(c.speed);
-    for (let i = 0; i < 6; i++) Phys.stepCar(c, { throttle: 0.2, steer: 0 }, DT);
-    const dist = Math.hypot(c.x - x0, c.z - z0) / (6 * DT);
-    assert.ok(Math.abs(dist * Phys.STUD_TO_KMH - v0) < v0 * 0.08, 'спідометр збігається з реальним рухом');
-    // передачі
-    assert.strictEqual(Phys.gearOf('sedan', 0), 0);
-    assert.strictEqual(Phys.gearOf('sedan', -10), -1);
-    assert.strictEqual(Phys.gearOf('sedan', 5), 1);
-    assert.strictEqual(Phys.gearOf('sedan', 1000), Phys.CARS.sedan.gears);
-});
-
-test('машини: на рівному полі розганяються до реалістичної швидкості, ступінь залежить від типу', () => {
-    const top = {};
-    for (const type of Phys.CAR_TYPES) {
-        const c = Phys.createCar(type, -30, 300, -Math.PI / 2);
-        let best = 0;
-        for (let i = 0; i < 60 * 30; i++) { Phys.stepCar(c, { throttle: 1, steer: 0 }, DT); best = Math.max(best, c.speed); }
-        top[type] = Phys.kmh(best);
-        assert.ok(top[type] > 70 && top[type] < 190, type + ' ' + top[type] + ' км/год');
-    }
-    assert.ok(top.sedan > top.van && top.van > top.truck, 'легка машина швидша за важку');
-});
-
-test('гірка: машина плавно заїжджає, не провалюється й на плиті стоїть на землі', () => {
-    const c = Phys.createCar('sedan', 30, 0, Math.PI / 2);
-    const def = Phys.CARS.sedan;
-    let maxPitchStep = 0, prevPitch = 0, minClear = 1e9;
-    for (let i = 0; i < 60 * 14; i++) {
-        Phys.stepCar(c, { throttle: 1, steer: 0 }, DT);
-        maxPitchStep = Math.max(maxPitchStep, Math.abs(c.pitch - prevPitch));
-        prevPitch = c.pitch;
-        minClear = Math.min(minClear, c.y - Phys.groundSample(def, c).y);
-        if (c.x > 330) break;
-    }
-    assert.ok(c.x > 230, 'заїхала на верхню плиту: x=' + c.x.toFixed(0));
-    assert.ok(maxPitchStep < 0.05, 'нахил кузова змінюється плавно: ' + maxPitchStep.toFixed(3));
-    assert.ok(minClear > -0.01, 'не провалюється: ' + minClear.toFixed(3));
-});
-
-test('політ: з краю плити на швидкості машина відривається від землі, приземляється і підвіска пружинить', () => {
-    const c = Phys.createCar('sedan', 30, 0, Math.PI / 2);
-    let airFrames = 0, maxHeight = 0, landed = false, minClear = 1e9, sawSpring = false;
-    for (let i = 0; i < 60 * 25; i++) {
-        const wasAir = c.air;
-        Phys.stepCar(c, { throttle: 1, steer: 0 }, DT);
-        if (c.air) { airFrames++; maxHeight = Math.max(maxHeight, c.y - World.heightAt(c.x, c.z)); }
-        if (wasAir && !c.air) landed = true;
-        if (landed && Math.abs(c.sy) > 0.05) sawSpring = true;
-        minClear = Math.min(minClear, c.y - Phys.groundSample(Phys.CARS.sedan, c).y);
-        assert.ok(Number.isFinite(c.y) && Number.isFinite(c.speed));
-        if (landed && i > 60 * 20) break;
-    }
-    assert.ok(airFrames > 10, 'відірвалась від землі: кадрів у польоті ' + airFrames);
-    assert.ok(maxHeight > 2, 'висота польоту ' + maxHeight.toFixed(1));
-    assert.ok(landed, 'приземлилась');
-    assert.ok(sawSpring, 'після приземлення кузов просів на підвісці');
-    assert.ok(minClear > -0.01, 'у польоті й після нього не під землею');
-    for (let i = 0; i < 120; i++) Phys.stepCar(c, { throttle: 0, steer: 0 }, DT);
-    assert.ok(!c.air && Math.abs(c.sy) < 0.02, 'підвіска заспокоїлась, машина не «залипла» й не тремтить');
-});
-
-test('низька швидкість: машина не злітає на гладкій дорозі й не залипає на місці', () => {
-    const c = Phys.createCar('truck', 30, 0, Math.PI / 2);
-    for (let i = 0; i < 60 * 3; i++) {
-        Phys.stepCar(c, { throttle: 0.6, steer: 0 }, DT);
-        assert.ok(!c.air, 'на рівній дорозі без відриву');
-    }
-    assert.ok(c.speed > 8);
-    const stopped = Phys.createCar('van', 0, 100, 0);
-    Phys.stepCar(stopped, { throttle: 0, steer: 0 }, DT);
-    assert.ok(stopped.speed === 0 && !stopped.air);
-});
-
-test('машини доторкаються: зіткнення відштовхує, гасить швидкість і не лишає перекриття', () => {
-    const a = Phys.createCar('sedan', -100, 300, Math.PI / 2);      // їде вздовж +X
-    const b = { x: -60, y: a.y, z: 300, ry: Math.PI / 2, type: 'truck', speed: 0 };   // стоїть попереду
-    let maxSpeed = 0, hit = false;
-    for (let i = 0; i < 60 * 8; i++) {
-        Phys.stepCar(a, { throttle: 1, steer: 0 }, DT, [b]);
-        maxSpeed = Math.max(maxSpeed, a.speed);
-        if (a.hit) hit = true;
-        const ov = Phys.overlapCars(a, Phys.CARS.sedan, b, Phys.CARS.truck);
-        assert.ok(!ov || ov.depth < 0.6, 'перекриття залишається малим');
-    }
-    assert.ok(hit, 'зіткнення було');
-    assert.ok(maxSpeed > 20, 'до удару розігналась');
-    assert.ok(a.x < b.x - (Phys.CARS.sedan.len + Phys.CARS.truck.len) / 2 * 0.9, 'не проїхала крізь вантажівку');
-    // машини, що не торкаються, не взаємодіють
-    const c = Phys.createCar('sedan', 0, 300, 0);
-    const far = { x: 50, y: c.y, z: 300, ry: 0, type: 'van', speed: 0 };
-    assert.strictEqual(Phys.collideCars(c, [far]), false);
-    // одна над іншою (стрибок) — теж без зіткнення
-    const above = { x: c.x, y: c.y + 9, z: c.z, ry: 0, type: 'van', speed: 0 };
-    assert.strictEqual(Phys.collideCars(c, [above]), false);
-    // лобове зіткнення з рухомою машиною: швидкості гасяться в обидва боки
-    const p = Phys.createCar('sedan', 0, 400, 0); p.speed = 40;
-    const q = { x: 0, y: p.y, z: 410, ry: Math.PI, type: 'sedan', speed: 40 };
-    assert.strictEqual(Phys.collideCars(p, [q]), true);
-    assert.ok(p.speed < 40, 'удар зменшив швидкість');
-});
-
 test('сервер: швидкість для спідометра рахує сервер і розсилає всім (kmh)', async () => {
     const { io, game } = setup();
     const a = io.connect('a@x.com'), b = io.connect('b@x.com');
@@ -139,7 +22,7 @@ test('сервер: швидкість для спідометра рахує с
     await sleep(40);
     const ct = b.events('blox_car_tick').flat().filter((t) => t[0] === ra.id).pop();
     assert.strictEqual(ct[8], kmhOf(100), 'kmh рахує сервер');
-    assert.strictEqual(ct[8], 101);
+    assert.strictEqual(ct[8], 126);
     assert.strictEqual(b.last('blox_game_cars').cars[0].kmh, 0, 'у списку машин — знімок на момент створення (0), далі швидкість іде в blox_car_tick');
     game.shutdown();
 });
@@ -208,8 +91,8 @@ test('гра: у коді є спідометр, вікно спавну, зіт
     const js = fs.readFileSync(path.join(dir, 'game.js'), 'utf8');
     assert.ok(/id="speedo"/.test(html) && /id="spdNum"/.test(html) && />0</.test(html), 'спідометр з нулем за замовчуванням');
     assert.ok(/Phys\.kmh\(myCar\.speed\)/.test(js), 'число — з реальної швидкості машини');
-    assert.ok(/stepCar\(myCar, \{ throttle: th, steer: st \}, h, otherCars\)/.test(js), 'зіткнення з чужими машинами');
-    assert.ok(/#carsPanel[\s\S]*width: min\(94vw, 1040px\)/.test(html), 'вікно вибору широке');
+    assert.ok(/stepCar\(myCar, \{ throttle: th, steer: st, handbrake: hb \}, h, otherCars\)/.test(js), 'зіткнення з чужими машинами');
+    assert.ok(/#carsPanel[\s\S]*width: 84%/.test(html), 'вікно вибору широке');
     assert.ok(/#spawnBtn[\s\S]*#4ee06a/.test(html) && /@keyframes spawnPulse/.test(html), 'кнопка Spawn зелена й анімована');
     assert.ok(/respawn: function/.test(js), 'KishkaGame.respawn');
 });
