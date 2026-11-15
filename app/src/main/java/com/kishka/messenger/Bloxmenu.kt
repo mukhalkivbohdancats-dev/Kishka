@@ -103,45 +103,24 @@ private fun avatarColor(nick: String): Color {
     return Color(AVATAR_COLORS[h % AVATAR_COLORS.size])
 }
 
-/** Верхній ряд: велика кругла кнопка з логотипом + таблетка з кнопками меню / люди. */
+/** Верхній ряд у грі: лише одна кругла кнопка меню (значок «три смуги»). Іконку людей, логотип і решту іконок прибрано. */
 @Composable
-fun BoxScope.BloxTopBar(lang: String, menuOpen: Boolean, onToggle: () -> Unit, onPeople: () -> Unit) {
+fun BoxScope.BloxTopBar(lang: String, menuOpen: Boolean, onToggle: () -> Unit) {
     val b: (String) -> String = { key -> BloxStrings.get(key, lang) }
     val compact = LocalConfiguration.current.screenHeightDp < 460
     val big: Dp = if (compact) 52.dp else 62.dp
-    Row(
-        modifier = Modifier.align(Alignment.TopStart).padding(start = 12.dp, top = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
+    Box(
+        modifier = Modifier
+            .align(Alignment.TopStart)
+            .padding(start = 12.dp, top = 10.dp)
+            .size(big)
+            .clip(CircleShape)
+            .background(BarBg)
+            .border(if (menuOpen) BorderStroke(2.dp, Color(0xFF4C8DFF)) else BorderStroke(0.dp, Color.Transparent), CircleShape)
+            .clickable(onClick = onToggle),
+        contentAlignment = Alignment.Center
     ) {
-        Box(
-            modifier = Modifier
-                .size(big)
-                .clip(CircleShape)
-                .background(BarBg)
-                .border(if (menuOpen) BorderStroke(2.dp, Color(0xFF4C8DFF)) else BorderStroke(0.dp, Color.Transparent), CircleShape)
-                .clickable(onClick = onToggle)
-        ) {
-            AsyncImage(
-                model = bloxImageModel("kishkablox.png", KISHKABLOX_LOGO_URL),
-                contentDescription = b("menu"),
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize().padding(4.dp).clip(CircleShape)
-            )
-        }
-        Spacer(modifier = Modifier.width(10.dp))
-        Surface(shape = RoundedCornerShape(50), color = BarBg) {
-            Row(
-                modifier = Modifier.height(big).padding(horizontal = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = onToggle, modifier = Modifier.size(big - 6.dp)) {
-                    Icon(Icons.Default.Menu, contentDescription = b("menu"), tint = Color.White, modifier = Modifier.size(30.dp))
-                }
-                IconButton(onClick = onPeople, modifier = Modifier.size(big - 6.dp)) {
-                    Icon(Icons.Default.People, contentDescription = b("players"), tint = Color.White, modifier = Modifier.size(28.dp))
-                }
-            }
-        }
+        Icon(Icons.Default.Menu, contentDescription = b("menu"), tint = Color.White, modifier = Modifier.size(30.dp))
     }
 }
 
