@@ -19,7 +19,7 @@
 //   KishkaGame.roster({players:[{id,nick}]})           хто зараз у грі
 //   KishkaGame.tick([[id,x,y,z,ry,a,d],...])           стани гравців (10 разів на секунду)
 //   KishkaGame.cars({cars:[{id,cid,type,x,y,z,ry}]})   повний список машин у кімнаті
-//   KishkaGame.carTick([[id,cid,x,y,z,ry,speed,steer,kmh],...])  рух машин (kmh — швидкість для спідометра, рахує сервер)
+//   KishkaGame.carTick([[id,cid,x,y,z,ry,speed,steer,kmh,qx,qy,qz,qw,dm],...])  рух машин (kmh — для спідометра, q — повний поворот у просторі, dm — маска відламаних деталей)
 //   KishkaGame.carResult({ok,cid,code})                результат створення моєї машини
 //
 //   KishkaGame.respawn({x,y,z,ry})                    повернути мого персонажа на майданчик (меню Respawn)
@@ -83,10 +83,12 @@
         return 0;
     }
     var TIER = detectTier();
+    // lod — відстані (студи), на яких рельєф перемикається на грубіші сітки (4 / 8 / 16 / 32 студи); карта в 15 разів більша,
+    // тож рельєф будується шматками «на льоту» (див. createTerrainStream).
     var TIER_CFG = [
-        { cell: 5, dpr: 1.0, aa: false, far: 560, fogFar: 440 },
-        { cell: 4, dpr: 1.5, aa: true, far: 720, fogFar: 540 },
-        { cell: 3, dpr: 2.0, aa: true, far: 820, fogFar: 620 }
+        { cell: 8, dpr: 1.0, aa: false, far: 1100, fogFar: 900, lod: [230, 520, 860], keep: 220 },
+        { cell: 6, dpr: 1.5, aa: true, far: 1400, fogFar: 1150, lod: [300, 640, 1040], keep: 300 },
+        { cell: 4, dpr: 2.0, aa: true, far: 1700, fogFar: 1400, lod: [360, 760, 1240], keep: 400 }
     ][TIER];
 
     // ---------------------------------------------------------------- матриці (column-major, як у WebGL)
@@ -281,7 +283,17 @@
         }
 
         // Шахова плитка: вмикається лише для рельєфу (трава й гірка — один матеріал)
-        function checker(on) { gl.uniform1f(loc.uCheck, on ? 1 : 0); }
+        function checker(on, tile) {
+            gl.uniform1f(loc.uCheck, on ? 1 : 0);
+            if (on) gl.uniform1f(loc.uTile, tile || World.CFG.tile || 8);
+        }
+        // Звільняє GPU-буфери геометрії (для шматків рельєфу, які вже далеко)
+        function release(geo) {
+            var m = geo.__gl && geo.__gl[id];
+            if (!m) return;
+            gl.deleteBuffer(m.vb); gl.deleteBuffer(m.ib);
+            delete geo.__gl[id];
+        }
 
         function sky(horizonNdc) {
             gl.useProgram(skyProg);
@@ -325,7 +337,7 @@
             else gl.disable(gl.POLYGON_OFFSET_FILL);
         }
 
-        return { gl: gl, id: id, mesh: mesh, begin: begin, sky: sky, draw: draw, blend: blend, offset: offset, checker: checker };
+        return { gl: gl, id: id, mesh: mesh, begin: begin, sky: sky, draw: draw, blend: blend, offset: offset, checker: checker, release: release };
     }
 
     // ---------------------------------------------------------------- стан гри
@@ -333,7 +345,7 @@
     var tagsCanvas = $('tags');
     var tagsCtx = null;
     var R = null;                         // головний малювальник
-    var terrain = [], propsGeo = null, decalsGeo = null, discGeo = null;
+    var tstream = null, propsGeo = null, decalsGeo = null, discGeo = null, rampGeo = null;
     var charModel = null;
     var carModels = {};
     var W = 1, H = 1, DPR = 1, renderScale = 1;
@@ -353,7 +365,8 @@
     var settings = { invertCamera: false };
     var lastDragAt = -1e9;
 
-    var input = { sx: 0, sy: 0, jump: false, keys: {}, gas: false, rev: false, left: false, right: false };
+    var input = { sx: 0, sy: 0, jump: false, keys: {}, gas: false, rev: false, left: false, right: false, hand: false };
+    var shake = 0;                        // тряска камери від сильних ударів
 
     var VP = new Float32Array(16), V = new Float32Array(16), P = new Float32Array(16);
     var eye = { x: 0, y: 0, z: 0, dist: 0 };
@@ -454,6 +467,15 @@
     var wheelM = new Float32Array(16);
 
     function carMatrix(out, c) {
+        if (c.q) {
+            // повний поворот у просторі (кватерніон): машина може злітати, крутитися й перекидатися
+            var q = c.q, x = q[0], y = q[1], z = q[2], w = q[3];
+            out[0] = 1 - 2 * (y * y + z * z); out[1] = 2 * (x * y + w * z); out[2] = 2 * (x * z - w * y); out[3] = 0;
+            out[4] = 2 * (x * y - w * z); out[5] = 1 - 2 * (x * x + z * z); out[6] = 2 * (y * z + w * x); out[7] = 0;
+            out[8] = 2 * (x * z + w * y); out[9] = 2 * (y * z - w * x); out[10] = 1 - 2 * (x * x + y * y); out[11] = 0;
+            out[12] = c.x; out[13] = c.y; out[14] = c.z; out[15] = 1;
+            return out;
+        }
         M.ident(out);
         M.translate(out, c.x, c.y + (c.sy || 0), c.z);
         M.rotateY(out, c.ry);
@@ -462,19 +484,80 @@
         return out;
     }
 
+    // Матриця відламуваної деталі: що більше її «зім'яло» (dent 0..1), то більше вона відхиляється від свого шарніра
+    var partM = new Float32Array(16);
+    function partMatrix(base, pt, dent) {
+        M.copy(partM, base);
+        if (dent > 0.03 && pt) {
+            M.translate(partM, pt.shift[0] * dent, pt.shift[1] * dent, pt.shift[2] * dent);
+            M.translate(partM, pt.hinge[0], pt.hinge[1], pt.hinge[2]);
+            var ang = pt.maxAngle * dent;
+            if (pt.axis[0]) M.rotateX(partM, ang); else if (pt.axis[1]) M.rotateY(partM, ang); else M.rotateZ(partM, ang);
+            M.translate(partM, -pt.hinge[0], -pt.hinge[1], -pt.hinge[2]);
+        }
+        return partM;
+    }
+    var darkTint = [1, 1, 1];
+
     function drawCarOpaque(r, c, tint) {
         var mdl = carModels[c.type];
         if (!mdl) return;
         carMatrix(carBase, c);
-        r.draw(mdl.opaqueMesh, carBase, tint, 1, 0.35);
-        var steerAng = -(c.steer || 0) * 0.9;
+        var dm = c.dm | 0, def = Phys.CARS[c.type];
+        // зім'ята машина темнішає (подряпини й бруд)
+        var dent = c.dent || 0;
+        var tn = tint;
+        if (dent > 0.04) { var k = 1 - 0.3 * Math.min(1, dent); darkTint[0] = k; darkTint[1] = k; darkTint[2] = k * 0.98; tn = darkTint; }
+        r.draw(mdl.opaqueMesh, carBase, tn, 1, 0.35);
+        var pn, pm, bit, pdent;
+        for (pn in mdl.partMeshes) {
+            bit = Phys.PART_BITS[pn];
+            if (dm & bit) continue;
+            pm = mdl.partMeshes[pn];
+            pdent = c.pd ? Math.min(1, c.pd[pn] || 0) : 0;
+            r.draw(pm.mesh, partMatrix(carBase, pm, pdent), tn, 1, 0.35);
+        }
+        var local = !!c.wh;
         for (var i = 0; i < mdl.wheelPos.length; i++) {
+            if (dm & (1 << (Phys.WHEEL_BIT0 + i))) continue;
             var w = mdl.wheelPos[i];
             M.copy(wheelM, carBase);
-            M.translate(wheelM, w.x, w.y, w.z);
-            if (w.steer) M.rotateY(wheelM, steerAng);
-            M.rotateX(wheelM, c.wheel || 0);
+            var wy = w.y, steerA, spin;
+            if (local) {
+                var ws = c.wh[i];
+                wy = def.suspTop - ws.s;                         // справжнє положення колеса на підвісці
+                steerA = -ws.steerAng; spin = ws.rot;
+            } else {
+                steerA = -(c.steer || 0) * 0.9; spin = c.wheel || 0;
+            }
+            M.translate(wheelM, w.x, wy, w.z);
+            if (w.steer) M.rotateY(wheelM, steerA);
+            M.rotateX(wheelM, spin);
             r.draw(mdl.wheelMesh, wheelM, null, 1, 0.15);
+        }
+    }
+
+    // Відламані деталі: окремі тіла фізики, що лежать і котяться по землі
+    var debM = new Float32Array(16);
+    function drawDebris(r) {
+        var list = Phys.debris;
+        for (var i = 0; i < list.length; i++) {
+            var d = list[i], mdl = carModels[d.car];
+            if (!mdl) continue;
+            var dx = d.p[0] - eye.x, dz = d.p[2] - eye.z;
+            if (dx * dx + dz * dz > 640000) continue;
+            var mesh, pivot = null;
+            if (d.wheel) mesh = mdl.wheelMesh;
+            else { var pm = mdl.partMeshes[d.part]; if (!pm) continue; mesh = pm.mesh; pivot = pm.pivot; }
+            var q = d.q, x = q[0], y = q[1], z = q[2], w = q[3];
+            debM[0] = 1 - 2 * (y * y + z * z); debM[1] = 2 * (x * y + w * z); debM[2] = 2 * (x * z - w * y); debM[3] = 0;
+            debM[4] = 2 * (x * y - w * z); debM[5] = 1 - 2 * (x * x + z * z); debM[6] = 2 * (y * z + w * x); debM[7] = 0;
+            debM[8] = 2 * (x * z + w * y); debM[9] = 2 * (y * z - w * x); debM[10] = 1 - 2 * (x * x + y * y); debM[11] = 0;
+            debM[12] = d.p[0]; debM[13] = d.p[1]; debM[14] = d.p[2]; debM[15] = 1;
+            var left = d.life - d.age;
+            if (left < 2) { var sc = Math.max(0.01, left / 2); M.scale(debM, sc, sc, sc); }
+            if (pivot) M.translate(debM, -pivot[0], -pivot[1], -pivot[2]);
+            r.draw(mesh, debM, null, 1, 0.2);
         }
     }
     function drawCarGlass(r, c) {
@@ -507,6 +590,90 @@
         return g;
     }
 
+    // ---------------------------------------------------------------- рельєф шматками
+    // Світ у 15 разів більший за площею, тож вся сітка водночас не вміщується в пам'ять. Шматки 160×160 будуються за потреби
+    // (не більше одного за кадр) з деталізацією за відстанню до камери й зберігаються в кеші; далекі видаляються.
+    function createTerrainStream() {
+        var CH = Models.TERRAIN.chunk;
+        var cache = {}, count = 0, frameNo = 0, lastKey = '';
+        var MAXC = 520;
+        function key(ci, cj, lod) { return ci + '_' + cj + '_' + lod; }
+        function lodFor(d) {
+            var L = TIER_CFG.lod;
+            return d < L[0] ? 0 : (d < L[1] ? 1 : (d < L[2] ? 2 : 3));
+        }
+        function find(ci, cj, lod) {
+            var c = cache[key(ci, cj, lod)];
+            if (c) { c.used = frameNo; return c; }
+            return null;
+        }
+        function build(ci, cj, lod) {
+            var c = Models.terrainChunk(World, ci, cj, lod);
+            c.used = frameNo;
+            cache[key(ci, cj, lod)] = c;
+            count++;
+            return c;
+        }
+        function evict() {
+            if (count <= MAXC) return;
+            var keys = Object.keys(cache);
+            keys.sort(function (a, b) { return cache[a].used - cache[b].used; });
+            var drop = count - Math.floor(MAXC * 0.8);
+            for (var i = 0; i < drop && i < keys.length; i++) {
+                var c = cache[keys[i]];
+                if (frameNo - c.used < 60) break;
+                if (R) R.release(c.geo);
+                delete cache[keys[i]];
+                count--;
+            }
+        }
+        return {
+            // Малює всі видимі шматки; повертає кількість намальованих
+            draw: function (r, ex, ez, fx, fz, maxD) {
+                frameNo++;
+                var ci0 = Math.floor((ex - maxD) / CH), ci1 = Math.floor((ex + maxD) / CH);
+                var cj0 = Math.floor((ez - maxD) / CH), cj1 = Math.floor((ez + maxD) / CH);
+                var lim = Math.floor(World.CFG.meshHalf / CH);
+                if (ci0 < -lim) ci0 = -lim; if (cj0 < -lim) cj0 = -lim;
+                if (ci1 > lim - 1) ci1 = lim - 1; if (cj1 > lim - 1) cj1 = lim - 1;
+                var bestMissing = null, bestD = 1e18, drawn = 0, mat = M.ident(stk);
+                for (var ci = ci0; ci <= ci1; ci++) {
+                    for (var cj = cj0; cj <= cj1; cj++) {
+                        var cx = ci * CH + CH / 2, cz = cj * CH + CH / 2;
+                        var dx = cx - ex, dz = cz - ez, d = Math.sqrt(dx * dx + dz * dz);
+                        var rad = CH * 0.72 + 60;
+                        if (d > maxD + rad) continue;
+                        if (d > rad && (dx * fx + dz * fz) / d < -0.35 - rad / d) continue;
+                        var lod = lodFor(d);
+                        var c = find(ci, cj, lod);
+                        if (!c) {
+                            // нужного рівня ще немає: показуємо будь-який готовий (щоб не було дірок), а потрібний будуємо
+                            for (var l2 = 0; l2 < 4 && !c; l2++) c = find(ci, cj, l2);
+                            if (d < bestD) { bestD = d; bestMissing = [ci, cj, lod]; }
+                            if (!c) continue;
+                        }
+                        r.draw(r.mesh(c.geo), mat, null, 1, 0);
+                        drawn++;
+                    }
+                }
+                if (bestMissing) build(bestMissing[0], bestMissing[1], bestMissing[2]);
+                evict();
+                return drawn;
+            },
+            // Заздалегідь будує найближчі шматки (на екрані завантаження)
+            preload: function (x, z) {
+                var ci0 = Math.floor((x - 420) / CH), ci1 = Math.floor((x + 420) / CH);
+                var cj0 = Math.floor((z - 420) / CH), cj1 = Math.floor((z + 420) / CH);
+                for (var ci = ci0; ci <= ci1; ci++) for (var cj = cj0; cj <= cj1; cj++) {
+                    var d = Math.sqrt(Math.pow(ci * CH + CH / 2 - x, 2) + Math.pow(cj * CH + CH / 2 - z, 2));
+                    var lod = lodFor(d);
+                    if (!find(ci, cj, lod)) build(ci, cj, lod);
+                }
+            },
+            count: function () { return count; }
+        };
+    }
+
     function buildAssets() {
         var ch = Models.buildCharacter();
         charModel = { dims: ch.dims, meshes: {} };
@@ -515,19 +682,29 @@
             var c = Models.buildCar(t);
             carModels[t] = {
                 opaqueMesh: R.mesh(c.opaque), glassMesh: R.mesh(c.glass), wheelMesh: R.mesh(c.wheel),
-                wheelPos: c.wheelPos, seat: c.seat, height: c.height, len: c.len, wid: c.wid
+                wheelPos: c.wheelPos, seat: c.seat, height: c.height, len: c.len, wid: c.wid, partMeshes: {}
             };
+            for (var pn in c.parts) {
+                var pt = c.parts[pn], dp = Phys.CARS[t].parts[pn];
+                carModels[t].partMeshes[pn] = {
+                    mesh: R.mesh(pt.geo), hinge: pt.hinge || [0, 0, 0], axis: pt.axis || [1, 0, 0], maxAngle: pt.maxAngle || 0,
+                    shift: pt.shift || [0, 0, 0], pivot: dp ? dp.p : [0, 0, 0]
+                };
+            }
         });
-        if (terrain.length === 0) {
-            terrain = Models.buildTerrain(World, TIER_CFG.cell, 32);
+        if (!tstream) {
+            tstream = createTerrainStream();
             propsGeo = Models.buildProps(World);
             decalsGeo = Models.buildDecals(World);
+            rampGeo = Models.buildRamp(World);
             discGeo = buildDisc();
         }
-        terrain.forEach(function (c) { c.mesh = R.mesh(c.geo); });
         R.propsMesh = R.mesh(propsGeo);
         R.decalsMesh = R.mesh(decalsGeo);
         R.discMesh = R.mesh(discGeo);
+        R.rampTop = R.mesh(rampGeo.top);
+        R.rampWalls = R.mesh(rampGeo.walls);
+        tstream.preload(0, 0);              // шматки рельєфу навколо майданчика готові ще до першого кадру
     }
 
     function drawShadow(r, x, z, rx, rz, ry, alpha) {
@@ -566,6 +743,15 @@
         if (isCar) {
             out.speed = a.speed + (b.speed - a.speed) * k;
             out.steer = a.steer + (b.steer - a.steer) * k;
+            out.hasQ = false;
+            if (a.q && b.q) {
+                var dq = a.q[0] * b.q[0] + a.q[1] * b.q[1] + a.q[2] * b.q[2] + a.q[3] * b.q[3], sg = dq < 0 ? -1 : 1;
+                var q0 = a.q[0] + (sg * b.q[0] - a.q[0]) * k, q1 = a.q[1] + (sg * b.q[1] - a.q[1]) * k;
+                var q2 = a.q[2] + (sg * b.q[2] - a.q[2]) * k, q3 = a.q[3] + (sg * b.q[3] - a.q[3]) * k;
+                var ql = Math.sqrt(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3) || 1;
+                out.q[0] = q0 / ql; out.q[1] = q1 / ql; out.q[2] = q2 / ql; out.q[3] = q3 / ql;
+                out.hasQ = true;
+            }
             if (rt > list[n - 1].t) {
                 var ex = Math.min(rt - list[n - 1].t, 0.15);
                 out.x += Math.sin(out.ry) * out.speed * ex;
@@ -606,10 +792,13 @@
     }
 
     function newRemoteCar(e) {
-        return { id: e.id, cid: e.cid, type: e.type, snaps: [], x: e.x, y: e.y, z: e.z, ry: e.ry, pitch: 0, roll: 0, speed: 0, steer: 0, wheel: 0 };
+        return {
+            id: e.id, cid: e.cid, type: e.type, snaps: [], x: e.x, y: e.y, z: e.z, ry: e.ry, pitch: 0, roll: 0, speed: 0, steer: 0, wheel: 0,
+            q: [0, 0, 0, 1], vx: 0, vy: 0, vz: 0, wx: 0, wy: 0, wz: 0, dm: (e.dm | 0), pd: {}, dent: 0, upY: 1
+        };
     }
-    function carSnap(rc, x, y, z, ry, speed, steer, first) {
-        var s = { x: x, y: y, z: z, ry: ry, speed: speed || 0, steer: steer || 0, a: 0, d: 0 };
+    function carSnap(rc, x, y, z, ry, speed, steer, first, q) {
+        var s = { x: x, y: y, z: z, ry: ry, speed: speed || 0, steer: steer || 0, a: 0, d: 0, q: q || null };
         if (first) rc.snaps.length = 0;
         pushSnap(rc.snaps, s);
         if (first) s.t -= 1;
@@ -635,6 +824,7 @@
                     var wasDriving = driving;
                     myCar = Phys.createCar(e.type, +e.x, +e.z, +e.ry);
                     myCar.cid = e.cid;
+                    myCar.dm = e.dm | 0;
                     if (wasDriving) setDriving(false, true);
                 }
                 continue;
@@ -643,7 +833,7 @@
             var rc = remoteCars[e.id];
             if (!rc || rc.cid !== e.cid || rc.type !== e.type) {
                 rc = remoteCars[e.id] = newRemoteCar(e);
-                carSnap(rc, +e.x, +e.y, +e.z, +e.ry, 0, 0, true);
+                carSnap(rc, +e.x, +e.y, +e.z, +e.ry, 0, 0, true, null);
             }
         }
         for (var id in remoteCars) if (!seen[id]) delete remoteCars[id];
@@ -767,7 +957,7 @@
         otherCars.length = 0;
         for (var id in remoteCars) {
             var rc = remoteCars[id];
-            otherCars.push({ x: rc.x, y: rc.y, z: rc.z, ry: rc.ry, type: rc.type, speed: rc.speed || 0 });
+            otherCars.push({ x: rc.x, y: rc.y, z: rc.z, ry: rc.ry, type: rc.type, speed: rc.speed || 0, q: rc.q, vx: rc.vx, vy: rc.vy, vz: rc.vz });
         }
         return otherCars;
     }
@@ -778,19 +968,52 @@
         if (driving && myCar) {
             var th = (input.gas || k.ArrowUp || k.KeyW ? 1 : 0) - (input.rev || k.ArrowDown || k.KeyS ? 1 : 0);
             var st = (input.right || k.ArrowRight || k.KeyD ? 1 : 0) - (input.left || k.ArrowLeft || k.KeyA ? 1 : 0);
-            Phys.stepMany(dt, function (h) { Phys.stepCar(myCar, { throttle: th, steer: st }, h, otherCars); });
+            var hb = input.hand || k.Space ? 1 : 0;
+            Phys.stepMany(dt, function (h) { Phys.stepCar(myCar, { throttle: th, steer: st, handbrake: hb }, h, otherCars); });
             walker.x = myCar.x; walker.y = myCar.y; walker.z = myCar.z; walker.ry = myCar.ry;
             walker.a = 0; walker.speed = 0;
+            afterCarStep(dt);
             return;
         }
         var dir = currentMoveDir();
         var jump = input.jump || k.Space;
         Phys.stepMany(dt, function (h) {
-            Phys.stepWalker(walker, { mx: dir.mx * dir.mag, mz: dir.mz * dir.mag, jump: jump }, h);
+            Phys.stepWalker(walker, { mx: dir.mx * dir.mag, mz: dir.mz * dir.mag, jump: jump }, h, walkCars());
         });
         // Припаркована машина докочується до зупинки
-        if (myCar && (Math.abs(myCar.speed) > 0.05 || myCar.air)) {
+        if (myCar && (Math.abs(myCar.speed) > 0.05 || myCar.air || (myCar.nGround || 0) < 3 || myCar.hit)) {
             Phys.stepMany(dt, function (h) { Phys.stepCar(myCar, { throttle: 0, steer: 0 }, h, otherCars); });
+        }
+        afterCarStep(dt);
+    }
+
+    // Машини, крізь які персонаж не проходить: моя (якщо на землі, не в ній) і чужі
+    var walkList = [];
+    function walkCars() {
+        walkList.length = 0;
+        if (myCar && !driving) walkList.push(myCar);
+        for (var i = 0; i < otherCars.length; i++) walkList.push(otherCars[i]);
+        return walkList;
+    }
+
+    // Після кроку фізики: тряска камери від ударів, відламані деталі, кнопка «перевернути»
+    function afterCarStep(dt) {
+        Phys.stepDebris(dt);
+        if (!myCar) return;
+        var ev = myCar.events;
+        for (var i = 0; i < ev.length; i++) {
+            var e = ev[i];
+            var dv = e.dv || e.v || 0;
+            if (dv > 4) shake = Math.max(shake, Math.min(1.6, dv * 0.07));
+        }
+        ev.length = 0;
+        var fb = $('flipBtn');
+        if (fb) {
+            var show = !!(myCar.flipped && driving);
+            if (show !== fb.classList.contains('show')) {
+                fb.classList.toggle('show', show);
+                fb.textContent = lt('flip');
+            }
         }
     }
 
@@ -806,8 +1029,12 @@
         var changed = key !== lastSent;
         var withCar = false;
         if (myCar && !pendingSpawn) {
-            var c = { t: myCar.type, x: r2(myCar.x), y: r2(myCar.y), z: r2(myCar.z), ry: r2(myCar.ry), s: r2(myCar.speed), st: r2(myCar.steer) };
-            var ck = c.x + ',' + c.y + ',' + c.z + ',' + c.ry + ',' + c.s + ',' + c.st;
+            var r3 = function (v) { return Math.round(v * 1000) / 1000; };
+            var c = {
+                t: myCar.type, x: r2(myCar.x), y: r2(myCar.y), z: r2(myCar.z), ry: r2(myCar.ry), s: r2(myCar.speed), st: r2(myCar.steer),
+                q: [r3(myCar.q[0]), r3(myCar.q[1]), r3(myCar.q[2]), r3(myCar.q[3])], dm: myCar.dm | 0
+            };
+            var ck = c.x + ',' + c.y + ',' + c.z + ',' + c.ry + ',' + c.s + ',' + c.st + ',' + c.q.join(':') + ',' + c.dm;
             if (ck !== lastCarSent || sinceCarBeat > 1500) {
                 o.c = c; withCar = true; lastCarSent = ck; sinceCarBeat = 0;
             }
@@ -821,7 +1048,7 @@
     }
 
     // ---------------------------------------------------------------- віддалені гравці й машини
-    var snapOut = { x: 0, y: 0, z: 0, ry: 0, a: 0, d: 0, speed: 0, steer: 0 };
+    var snapOut = { x: 0, y: 0, z: 0, ry: 0, a: 0, d: 0, speed: 0, steer: 0, q: [0, 0, 0, 1], hasQ: false };
 
     function updateRemotes(dt) {
         var rt = nowMs() / 1000 - INTERP_DELAY;
@@ -830,10 +1057,19 @@
             var rc = remoteCars[id];
             if (!sampleSnaps(rc.snaps, rt, snapOut, true)) continue;
             var def = Phys.CARS[rc.type];
-            var g = Phys.groundSample(def, { x: snapOut.x, z: snapOut.z, ry: snapOut.ry });
-            rc.x = snapOut.x; rc.z = snapOut.z; rc.ry = snapOut.ry; rc.y = Math.max(snapOut.y, g.y - 0.5);
-            rc.pitch = g.pitch; rc.roll = g.roll; rc.speed = snapOut.speed; rc.steer = snapOut.steer;
+            var ox0 = rc.x, oy0 = rc.y, oz0 = rc.z;
+            rc.x = snapOut.x; rc.z = snapOut.z; rc.ry = snapOut.ry; rc.y = snapOut.y;
+            if (snapOut.hasQ) { rc.q[0] = snapOut.q[0]; rc.q[1] = snapOut.q[1]; rc.q[2] = snapOut.q[2]; rc.q[3] = snapOut.q[3]; }
+            else { var g = Phys.groundSample(def, rc); Phys.qFromEuler(rc.q, rc.ry, g.pitch, g.roll); rc.y = Math.max(rc.y, g.y - 0.5); }
+            rc.speed = snapOut.speed; rc.steer = snapOut.steer;
             rc.wheel += (rc.speed * dt) / def.wheelR;
+            // швидкість для зіткнень (вектор), згладжена
+            if (dt > 0.0005) {
+                var kk = Math.min(1, dt * 10);
+                rc.vx += (clamp((rc.x - ox0) / dt, -250, 250) - rc.vx) * kk;
+                rc.vy += (clamp((rc.y - oy0) / dt, -250, 250) - rc.vy) * kk;
+                rc.vz += (clamp((rc.z - oz0) / dt, -250, 250) - rc.vz) * kk;
+            }
         }
         for (id in remotes) {
             var r = remotes[id];
@@ -860,6 +1096,11 @@
             Cam.followYaw(cam, myCar.ry + (myCar.speed >= 0 ? Math.PI : 0), dt, 1.3);
         }
         Cam.eye(cam, camTarget, World.heightAt, eye);
+        if (shake > 0.01) {
+            var t = nowMs() * 0.05;
+            eye.x += Math.sin(t * 1.7) * shake * 0.5; eye.y += Math.cos(t * 2.3) * shake * 0.4; eye.z += Math.sin(t * 1.3) * shake * 0.5;
+            shake *= Math.max(0, 1 - dt * 5);
+        }
         M.lookAt(V, eye.x, eye.y, eye.z, tx, ty, tz);
         M.perspective(P, 70 * Math.PI / 180, W / H, 0.4, TIER_CFG.far);
         M.mul(VP, P, V);
@@ -873,25 +1114,22 @@
         R.sky(horizon);
 
         var i, c;
-        // Рельєф: показуємо лише шматки, що можуть бути перед камерою
+        // Рельєф: потокові шматки з рівнями деталізації; гірка — окреме тіло з тією самою шаховою плиткою
         var fx = camTarget.x - eye.x, fy = camTarget.y - eye.y, fz = camTarget.z - eye.z;
         var fl = Math.sqrt(fx * fx + fy * fy + fz * fz) || 1;
         fx /= fl; fz /= fl;
-        var maxD = TIER_CFG.fogFar + 120;
-        for (i = 0; i < terrain.length; i++) {
-            c = terrain[i];
-            var dx = c.cx - eye.x, dz = c.cz - eye.z;
-            var d = Math.sqrt(dx * dx + dz * dz);
-            if (d > maxD + c.radius) continue;
-            if (d > c.radius && (dx * fx + dz * fz) / d < -0.35 - c.radius / d) continue;
-            R.checker(true);
-            R.draw(c.mesh, M.ident(stk), null, 1, 0);
-        }
+        R.checker(true, World.CFG.tile);
+        tstream.draw(R, eye.x, eye.z, fx, fz, TIER_CFG.fogFar + 160);
+        R.checker(true, World.CFG.rampTile);
+        R.draw(R.rampTop, M.ident(stk), null, 1, 0);
+        R.checker(false);
+        R.draw(R.rampWalls, M.ident(stk), null, 1, 0);
         R.checker(false);
         R.offset(true);
         R.draw(R.decalsMesh, M.ident(stk), null, 1, 0);
         R.offset(false);
         if (propsGeo && propsGeo.idx.length > 0) R.draw(R.propsMesh, M.ident(stk), null, 1, 0);
+        drawDebris(R);
 
         // Машини й персонажі
         var hideMe = !driving && eye.dist < 1.8;
@@ -1003,9 +1241,13 @@
         }
     }
 
+    // Написи нових кнопок (мови uk / ru / en)
+    var LT = { flip: { uk: 'Перевернути', ru: 'Перевернуть', en: 'Flip upright' } };
+    function lt(key) { var d = LT[key]; return d ? (d[I18.lang] || d.en) : key; }
+
     // ---------------------------------------------------------------- спідометр
     // Показує справжню швидкість моєї машини: студи/с -> км/год (Phys.kmh), стрілка до 200 км/год, передача D1..Dn / N / R.
-    var SPEEDO_MAX = 200;
+    var SPEEDO_MAX = 260;
     var SPEEDO_ARC = 367.57;                  // довжина дуги 270° для r = 78
     var speedoEls = null, speedoLast = { kmh: -1, gear: -99, lang: '' };
     function updateSpeedo() {
@@ -1013,7 +1255,7 @@
             speedoEls = { num: $('spdNum'), bar: $('spdBar'), gear: $('spdGear'), unit: $('spdUnit'), box: $('speedo') };
         }
         var v = driving && myCar ? Phys.kmh(myCar.speed) : 0;
-        var gear = driving && myCar ? Phys.gearOf(myCar.type, myCar.speed) : 0;
+        var gear = driving && myCar ? (Math.abs(myCar.speed) < 0.8 ? 0 : (myCar.gear < 0 ? -1 : (myCar.gear || 1))) : 0;
         var lang = I18.lang;
         if (v === speedoLast.kmh && gear === speedoLast.gear && lang === speedoLast.lang) return;
         speedoLast.kmh = v; speedoLast.gear = gear; speedoLast.lang = lang;
@@ -1060,6 +1302,8 @@
             CAR_TYPES.forEach(function (t) {
                 var mdl = Models.buildCar(t);
                 var op = pr.mesh(mdl.opaque), gl = pr.mesh(mdl.glass), wh = pr.mesh(mdl.wheel);
+                var pparts = [];
+                for (var pn in mdl.parts) pparts.push(pr.mesh(mdl.parts[pn].geo));
                 var dist = mdl.len * 1.45;
                 var ex = dist * 0.62, ey = mdl.height * 0.95 + 2.4, ez = dist * 0.82;
                 M.lookAt(pv, ex, ey, ez, 0, mdl.height * 0.42, 0);
@@ -1073,6 +1317,7 @@
                 pr.blend(false);
                 M.ident(pm);
                 pr.draw(op, pm, null, 1, 0.35);
+                pparts.forEach(function (pg) { pr.draw(pg, pm, null, 1, 0.35); });
                 mdl.wheelPos.forEach(function (w) {
                     M.ident(pm); M.translate(pm, w.x, w.y, w.z);
                     pr.draw(wh, pm, null, 1, 0.15);
@@ -1116,8 +1361,20 @@
     }
 
     function selectCar(t) { selectedType = t; renderCarsPanel(); }
+    // Розмір вікна машин задаємо в пікселях: старі WebView не знають CSS min()/clamp(), і вікно ставало вузьким (кілька мм)
+    function layoutPanel() {
+        var pn = $('carsPanel');
+        var vw = window.innerWidth || 800, vh = window.innerHeight || 400;
+        var w = Math.max(Math.min(Math.round(vw * 0.84), 980), Math.min(vw - 16, 560));
+        var h = Math.max(Math.min(Math.round(vh * 0.82), 620), Math.min(vh - 12, 300));
+        pn.style.width = w + 'px';
+        pn.style.height = h + 'px';
+        pn.style.left = Math.max(0, Math.round((vw - w) / 2)) + 'px';
+        pn.style.top = Math.max(0, Math.round((vh - h) / 2)) + 'px';
+    }
     function openPanel() {
         if (driving) return;
+        layoutPanel();
         if (!previews) makePreviews();
         if (!selectedType) selectedType = myCar ? myCar.type : CAR_TYPES[0];
         renderCarsPanel();
@@ -1125,6 +1382,7 @@
         releaseAll();
     }
     function closePanel() { $('carsPanel').classList.add('hidden'); }
+    window.addEventListener('resize', function () { if (panelOpen()) layoutPanel(); });
     function panelOpen() { return !$('carsPanel').classList.contains('hidden'); }
 
     function applyLangToStaticUI() {
@@ -1167,7 +1425,7 @@
     }
     function releaseAll() {
         for (var i = 0; i < holds.length; i++) holds[i]();
-        input.sx = 0; input.sy = 0; input.jump = false; input.keys = {};
+        input.sx = 0; input.sy = 0; input.jump = false; input.hand = false; input.keys = {};
         var kn = $('knob');
         if (kn) kn.style.transform = 'translate(0px,0px)';
         stickPtr = null;
@@ -1210,6 +1468,12 @@
     bindHold($('rev'), function (on) { input.rev = on; });
     bindHold($('left'), function (on) { input.left = on; });
     bindHold($('right'), function (on) { input.right = on; });
+    bindHold($('hand'), function (on) { input.hand = on; });
+    $('flipBtn').addEventListener('click', function () {
+        if (!myCar) return;
+        Phys.flipCar(myCar);
+        $('flipBtn').classList.remove('show');
+    });
 
     $('carsBtn').addEventListener('click', function () { if (panelOpen()) closePanel(); else openPanel(); });
     $('carsClose').addEventListener('click', closePanel);
@@ -1225,7 +1489,7 @@
         else if (carNearMe()) setDriving(true);
         else toast(I18.t('car_far'));
     });
-    ['carsPanel', 'carsBtn', 'carAct', 'speedo'].forEach(function (id) {
+    ['carsPanel', 'carsBtn', 'carAct', 'speedo', 'flipBtn'].forEach(function (id) {
         $(id).addEventListener('pointerdown', function (e) { e.stopPropagation(); });
     });
 
@@ -1334,7 +1598,14 @@
                 if (id === myId) continue;
                 var rc = remoteCars[id];
                 if (!rc || rc.cid !== t[1]) continue;
-                carSnap(rc, +t[2], +t[3], +t[4], +t[5], +t[6], +t[7], false);
+                var qq = t.length >= 13 ? [+t[9], +t[10], +t[11], +t[12]] : null;
+                carSnap(rc, +t[2], +t[3], +t[4], +t[5], +t[6], +t[7], false, qq);
+                var dmask = t.length >= 14 ? (t[13] | 0) : 0;
+                if (dmask !== rc.dm) {
+                    if (qq) { rc.q[0] = qq[0]; rc.q[1] = qq[1]; rc.q[2] = qq[2]; rc.q[3] = qq[3]; }
+                    rc.x = +t[2]; rc.y = +t[3]; rc.z = +t[4];
+                    Phys.applyDamageMask(rc, dmask);                 // нові відламані деталі -> уламки біля машини
+                }
             }
         },
         // Меню «лупа»: камера повертається до обраного гравця
@@ -1393,7 +1664,7 @@
         try {
             resize();
             tagsCtx = tagsCanvas.getContext('2d');
-            R = createRenderer(canvas, { aa: TIER_CFG.aa, fogNear: 150, fogFar: TIER_CFG.fogFar });
+            R = createRenderer(canvas, { aa: TIER_CFG.aa, fogNear: Math.round(TIER_CFG.fogFar * 0.38), fogFar: TIER_CFG.fogFar });
             buildAssets();
         } catch (e) {
             nfail('webgl', e && e.message ? e.message : String(e));
@@ -1401,7 +1672,7 @@
         }
         canvas.addEventListener('webglcontextlost', function (e) { e.preventDefault(); started = false; nlog('WebGL-контекст втрачено'); }, false);
         canvas.addEventListener('webglcontextrestored', function () {
-            try { R = createRenderer(canvas, { aa: TIER_CFG.aa, fogNear: 150, fogFar: TIER_CFG.fogFar }); buildAssets(); started = !!walker; nlog('WebGL-контекст відновлено'); }
+            try { R = createRenderer(canvas, { aa: TIER_CFG.aa, fogNear: Math.round(TIER_CFG.fogFar * 0.38), fogFar: TIER_CFG.fogFar }); buildAssets(); started = !!walker; nlog('WebGL-контекст відновлено'); }
             catch (e) { nfail('webgl', 'не вдалося відновити: ' + (e && e.message)); }
         }, false);
         applyLangToStaticUI();
