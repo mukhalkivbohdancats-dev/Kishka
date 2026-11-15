@@ -44,23 +44,24 @@
 const GAMES = new Set(['realistic_cars']);          // дозволені ідентифікатори ігор (Bloxgame.kt -> BloxGame.GAME_ID)
 const MAX_PLAYERS = 50;
 const TICK_MS = 100;                                // частота розсилки станів (10 Гц)
-const BOUND_XZ = 700;                               // світ — коло радіуса 640 (world.js limitR), запас на край
-const BOUND_Y_MIN = -20;
-const BOUND_Y_MAX = 120;
+const BOUND_XZ = 2600;                              // світ — коло радіуса 2480 (world.js limitR; площа в 15 разів більша за стару), запас на край
+const BOUND_Y_MIN = -90;                             // долини й чаші рельєфу йдуть нижче нуля
+const BOUND_Y_MAX = 460;                             // гори до ~310 студів плюс запас на польоти з гірки й горбів
 const RATE_BURST = 30;                              // ведро: сплеск пакетів
 const RATE_PER_SEC = 20;                            // ведро: сталий темп (клієнт надсилає ~11/с)
 const STALE_MS = 60 * 1000;                         // жодного пакета стану 60 с -> гравець виходить із гри
 const RECONNECT_GRACE_MS = 15 * 1000;               // стільки часу після обриву сервер тримає id і позицію
 const SPAWN = { x: 0, y: 1, z: 0 };                  // центр круглого майданчика
 const CAR_TYPES = ['sedan', 'van', 'truck'];         // дозволені машини (ті самі, що в blox_game/physics.js)
-const MAX_CAR_SPEED = 200;                           // студів/с (найшвидша машина ~188 на спуску)
-const STUD_TO_KMH = 1.008;                           // 1 студ = 0.28 м -> км/год на спідометрі
+const MAX_CAR_SPEED = 280;                           // студів/с (найшвидша машина ~210 на рівнині, більше — на спуску й у польоті)
+const STUD_TO_KMH = 1.26;                            // 1 студ = 0.35 м (physics.js: S) -> км/год на спідометрі
 const MAX_WALK_SPEED = 70;                           // студів/с: ходьба 16, падіння/стрибок — із запасом
-const MAX_DRIVE_SPEED = 230;                         // студів/с для гравця в машині (із запасом на польоти)
+const MAX_DRIVE_SPEED = 330;                         // студів/с для гравця в машині (із запасом на польоти; збігається з CAR.maxSpeed у physics.js)
 const JUMP_SLACK = 14;                               // допуск на одну дистанцію (вихід із машини, мережа)
 const MAX_JUMP_REJECTS = 12;                         // стільки «телепортів» підряд відкидаємо, потім приймаємо нове місце
 const RESPAWN_COOLDOWN_MS = 1000;
 const MAX_STEER = 1.2;
+const MAX_DM = 0x7fff;                               // маска відламаних деталей: 9 деталей + до 6 коліс (15 бітів)
 const CAR_SPAWN_COOLDOWN_MS = 1200;                  // не частіше одного spawn на 1,2 с від гравця
 const CAR_SPAWN_MAX_DIST = 60;                       // машину можна створити лише поблизу себе
 
@@ -84,7 +85,7 @@ function wrapAngle(a) {
     return r;
 }
 
-// Стан моєї машини: { t, x, y, z, ry, s, st } або null, якщо щось некоректне
+// Стан моєї машини: { t, x, y, z, ry, s, st, q?, dm? } або null, якщо щось некоректне
 function sanitizeCar(c) {
     if (!c || typeof c !== 'object') return null;
     if (typeof c.t !== 'string' || !CAR_TYPES.includes(c.t)) return null;
@@ -93,7 +94,19 @@ function sanitizeCar(c) {
     if (c.y < BOUND_Y_MIN || c.y > BOUND_Y_MAX) return null;
     if (Math.abs(c.ry) > 1000) return null;
     if (Math.abs(c.s) > MAX_CAR_SPEED || Math.abs(c.st) > MAX_STEER) return null;
-    return { t: c.t, x: round2(c.x), y: round2(c.y), z: round2(c.z), ry: round2(wrapAngle(c.ry)), s: round2(c.s), st: round2(c.st) };
+    const out = { t: c.t, x: round2(c.x), y: round2(c.y), z: round2(c.z), ry: round2(wrapAngle(c.ry)), s: round2(c.s), st: round2(c.st), q: null, dm: 0 };
+    // Повний поворот у просторі (кватерніон) і маска відламаних деталей — необов'язкові (старі клієнти їх не шлють)
+    if (c.q !== undefined && c.q !== null) {
+        if (!Array.isArray(c.q) || c.q.length !== 4 || !c.q.every((v) => isNum(v) && Math.abs(v) <= 1.01)) return null;
+        const l = Math.hypot(c.q[0], c.q[1], c.q[2], c.q[3]);
+        if (l < 0.5) return null;
+        out.q = c.q.map((v) => Math.round((v / l) * 1000) / 1000);
+    }
+    if (c.dm !== undefined && c.dm !== null) {
+        if (!Number.isInteger(c.dm) || c.dm < 0 || c.dm > MAX_DM) return null;
+        out.dm = c.dm;
+    }
+    return out;
 }
 
 // Перевіряє й нормалізує стан. Повертає { x, y, z, ry, a, d, c } (c — або null, якщо машини в пакеті немає) або null, якщо щось некоректне.
@@ -179,7 +192,7 @@ function createBloxGame(options) {
     function carsPayload(game, room) {
         const cars = [];
         for (const p of room.players.values()) {
-            if (p.car) cars.push({ id: p.id, cid: p.car.cid, type: p.car.type, x: p.car.x, y: p.car.y, z: p.car.z, ry: p.car.ry, kmh: kmhOf(p.car.s) });
+            if (p.car) cars.push({ id: p.id, cid: p.car.cid, type: p.car.type, x: p.car.x, y: p.car.y, z: p.car.z, ry: p.car.ry, kmh: kmhOf(p.car.s), q: p.car.q || null, dm: p.car.dm | 0 });
         }
         return { game, count: cars.length, cars };
     }
@@ -228,7 +241,8 @@ function createBloxGame(options) {
             }
             if (p.car && p.car.dirty) {
                 p.car.dirty = false;
-                carOut.push([p.id, p.car.cid, p.car.x, p.car.y, p.car.z, p.car.ry, p.car.s, p.car.st, kmhOf(p.car.s)]);
+                const q = p.car.q || [0, 0, 0, 1];
+                carOut.push([p.id, p.car.cid, p.car.x, p.car.y, p.car.z, p.car.ry, p.car.s, p.car.st, kmhOf(p.car.s), q[0], q[1], q[2], q[3], p.car.dm | 0]);
             }
         }
         for (const [email, r] of Array.from(room.reserved.entries())) {
@@ -429,10 +443,17 @@ function createBloxGame(options) {
                 logLimited('car_type:' + p.id, 'тип машини в стані (' + s.c.t + ') не збігається зі створеною (' + p.car.type + '): id=' + p.id + ' — відкинуто');
             } else if (motionCheck && p.car.moved && Math.hypot(s.c.x - p.car.x, s.c.z - p.car.z) > MAX_DRIVE_SPEED * dtSec + JUMP_SLACK) {
                 logLimited('car_jump:' + p.id, 'неможливий стрибок машини: id=' + p.id + ' нік=' + logNick(p.nick) + ' — стан машини відкинуто');
-            } else if (s.c.x !== p.car.x || s.c.y !== p.car.y || s.c.z !== p.car.z || s.c.ry !== p.car.ry || s.c.s !== p.car.s || s.c.st !== p.car.st) {
-                p.car.x = s.c.x; p.car.y = s.c.y; p.car.z = s.c.z; p.car.ry = s.c.ry; p.car.s = s.c.s; p.car.st = s.c.st;
-                p.car.dirty = true;
-                p.car.moved = true;
+            } else {
+                const qNew = s.c.q ? s.c.q.join(',') : '';
+                const qOld = p.car.q ? p.car.q.join(',') : '';
+                const dmNew = (p.car.dm | 0) | (s.c.dm | 0);              // відламане не «приростає» назад: лише додається
+                if (s.c.x !== p.car.x || s.c.y !== p.car.y || s.c.z !== p.car.z || s.c.ry !== p.car.ry || s.c.s !== p.car.s || s.c.st !== p.car.st || qNew !== qOld || dmNew !== (p.car.dm | 0)) {
+                    p.car.x = s.c.x; p.car.y = s.c.y; p.car.z = s.c.z; p.car.ry = s.c.ry; p.car.s = s.c.s; p.car.st = s.c.st;
+                    p.car.q = s.c.q || p.car.q || null;
+                    p.car.dm = dmNew;
+                    p.car.dirty = true;
+                    p.car.moved = true;
+                }
             }
         }
     }
@@ -479,7 +500,7 @@ function createBloxGame(options) {
         p.lastCarSpawnAt = t;
         const old = p.car;
         const cid = (room.nextCid = (room.nextCid || 0) + 1);
-        p.car = { cid, type: data.type, x: st.x, y: st.y, z: st.z, ry: st.ry, s: 0, st: 0, dirty: true };
+        p.car = { cid, type: data.type, x: st.x, y: st.y, z: st.z, ry: st.ry, s: 0, st: 0, q: null, dm: 0, dirty: true };
         p.lastStateAt = t;
         p.lastMoveAt = p.lastMoveAt || t;
         if (old) {
@@ -577,7 +598,7 @@ function createBloxGame(options) {
         const p = room && room.players.get(m.id);
         if (!room || !p || p.socketId !== socket.id) return; // гравця вже замінив новий вхід
         // Зберігаємо id і позицію на короткий час: швидке перепідключення не створює «нового» гравця
-        room.reserved.set(p.email, { id: p.id, x: p.x, y: p.y, z: p.z, ry: p.ry, at: now(), car: p.car ? { cid: p.car.cid, type: p.car.type, x: p.car.x, y: p.car.y, z: p.car.z, ry: p.car.ry, s: 0, st: 0 } : null });
+        room.reserved.set(p.email, { id: p.id, x: p.x, y: p.y, z: p.z, ry: p.ry, at: now(), car: p.car ? { cid: p.car.cid, type: p.car.type, x: p.car.x, y: p.car.y, z: p.car.z, ry: p.car.ry, s: 0, st: 0, q: p.car.q || null, dm: p.car.dm | 0 } : null });
         removePlayer(m.game, room, p, 'відключення: ' + reason);
         socket.bloxGame = null;
     }
