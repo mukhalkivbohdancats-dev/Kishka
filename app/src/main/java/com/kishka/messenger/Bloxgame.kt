@@ -858,7 +858,7 @@ fun BloxGameScreen(lang: String, email: String) {
                 }
             }
 
-            // Верхній ряд зліва: велика кругла кнопка-логотип і «таблетка» з кнопками (малюється ПІСЛЯ панелі, тож лишається клікабельною)
+            // Зверху зліва — лише кнопка меню (малюється ПІСЛЯ панелі, тож лишається клікабельною); інших іконок зверху немає
             BloxTopBar(
                 lang = lang,
                 menuOpen = menuOpen,
@@ -866,10 +866,6 @@ fun BloxGameScreen(lang: String, email: String) {
                     menuTab = 0
                     menuOpen = !menuOpen
                     if (!menuOpen) confirmLeave = false
-                },
-                onPeople = {
-                    menuTab = 0
-                    menuOpen = true
                 }
             )
         }
