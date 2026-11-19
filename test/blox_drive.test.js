@@ -91,7 +91,7 @@ test('гра: у коді є спідометр, вікно спавну, зіт
     const js = fs.readFileSync(path.join(dir, 'game.js'), 'utf8');
     assert.ok(/id="speedo"/.test(html) && /id="spdNum"/.test(html) && />0</.test(html), 'спідометр з нулем за замовчуванням');
     assert.ok(/Phys\.kmh\(myCar\.speed\)/.test(js), 'число — з реальної швидкості машини');
-    assert.ok(/stepCar\(myCar, \{ throttle: th, steer: st, handbrake: hb \}, h, otherCars\)/.test(js), 'зіткнення з чужими машинами');
+    assert.ok(/stepCar\(myCar, \{ throttle: th, steer: st, handbrake: hb, drift: dr \}, h, otherCars\)/.test(js), 'зіткнення з чужими машинами');
     assert.ok(/#carsPanel[\s\S]*width: 84%/.test(html), 'вікно вибору широке');
     assert.ok(/#spawnBtn[\s\S]*#4ee06a/.test(html) && /@keyframes spawnPulse/.test(html), 'кнопка Spawn зелена й анімована');
     assert.ok(/respawn: function/.test(js), 'KishkaGame.respawn');
