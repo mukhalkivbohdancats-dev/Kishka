@@ -486,6 +486,11 @@
                 box(g, { c: [sd * (hw * 0.97), sa * rr * 0.5, ca * rr * 0.5], s: [0.035, rr * 0.075, rr * 0.4], rot: [a, 0, 0], color: [0.93, 0.94, 0.97] });
             }
             cylinder(g, { c: [sd * hw * 1.0, 0, 0], r: R * 0.17, h: 0.08, rot: [0, 0, Math.PI / 2], color: [0.55, 0.56, 0.62], seg: 12 });
+            for (k = 0; k < 5; k++) {                                     // болти кріплення колеса
+                var la = (k / 5) * Math.PI * 2 + 0.3;
+                sphere(g, [sd * hw * 1.02, Math.sin(la) * R * 0.27, Math.cos(la) * R * 0.27], R * 0.04, [0.78, 0.8, 0.85], { seg: [6, 4] });
+            }
+            cylinder(g, { c: [sd * hw * 0.99, 0, 0], r: rr * 1.0, r2: rr * 1.0, h: 0.03, rot: [0, 0, Math.PI / 2], color: CHROME, seg: 24 });   // хромова окантовка диска
             // видимий гальмівний диск і супорт за спицями
             cylinder(g, { c: [sd * hw * 0.55, 0, 0], r: R * 0.5, h: 0.05, rot: [0, 0, Math.PI / 2], color: BRAKE, seg: 20 });
         });
@@ -870,10 +875,142 @@
 
     // Результат: opaque (кузов без відламуваних деталей), glass (скло), parts { fbump, rbump, hood, trunk, doorL, doorR, mirL, mirR, extra }
     // — окремі геометрії з точкою кріплення (hinge), віссю й кутом для «зім'ятості»; wheel — одне колесо (праве/ліве однакові).
+    // =================================================================
+    // Додаткова деталізація кузовів (листопад 2026): решітки з ламелями, бічні забірники, протитуманки в хромових кільцях,
+    // пороги, дифузор, лампи заднього ходу, замки й петлі, бокові габарити, бризковики, паливні баки, ребра даху.
+    // Дрібні елементи на бамперах, дверях, капоті й кришці багажника прикріплені до цих деталей і відлітають разом із ними.
+    // =================================================================
+    var SLAT = [0.27, 0.28, 0.33], BLACK = [0.02, 0.02, 0.03], REFLECT = [0.75, 0.08, 0.08], LAMP_W = [0.95, 0.95, 0.9];
+    function slats(g, cx, cy, cz, hw, n, gap, color, tz) {
+        for (var k = 0; k < n; k++) box(g, { c: [cx, cy + k * gap, cz], s: [hw, 0.012, tz || 0.02], color: color || SLAT });
+    }
+    // хромове кільце навколо кругової лампи, що дивиться вздовж ±Z
+    function lampRing(g, c, r, color, dir) {
+        cylinder(g, { c: c, r: r * 1.28, h: 0.03, rot: [Math.PI / 2, 0, 0], color: CHROME, seg: 14 });
+        cylinder(g, { c: [c[0], c[1], c[2] + 0.02 * dir], r: r, h: 0.03, rot: [Math.PI / 2, 0, 0], color: color, seg: 14 });
+    }
+
+    function addSedanDetails(m) {
+        var fb = m.parts.fbump.geo, rb = m.parts.rbump.geo, dl = m.parts.doorL.geo, dr = m.parts.doorR.geo, body = m.opaque, k;
+        // перед: решітка-ламелі над номером, бічні забірники з ламелями, протитуманки, спліттер, буксирне вушко
+        box(fb, { c: [0, 1.36, 5.72], s: [1.15, 0.13, 0.04], color: BLACK });
+        slats(fb, 0, 1.27, 5.76, 1.1, 5, 0.045);
+        [-1, 1].forEach(function (sx) {
+            box(fb, { c: [sx * 1.88, 0.82, 5.64], s: [0.32, 0.15, 0.04], color: BLACK });
+            slats(fb, sx * 1.88, 0.74, 5.68, 0.29, 4, 0.045);
+            lampRing(fb, [sx * 1.45, 0.82, 5.76], 0.12, [1, 0.96, 0.8], 1);
+        });
+        box(fb, { c: [0, 0.6, 5.74], s: [2.05, 0.03, 0.15], color: BLACK });
+        box(fb, { c: [0.0, 0.7, 5.8], s: [0.12, 0.05, 0.03], color: REFLECT });
+        // зад: дифузор із ребрами, лампи заднього ходу, відбивачі, внутрішні порожнини вихлопів
+        box(rb, { c: [0, 0.66, -5.75], s: [1.7, 0.04, 0.15], color: BLACK });
+        for (k = -3; k <= 3; k++) box(rb, { c: [k * 0.4, 0.8, -5.84], s: [0.018, 0.12, 0.05], color: BLACK });
+        [-1, 1].forEach(function (sx) {
+            box(rb, { c: [sx * 1.15, 1.45, -5.8], s: [0.28, 0.07, 0.03], color: LAMP_W });
+            box(rb, { c: [sx * 2.05, 0.95, -5.7], s: [0.2, 0.05, 0.03], color: REFLECT });
+            cylinder(body, { c: [sx * 1.5, 0.95, -5.96], r: 0.13, h: 0.04, rot: [Math.PI / 2, 0, 0], color: BLACK, seg: 10 });
+        });
+        // боки: пороги, шви дверей, ручки-вставки, паливний лючок, молдинги
+        [-1, 1].forEach(function (sx) {
+            var door = sx > 0 ? dl : dr;
+            box(body, { c: [sx * 2.4, 0.92, -0.1], s: [0.07, 0.1, 2.75], color: BLACK });
+            [1.92, -0.12, -2.0].forEach(function (z) { box(door, { c: [sx * 2.475, 2.1, z], s: [0.012, 0.85, 0.012], color: SEAM }); });
+            box(door, { c: [sx * 2.475, 1.3, 0.0], s: [0.012, 0.012, 1.9], color: SEAM });
+            box(door, { c: [sx * 2.475, 2.72, 0.0], s: [0.014, 0.025, 1.9], color: CHROME });
+        });
+        cylinder(body, { c: [2.45, 2.4, -3.1], r: 0.2, h: 0.04, rot: [0, 0, Math.PI / 2], color: DARK, seg: 12 });
+        cylinder(body, { c: [2.47, 2.4, -3.1], r: 0.1, h: 0.03, rot: [0, 0, Math.PI / 2], color: CHROME, seg: 10 });
+        // дах: антена-«акулячий плавник»
+        superEllipsoid(body, { c: [0, 3.98, -1.9], s: [0.1, 0.1, 0.3], n: 2.4, color: BLACK, seg: [10, 6] });
+        // індикатори поворотів на дзеркалах
+        ['mirL', 'mirR'].forEach(function (n, i) {
+            var sx = i === 0 ? 1 : -1;
+            if (m.parts[n]) box(m.parts[n].geo, { c: [sx * 2.8, 2.95, 2.3], s: [0.1, 0.04, 0.03], color: AMBER });
+        });
+    }
+
+    function addVanDetails(m) {
+        var fb = m.parts.fbump.geo, rb = m.parts.rbump.geo, tr = m.parts.trunk.geo, body = m.opaque, k;
+        // перед: решітка з ламелями, нижні забірники, протитуманки, буксирне вушко
+        box(fb, { c: [0, 1.0, 6.04], s: [1.35, 0.13, 0.04], color: BLACK });
+        slats(fb, 0, 0.92, 6.08, 1.3, 4, 0.055);
+        [-1, 1].forEach(function (sx) {
+            box(fb, { c: [sx * 2.0, 0.95, 6.0], s: [0.3, 0.15, 0.04], color: BLACK });
+            slats(fb, sx * 2.0, 0.87, 6.04, 0.27, 4, 0.05);
+            lampRing(fb, [sx * 1.55, 1.4, 6.08], 0.13, [1, 0.96, 0.8], 1);
+        });
+        box(fb, { c: [0, 0.68, 6.08], s: [2.1, 0.03, 0.12], color: BLACK });
+        // зад: східці-бампер із рифленням, лампи заднього ходу, відбивачі, петлі й засув дверей
+        box(rb, { c: [0, 1.45, -6.12], s: [2.2, 0.05, 0.12], color: [0.12, 0.12, 0.14] });
+        for (k = -5; k <= 5; k++) box(rb, { c: [k * 0.4, 1.5, -6.14], s: [0.02, 0.025, 0.1], color: [0.3, 0.3, 0.34] });
+        [-1, 1].forEach(function (sx) {
+            box(rb, { c: [sx * 1.2, 1.1, -6.2], s: [0.28, 0.07, 0.03], color: LAMP_W });
+            box(rb, { c: [sx * 2.2, 0.92, -6.1], s: [0.2, 0.05, 0.03], color: REFLECT });
+            box(tr, { c: [sx * 2.45, 4.4, -6.2], s: [0.07, 0.18, 0.05], color: CHROME });
+            box(tr, { c: [sx * 2.45, 2.6, -6.2], s: [0.07, 0.18, 0.05], color: CHROME });
+        });
+        box(tr, { c: [-0.15, 3.1, -6.27], s: [0.04, 0.35, 0.04], color: CHROME });
+        // боки: бічні двері вантажного відсіку (шви + ручка + напрямна), габаритні ліхтарі, паливний лючок, бризковики
+        [-1, 1].forEach(function (sx) {
+            [1.4, -3.3].forEach(function (z) { box(body, { c: [sx * 2.62, 3.2, z], s: [0.012, 1.35, 0.012], color: SEAM }); });
+            box(body, { c: [sx * 2.62, 4.55, -0.95], s: [0.012, 0.012, 2.35], color: SEAM });
+            box(body, { c: [sx * 2.63, 3.3, 0.9], s: [0.025, 0.05, 0.3], color: CHROME });
+            [-5.5, 5.3].forEach(function (z) { box(body, { c: [sx * 2.62, 2.0, z], s: [0.02, 0.06, 0.16], color: AMBER }); });
+            box(body, { c: [sx * 2.58, 0.9, -4.85], s: [0.02, 0.42, 0.34], color: BLACK });          // бризковик за заднім колесом
+        });
+        cylinder(body, { c: [-2.6, 3.0, -2.6], r: 0.22, h: 0.04, rot: [0, 0, Math.PI / 2], color: DARK, seg: 12 });
+        // дах: вентиляційний люк і антена
+        box(body, { c: [0.0, 5.17, 1.4], s: [0.7, 0.03, 0.55], color: [0.82, 0.84, 0.88] });
+        box(body, { c: [0.0, 5.2, 1.4], s: [0.5, 0.01, 0.35], color: SEAM });
+        superEllipsoid(body, { c: [-1.0, 5.2, 3.0], s: [0.09, 0.09, 0.25], n: 2.4, color: BLACK, seg: [10, 6] });
+        // індикатори поворотів на дзеркалах
+        ['mirL', 'mirR'].forEach(function (n, i) {
+            var sx = i === 0 ? 1 : -1;
+            if (m.parts[n]) box(m.parts[n].geo, { c: [sx * 3.02, 3.0, 4.6], s: [0.05, 0.12, 0.03], color: AMBER });
+        });
+    }
+
+    function addTruckDetails(m) {
+        var fb = m.parts.fbump.geo, rb = m.parts.rbump.geo, tr = m.parts.trunk.geo, body = m.opaque, k;
+        // кабіна: решітка з хромовими планками, зубчаста нижня решітка, фара-«вії», буксирні петлі
+        for (k = 0; k < 5; k++) box(fb, { c: [0, 2.0 + k * 0.2, 8.0], s: [0.85, 0.035, 0.03], color: CHROME });
+        box(fb, { c: [0, 1.55, 8.02], s: [1.05, 0.12, 0.03], color: BLACK });
+        [-1, 1].forEach(function (sx) {
+            box(fb, { c: [sx * 1.65, 1.6, 7.98], s: [0.12, 0.08, 0.05], color: [0.8, 0.1, 0.1] });    // тягові петлі
+            lampRing(fb, [sx * 1.9, 2.95, 7.7], 0.3, HEAD, 1);                                           // великі круглі фари
+        });
+        // кабіна: габаритні вогні на даху, повітряний сигнал
+        for (k = -2; k <= 2; k++) sphere(body, [k * 0.5, 5.95, 3.7], 0.11, AMBER);
+        cylinder(body, { c: [1.2, 6.1, 2.85], r: 0.09, h: 0.5, color: CHROME, seg: 8 });
+        cylinder(body, { c: [-1.2, 6.1, 2.85], r: 0.09, h: 0.5, color: CHROME, seg: 8 });
+        // рама: паливні баки, трансмісія, ресори
+        [-1, 1].forEach(function (sx) {
+            cylinder(body, { c: [sx * 2.2, 1.62, 0.8], r: 0.55, h: 2.4, rot: [Math.PI / 2, 0, 0], color: [0.7, 0.72, 0.78], seg: 14 });
+            [-0.2, 1.8].forEach(function (z) { box(body, { c: [sx * 2.2, 1.62, z], s: [0.12, 0.6, 0.05], color: DARK }); });
+            box(body, { c: [sx * 2.55, 1.35, -4.3], s: [0.05, 0.08, 1.9], color: [0.3, 0.3, 0.34] });  // ресори заднього візка
+        });
+        cylinder(body, { c: [0, 1.45, -1.5], r: 0.12, h: 4.0, rot: [Math.PI / 2, 0, 0], color: [0.35, 0.36, 0.4], seg: 8 });
+        // кузов-фургон: ребра даху, бокові габарити (янтарні спереду й червоні ззаду), бризковики, засуви й петлі задніх дверей
+        for (k = 0; k < 9; k++) box(body, { c: [0, 7.46, -7.2 + k * 1.05], s: [2.4, 0.03, 0.05], color: [0.8, 0.82, 0.86] });
+        [-1, 1].forEach(function (sx) {
+            [-6.5, -3.2, 0.0, 1.6].forEach(function (z, i) { box(body, { c: [sx * 2.76, 2.55, z], s: [0.02, 0.07, 0.18], color: i === 3 ? AMBER : REFLECT }); });
+            box(body, { c: [sx * 2.72, 1.3, -6.9], s: [0.02, 0.55, 0.45], color: BLACK });          // бризковик за заднім візком
+            box(body, { c: [sx * 2.72, 1.5, 3.2], s: [0.02, 0.4, 0.3], color: BLACK });             // бризковик за кабіною-колесом
+            box(tr, { c: [sx * 2.55, 6.2, -8.05], s: [0.07, 0.2, 0.05], color: CHROME });
+            box(tr, { c: [sx * 2.55, 3.4, -8.05], s: [0.07, 0.2, 0.05], color: CHROME });
+            box(tr, { c: [sx * 1.2, 4.9, -8.08], s: [0.04, 1.3, 0.03], color: CHROME });            // вертикальні засуви
+            box(tr, { c: [sx * 1.2, 4.5, -8.12], s: [0.1, 0.05, 0.03], color: CHROME });
+        });
+        box(rb, { c: [0, 1.9, -8.0], s: [2.5, 0.12, 0.1], color: BLACK });
+        for (k = -2; k <= 2; k++) box(rb, { c: [k * 0.9, 2.05, -8.08], s: [0.04, 0.05, 0.03], color: REFLECT });
+    }
+    var CAR_DETAILS = { sedan: addSedanDetails, van: addVanDetails, truck: addTruckDetails };
+
     function buildCar(type) {
         var def = CAR_DEFS[type];
         if (!def) throw new Error('unknown car type: ' + type);
         var m = assembleCar(def.spec());
+        if (CAR_DETAILS[type]) CAR_DETAILS[type](m);
         // кермо перед водієм
         cylinder(m.opaque, { c: [def.seat[0], def.seat[1] + 0.95, def.seat[2] + 1.3], r: 0.5, h: 0.09, rot: [1.1, 0, 0], color: [0.1, 0.1, 0.12], seg: 14 });
         var wheelPos = def.wheels.map(function (w) {
