@@ -1,0 +1,43 @@
+# НЕОБОВ'ЯЗКОВО. Для адреси https://kishkablox.github.io (окремий репозиторій KishkaBlox.github.io в організації/акаунті KishkaBlox).
+# Покладіть цей файл у той репозиторій як .github/workflows/pages.yml (див. інструкцію). Він забирає код гри з репозиторію Kishka
+# (має бути публічним) і публікує сайт. Оновлення: Actions -> «Сайт KishkaBlox» -> Run workflow (або само щодоби о 03:00 UTC).
+name: Сайт KishkaBlox (GitHub Pages)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 3 * * *'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: mukhalkivbohdancats-dev/Kishka
+          path: src
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Зібрати сайт
+        run: node src/web/build-site.js --src src --out _site
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
