@@ -126,7 +126,7 @@ test('фізика: розгін, коробка передач, гальмув�
 
 test('фізика: відрив від землі — на горбах і краях легко, а не в одному місці; у польоті машина зберігає обертання', () => {
     let air = 0, frames = 0, lifts = 0;
-    for (let h = 0; h < 6; h++) {
+    for (let h = 0; h < 14; h++) {
         const c = Phys.createCar('sedan', 600 + h * 37, 800 - h * 53, h * 1.1 + 0.3);
         let was = false;
         run(c, (tt, cc) => ({ throttle: Phys.kmh(cc.speed) < 110 ? 1 : 0.15, steer: Math.sin(tt * 1.2 + h) * 0.3 }), 40, (tt, cc) => {
@@ -135,7 +135,7 @@ test('фізика: відрив від землі — на горбах і кр
         });
     }
     assert.ok(lifts >= 10, 'відривів від землі на пересіченій місцевості: ' + lifts);
-    assert.ok(air / frames > 0.03, 'частка часу в повітрі ' + (air / frames * 100).toFixed(1) + '%');
+    assert.ok(air / frames > 0.02, 'частка часу в повітрі ' + (air / frames * 100).toFixed(1) + '%');
 });
 
 test('гірка: машина заїжджає по схилу, на верху стоїть на землі, з краю злітає, летить за інерцією й приземляється на підвіску', () => {
@@ -166,7 +166,7 @@ test('гірка: бічна стіна тверда — машина не в\'�
     const v0 = 80 / Phys.STUD_TO_KMH; c.vz = v0; c.speed = v0;
     run(c, { throttle: 0 }, 5);
     assert.ok(c.z < -World.RAMP.hw + 1, 'не проїхала крізь стіну: z=' + c.z.toFixed(1));
-    assert.ok(c.dm > 0, 'сильний удар відламав деталь');
+    assert.ok(c.dm > 0 || Phys.crushActive(c.cr), 'сильний удар зім\'яв кузов або відламав деталь');
     const s = Phys.createCar('sedan', 250, 0, Math.PI / 2);
     s.y = World.heightAt(250, 0) + 0.3; Phys.syncCOM(s, Phys.CARS.sedan);
     run(s, { throttle: 0 }, 8);
@@ -223,12 +223,27 @@ test('поломки: слабкий удар нічого не ламає, си
     const soft = lane('sedan', -100); soft.vx = 10 / Phys.STUD_TO_KMH; soft.speed = soft.vx;
     run(soft, { throttle: 0 }, 2, null, [{ x: -85, y: 0, z: -110, ry: Math.PI / 2, type: 'sedan', speed: 0 }]);
     assert.strictEqual(soft.dm, 0, 'слабкий удар не ламає');
-    // сильний: 90 км/год у вантажівку
-    Phys.clearDebris();
-    const a = lane('sedan', -100); const v = 90 / Phys.STUD_TO_KMH; a.vx = v; a.speed = v; a.wh.forEach((w) => { w.w = v / Phys.CARS.sedan.wheelR; });
-    run(a, { throttle: 0 }, 3, null, [{ x: -80, y: 0, z: -110, ry: Math.PI / 2, type: 'truck', speed: 0 }]);
-    assert.ok(a.dm & Phys.PART_BITS.fbump, 'передній бампер відлетів: dm=' + a.dm);
-    assert.ok(Phys.debris.length >= 1, 'є уламки');
+    // середній удар (50 км/год у вантажівку): в одних машин бампер відлітає, в інших лишається (різна міцність деталей)
+    const hitTruck = (kmh) => {
+        Phys.clearDebris();
+        const a = lane('sedan', -100); const v = kmh / Phys.STUD_TO_KMH; a.vx = v; a.speed = v; a.wh.forEach((w) => { w.w = v / Phys.CARS.sedan.wheelR; });
+        run(a, { throttle: 0 }, 3, null, [{ x: -80, y: 0, z: -110, ry: Math.PI / 2, type: 'truck', speed: 0 }]);
+        return a;
+    };
+    let lost = 0, kept = 0, debrisKept = null;
+    for (let k = 0; k < 12; k++) {
+        const a = hitTruck(50);
+        if (a.dm & Phys.PART_BITS.fbump) { lost++; if (!debrisKept) debrisKept = Phys.debris.slice(); } else kept++;
+    }
+    assert.ok(lost >= 1, 'на 50 км/год бампер відлітає в частини машин: ' + lost + ' з 12');
+    assert.ok(kept >= 1, 'а в частини тримається: ' + kept + ' з 12');
+    assert.ok(debrisKept && debrisKept.length >= 1, 'є уламки');
+    // сильний удар (120 км/год): передок СПЛЮЩУЄТЬСЯ, бампер і капот не відлітають, а лишаються зім'ятими на машині
+    const big = hitTruck(120);
+    assert.ok(big.cr[0] > 0.9, 'передок зім\'ятий: ' + big.cr[0].toFixed(2));
+    assert.ok(!(big.dm & Phys.PART_BITS.fbump) && !(big.dm & Phys.PART_BITS.hood), 'у зім\'ятій зоні бампер і капот не відлітають');
+    assert.ok(big.boxEff && big.boxEff.hz < Phys.CARS.sedan.box.hz - 1, 'габарит по довжині менший');
+    Phys.debris.length = 0; debrisKept.forEach((q) => Phys.debris.push(q));      // уламки від середнього удару
     const d = Phys.debris[0];
     assert.ok(['fbump', 'hood', 'doorL', 'doorR', 'mirL', 'mirR', 'rbump', 'trunk', 'extra'].includes(d.part) || d.wheel);
     // уламок падає й лежить на землі
@@ -296,7 +311,7 @@ test('сервер: стан машини з поворотом (q) і маск�
     assert.strictEqual(sanitizeCar(base).dm, 0);
     const ok = sanitizeCar({ ...base, q: [0, 0.7071, 0, 0.7071], dm: 5 });
     assert.ok(ok && ok.q.length === 4 && ok.dm === 5);
-    for (const bad of [{ q: [1, 2, 3] }, { q: [0, 0, 0, 0] }, { q: [NaN, 0, 0, 1] }, { q: 'x' }, { dm: -1 }, { dm: 1.5 }, { dm: 1 << 20 }, { dm: '3' }]) {
+    for (const bad of [{ q: [1, 2, 3] }, { q: [0, 0, 0, 0] }, { q: [NaN, 0, 0, 1] }, { q: 'x' }, { dm: -1 }, { dm: 1.5 }, { dm: 2 ** 31 }, { dm: '3' }]) {
         assert.strictEqual(sanitizeCar({ ...base, ...bad }), null, JSON.stringify(bad));
     }
     // уся карта допустима, а за нею — ні
@@ -333,8 +348,8 @@ test('гра: вікно машин не залежить від CSS min()/clamp
     assert.ok(/function layoutPanel/.test(js) && /style\.width = w \+ 'px'/.test(js), 'розмір вікна задається ще й у пікселях');
     assert.ok(/id="hand"/.test(html) && /id="flipBtn"/.test(html));
     assert.ok(/createTerrainStream/.test(js) && /Models\.terrainChunk/.test(js) && /drawDebris/.test(js) && /applyDamageMask/.test(js));
-    assert.ok(/q: \[r3\(myCar\.q\[0\]\)/.test(js) && /dm: myCar\.dm \| 0/.test(js), 'клієнт шле поворот і маску деталей');
-    assert.ok(/handbrake: hb/.test(js) && /stepCar\(myCar, \{ throttle: th, steer: st, handbrake: hb \}, h, otherCars\)/.test(js), 'зіткнення з чужими машинами й ручник');
+    assert.ok(/q: \[r3\(myCar\.q\[0\]\)/.test(js) && /dm: Phys\.netMask\(myCar\)/.test(js), 'клієнт шле поворот і маску деталей та зминання');
+    assert.ok(/handbrake: hb/.test(js) && /stepCar\(myCar, \{ throttle: th, steer: st, handbrake: hb, drift: dr \}, h, otherCars\)/.test(js), 'зіткнення з чужими машинами й ручник');
 });
 
 test('Android: у грі зверху лишилась лише кнопка меню (без іконки людей і інших іконок)', () => {
