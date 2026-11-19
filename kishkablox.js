@@ -59,6 +59,39 @@ function noteFailure(key) {
     else f.count++;
 }
 
+// Веб-версія (сайт на GitHub Pages): токени входу з браузера. Лише в пам'яті сервера: після перезапуску Render треба увійти знову.
+// Токен видається після перевірки пароля KishkaBlox, живе 12 годин і потрібен, щоб сторінка гри (інший сокет) повернула собі особу.
+const WEB_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
+const WEB_TOKEN_MAX = 5000;
+const webTokens = new Map(); // токен -> { email, nick, exp }
+
+function webTokenIssue(email, nick) {
+    const now = Date.now();
+    if (webTokens.size >= WEB_TOKEN_MAX) {
+        for (const [k, v] of webTokens) if (v.exp < now) webTokens.delete(k);
+        while (webTokens.size >= WEB_TOKEN_MAX) webTokens.delete(webTokens.keys().next().value);   // найстаріші
+    }
+    const token = require('crypto').randomBytes(24).toString('hex');
+    webTokens.set(token, { email, nick, exp: now + WEB_TOKEN_TTL_MS });
+    return token;
+}
+
+function webTokenGet(token) {
+    if (typeof token !== 'string' || !/^[0-9a-f]{48}$/.test(token)) return null;
+    const t = webTokens.get(token);
+    if (!t) return null;
+    if (t.exp < Date.now()) { webTokens.delete(token); return null; }
+    return t;
+}
+
+// Ключ для обмеження підбору пароля з одного місця (за проксі Render беремо першу адресу з X-Forwarded-For)
+function webClientKey(socket) {
+    const h = socket && socket.handshake;
+    const xf = h && h.headers && h.headers['x-forwarded-for'];
+    const ip = (typeof xf === 'string' && xf.split(',')[0].trim()) || (h && h.address) || (socket && socket.id) || 'unknown';
+    return 'w:' + ip;
+}
+
 // =====================================================================
 // ===== Роздача файлів гри для установки (GET /blox/manifest.json, GET /blox/files/<ім'я>) =====
 // Нічого не залежить від бази: якщо база недоступна, файли гри все одно віддаються.
@@ -593,6 +626,54 @@ module.exports = function initKishkaBlox(ctx) {
             failures.delete(emailKey);
             notifyOwner(email);
             done({ success: true, nick: target.nick });
+        });
+
+        // ---- Веб-версія гри (GitHub Pages): вхід за ніком і паролем KishkaBlox, без email -------------------------------------------
+        // blox_web_login  {nick, password}  -> {success, nick, email, token}: пароль перевіряється так само, як у blox_login; сокет «називається»
+        //                                      власником акаунта (socket.userEmail) лише для ігрового входу. Месенджерські кімнати, userSockets
+        //                                      і дзвінки НЕ чіпаються — повідомлення й дзвінки лишаються на телефоні.
+        // blox_web_resume {token}           -> {success, nick, email}: те саме без пароля (сторінка гри, перепідключення сокета).
+        // blox_web_logout {token}           -> {success}: токен анулюється.
+        on(socket, 'blox_web_login', async (data, done) => {
+            const nick = String(data.nick || '').trim();
+            const password = String(data.password || '');
+            if (!nick || !password) return done({ success: false, code: 'wrong_password' });
+            const nickLower = nick.toLowerCase();
+            const ipKey = webClientKey(socket);
+            if (tooManyFailures(nickLower) || tooManyFailures(ipKey)) return done({ success: false, code: 'too_many' });
+            const fail = (code) => {
+                noteFailure(nickLower);
+                noteFailure(ipKey);
+                done({ success: false, code });
+            };
+            const target = await accountByNick(nickLower);
+            // Не розкриваємо, чи існує такий нік: для неіснуючого й для чужого пароля — та сама відповідь
+            if (!target) return fail('wrong_password');
+            if (!safeEqualHex(hashPassword(password, target.pass_salt), target.pass_hash)) return fail('wrong_password');
+            // Старий акаунт без прив'язки до акаунта Kishka: його спершу треба один раз відкрити в застосунку (там він прив'язується)
+            if (!target.owner_email) return done({ success: false, code: 'not_bound' });
+            await dbRun('UPDATE blox_accounts SET logged_in = 1 WHERE nick_lower = ? AND owner_email = ?', [target.nick_lower, target.owner_email]);
+            failures.delete(nickLower);
+            failures.delete(ipKey);
+            socket.userEmail = target.owner_email;
+            notifyOwner(target.owner_email);
+            done({ success: true, nick: target.nick, email: target.owner_email, token: webTokenIssue(target.owner_email, target.nick) });
+        });
+
+        on(socket, 'blox_web_resume', async (data, done) => {
+            const ipKey = webClientKey(socket);
+            if (tooManyFailures(ipKey)) return done({ success: false, code: 'too_many' });
+            const t = webTokenGet(data.token);
+            if (!t) { noteFailure(ipKey); return done({ success: false, code: 'expired' }); }
+            const acc = await loggedInAccount(t.email);
+            if (!acc) return done({ success: false, code: 'not_logged_in' });
+            socket.userEmail = t.email;
+            done({ success: true, nick: acc.nick, email: t.email });
+        });
+
+        on(socket, 'blox_web_logout', async (data, done) => {
+            if (typeof data.token === 'string') webTokens.delete(data.token);
+            done({ success: true });
         });
 
         on(socket, 'blox_logout', async (data, done) => {
