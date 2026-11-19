@@ -31,6 +31,18 @@
 //   parts[...].hp       — «міцність» деталі в м/с зміни швидкості понад DAMAGE_MIN: менше — відлітає від слабшого удару.
 // Поверхні (зчеплення, опір кочення) задає SURF.table у world.js. Гравітація й масштаб — S та G угорі цього файлу.
 //
+// НОВЕ (листопад 2026):
+//   • ЛІМІТ ШВИДКОСТІ: поле topKmh — седан 250 км/год, фургон і вантажівка 105 км/год. Двигун плавно «відсікається» біля ліміту,
+//     а на спуску м'який «регулятор» не дає розігнатися понад нього (у польоті з гірки машина летить за інерцією, як і раніше);
+//   • ДРІФТ: вхід input.drift (клавіша P або кнопка «P»). Задня вісь втрачає бічне зчеплення, колеса можуть пробуксовувати, а контролер
+//     заносу за кілька десятих секунди виводить машину на кут ковзання, який задає кермо (до ~35°), і тримає його. Відпустили P —
+//     зчеплення повертається й машина випрямляється. Вмикається лише на ходу (від ~25 км/год), на землі, не перекинутою;
+//   • ЗМІНАННЯ КУЗОВА: c.cr = [передок, задок, лівий борт, правий борт, дах] (0..1). Сильний удар не відриває деталі, а зминає зону:
+//     передок/задок стискаються по довжині, борти — всередину, дах плющиться. Деталі в зім'ятій зоні лишаються на машині.
+//     Формула crushPoint — та сама, що в шейдері game.js (вершинний). Зім'ятий кузов має менші габарити для зіткнень.
+//     Для мережі стан зминання пакується у старші біти маски dm (netMask): 3 біти на зону «термометром», тому об'єднання
+//     масок сервером (побітове АБО) лишається правильним — зминання лише росте.
+//
 // Напрямок «уперед» при повороті ry: (sin ry, 0, cos ry); модель дивиться в бік +Z, ліва сторона водія — +X.
 // Кермо: steer > 0 — праворуч (кут ry зменшується), steer < 0 — ліворуч.
 // =====================================================================
@@ -70,6 +82,16 @@
         debrisMax: 48,
         debrisLife: 30
     };
+
+    // Дріфт (див. шапку): minSpeed — м/с, з якої він вмикається; rearLat — частка бічного зчеплення, яку втрачає задня вісь;
+    // maxSlip — кут ковзання (рад) при повністю вивернутому кермі; kp/kd — коефіцієнти контролера заносу; maxAcc — межа кутового прискорення
+    var DRIFT = { minSpeed: 7, rearLat: 0.58, maxSlip: 0.62, kp: 46, kd: 10.5, maxAcc: 20, rise: 7, fall: 2.4 };
+    // Зминання кузова: зони (індекси в c.cr) і геометрія формули crushPoint
+    var ZONE_FRONT = 0, ZONE_REAR = 1, ZONE_LEFT = 2, ZONE_RIGHT = 3, ZONE_ROOF = 4, ZONES = 5;
+    var CRUSH = { zf: 0.22, xs: 0.35, front: 0.74, side: 0.5, roof: 0.8, noise: 0.2 };
+    var CR_BIT0 = 16;                     // перший біт зминання в мережевій масці (біти 0..14 — деталі й колеса)
+    var CR_LEVELS = [0, 0.25, 0.58, 0.95];
+    var carSeq = 0;                       // номер створеної машини: від нього залежить «міцність» її деталей (різна, але відтворювана)
 
     function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
     function isNum(v) { return typeof v === 'number' && isFinite(v); }
@@ -294,15 +316,15 @@
     var CARS = {
         sedan: {
             len: 11, wid: 5.0, height: 3.95, wheelbase: 6.6, track: 4.3, wheelR: 0.95, wheelW: 0.85,
-            mass: 1450, com: [0, 1.5, 0.12], maxFwd: 178, maxRev: 30, steerMax: 0.62, gears: 6, seat: [1.0, 1.2, -0.5],
+            mass: 1450, com: [0, 1.5, 0.12], maxFwd: 198, topKmh: 250, maxRev: 30, steerMax: 0.62, gears: 6, seat: [1.0, 1.2, -0.5],
             wheels: [
                 { x: 2.15, z: 3.3, steer: true, drive: false, brake: 0.34 }, { x: -2.15, z: 3.3, steer: true, drive: false, brake: 0.34 },
                 { x: 2.15, z: -3.3, steer: false, drive: true, brake: 0.16 }, { x: -2.15, z: -3.3, steer: false, drive: true, brake: 0.16 }
             ],
             springK: 31000, bumpC: 2300, reboundC: 3400, arbK: 15000, travelUp: 0.55, travelDown: 0.75,
-            engine: { idle: 900, redline: 6900, peak: 350, torque: [[0, 0.5], [900, 0.62], [2000, 0.84], [3500, 0.97], [4800, 1.0], [5800, 0.94], [6600, 0.8], [6900, 0.55], [7100, 0]] },
+            engine: { idle: 900, redline: 6900, peak: 450, torque: [[0, 0.5], [900, 0.62], [2000, 0.84], [3500, 0.97], [4800, 1.0], [5800, 0.94], [6600, 0.8], [6900, 0.55], [7100, 0]] },
             gears_r: [3.58, 2.2, 1.52, 1.12, 0.89, 0.72], reverseRatio: 3.3, final: 3.42, brakeTotal: 5200, handbrake: 0.9, brakeBias: 0.66,
-            cdA: 0.9, clA: 0.18, tireMu: 1.25, tireB: 9.5, tireC: 1.45, wheelI: 1.4, driveEff: 0.9,
+            cdA: 0.72, clA: 0.18, tireMu: 1.25, tireB: 9.5, tireC: 1.45, wheelI: 1.4, driveEff: 0.9,
             hullH: 3.95, deck: 2.6, cabin: [-2.8, 2.2],
             parts: {
                 fbump: { p: [0, 1.25, 5.45], hp: 7, r: 3.2 }, rbump: { p: [0, 1.25, -5.45], hp: 7, r: 3.2 },
@@ -311,11 +333,11 @@
                 mirL: { p: [2.55, 3.0, 1.9], hp: 3.5, r: 1.6 }, mirR: { p: [-2.55, 3.0, 1.9], hp: 3.5, r: 1.6 },
                 extra: { p: [0, 3.05, -4.9], hp: 6, r: 2.0 }
             },
-            wheelHp: 24
+            wheelHp: 24, crush: { v0: 6.0, span: 26 }
         },
         van: {
             len: 12, wid: 5.2, height: 5.1, wheelbase: 7.2, track: 4.7, wheelR: 1.0, wheelW: 0.9,
-            mass: 2150, com: [0, 2.0, -0.2], maxFwd: 138, maxRev: 24, steerMax: 0.56, gears: 5, seat: [1.15, 2.0, 2.0],
+            mass: 2150, com: [0, 2.0, -0.2], maxFwd: 83, topKmh: 105, maxRev: 24, steerMax: 0.56, gears: 5, seat: [1.15, 2.0, 2.0],
             wheels: [
                 { x: 2.35, z: 3.6, steer: true, drive: false, brake: 0.34 }, { x: -2.35, z: 3.6, steer: true, drive: false, brake: 0.34 },
                 { x: 2.35, z: -3.6, steer: false, drive: true, brake: 0.16 }, { x: -2.35, z: -3.6, steer: false, drive: true, brake: 0.16 }
@@ -332,11 +354,11 @@
                 mirL: { p: [2.9, 3.6, 3.6], hp: 4, r: 1.7 }, mirR: { p: [-2.9, 3.6, 3.6], hp: 4, r: 1.7 },
                 extra: { p: [0, 5.3, -1.2], hp: 7, r: 3.0 }
             },
-            wheelHp: 26
+            wheelHp: 26, crush: { v0: 6.5, span: 28 }
         },
         truck: {
             len: 16, wid: 5.6, height: 7.5, wheelbase: 9.0, track: 4.8, wheelR: 1.15, wheelW: 0.95,
-            mass: 7600, com: [0, 3.0, -0.8], maxFwd: 108, maxRev: 20, steerMax: 0.46, gears: 6, seat: [1.25, 2.6, 4.1],
+            mass: 7600, com: [0, 3.0, -0.8], maxFwd: 83, topKmh: 105, maxRev: 20, steerMax: 0.46, gears: 6, seat: [1.25, 2.6, 4.1],
             wheels: [
                 { x: 2.4, z: 4.5, steer: true, drive: false, brake: 0.2 }, { x: -2.4, z: 4.5, steer: true, drive: false, brake: 0.2 },
                 { x: 2.4, z: -3.2, steer: false, drive: true, brake: 0.15 }, { x: -2.4, z: -3.2, steer: false, drive: true, brake: 0.15 },
@@ -354,7 +376,7 @@
                 mirL: { p: [3.0, 4.4, 5.0], hp: 4.5, r: 1.8 }, mirR: { p: [-3.0, 4.4, 5.0], hp: 4.5, r: 1.8 },
                 extra: { p: [2.3, 6.5, 2.85], hp: 6, r: 2.0 }
             },
-            wheelHp: 34
+            wheelHp: 34, crush: { v0: 8.0, span: 38 }
         }
     };
     var CAR_TYPES = Object.keys(CARS);
@@ -389,10 +411,14 @@
             def.partList.push({ name: 'wheel' + i, bit: 1 << (WHEEL_BIT0 + i), p: [def.wheels[i].x, def.wheelR, def.wheels[i].z], hp: def.wheelHp, r: 2.2, wheel: i });
         }
         // Ідеальні межі: максимальна швидкість для гальмівних/аеро розрахунків у студах/с (довідково)
-        def.maxFwdKmh = def.maxFwd * KMH;
+        def.driftK = def.name === 'truck' ? 0.55 : (def.name === 'van' ? 0.8 : 1);   // важка машина ковзає на менший кут
+        def.extraZone = def.name === 'van' ? ZONE_ROOF : (def.name === 'truck' ? ZONE_LEFT : ZONE_REAR);   // де стоїть «extra»: спойлер / багажник на даху / труба
+        def.maxFwd = def.topKmh / KMH;                 // студів/с на ліміті швидкості
+        def.maxFwdKmh = def.topKmh;
+        def.topMs = def.topKmh / 3.6;                  // м/с
         return def;
     }
-    CAR_TYPES.forEach(function (t) { finishDef(CARS[t]); });
+    CAR_TYPES.forEach(function (t) { CARS[t].name = t; finishDef(CARS[t]); });
 
     // Швидкість для спідометра (км/год) з уздовжньої швидкості машини (студи/с)
     function kmh(speed) { return isNum(speed) ? Math.round(Math.abs(speed) * STUD_TO_KMH) : 0; }
@@ -451,7 +477,9 @@
             vyG: 0, sy: 0, svy: 0, wheel: 0,       // старі поля (для сумісності з тестами й видом)
             wh: [], rpm: def.engine.idle, gear: 1, gearTimer: 0, thr: 0, brk: 0, hand: 0,
             dm: 0, pd: {}, dent: 0, impact: 0, upY: 1, flipped: false, flipTimer: 0, still: 0, sinceDrive: 0,
-            events: [], airTime: 0, lastGroundAt: 0, age: 0
+            events: [], airTime: 0, lastGroundAt: 0, age: 0,
+            cr: [0, 0, 0, 0, 0], crT: null, hullEff: null, boxEff: null,          // зминання кузова (див. crushPoint)
+            drift: 0, driftBeta: 0, driftDb: 0, driftFresh: true, stIn: 0, seed: (++carSeq * 2654435761) >>> 0
         };
         for (var i = 0; i < def.nWheels; i++) c.wh.push(newWheelState(def, i));
         var g = groundSample(def, c);
@@ -488,7 +516,7 @@
         c.y = g.y; c.pitch = 0; c.roll = 0;
         qFromEuler(c.q, c.ry, 0, 0);
         c.vx = c.vy = c.vz = 0; c.wx = c.wy = c.wz = 0;
-        c.speed = 0; c.steer = 0; c.air = false; c.bump = 0; c.vyG = 0; c.sy = 0; c.svy = 0;
+        c.speed = 0; c.steer = 0; c.air = false; c.bump = 0; c.vyG = 0; c.sy = 0; c.svy = 0; c.drift = 0; c.driftFresh = true;
         c.rpm = def.engine.idle; c.gear = 1; c.gearTimer = 0;
         for (var i = 0; i < c.wh.length; i++) { c.wh[i].w = 0; c.wh[i].s = def.suspRest; c.wh[i].prevS = def.suspRest; c.wh[i].contact = false; }
         syncCOM(c, def);
@@ -608,6 +636,7 @@
     function damageEffects(c, def) {
         var pd = c.pd || {};
         var front = clamp(((pd.fbump || 0) + (pd.hood || 0)) / 2, 0, 1);
+        if (c.cr && c.cr[ZONE_FRONT] > front) front = c.cr[ZONE_FRONT];
         var power = 1 - 0.38 * smooth01((front - 0.45) / 0.5);
         if (c.dm & PART_BITS.hood) power *= 0.92;                                     // без капота двигун гірше охолоджується
         c.fxPower = power;
@@ -660,6 +689,8 @@
             if (Math.abs(wd) > 0.6 && c.gear >= 1) Tw = -Math.sign(wd) * E.peak * 0.17 * (rpm / E.redline) * aR * def.driveEff;
             else Tw = 0;
         }
+        // Ліміт швидкості (topKmh): біля нього момент двигуна плавно зникає
+        if (vf > 0 && Tw > 0) Tw *= 1 - smooth01((vf - def.topMs * 0.994) / (def.topMs * 0.014));
         if (c.gearTimer > 0) { c.gearTimer -= h; Tw = Math.min(Tw, 0) * 0.5; }
         else if (c.gear >= 1) {
             var up = lerp(0.5, 0.93, eng) * E.redline, down = lerp(0.29, 0.5, eng) * E.redline;
@@ -689,6 +720,7 @@
     var _cnt = { dm: 0 };
 
     function substep(c, def, inp, h) {
+        driftControl(c, def, h);
         matFromQ(_R, c.q);
         var R = _R, m = def.mass, com = def.com;
         rotV(R, c.wx, c.wy, c.wz, _Wd);
@@ -750,8 +782,9 @@
                 }
                 // антипробуксовка: момент не більший за той, що шина може реалізувати (вимикається ручником)
                 if (wh.wasContact && !(inp.handbrake > 0.1)) {
-                    var over = smooth01((Math.abs(wh.slip) - 0.1) / 0.17);     // чим більша пробуксовка, тим сильніше зрізаємо момент
-                    var cap = wh.D * Rm * 1.08 * (1 - over) + 20;
+                    var dr = c.drift || 0;                                     // у дріфті колесам дозволено пробуксовувати більше (але не безмежно)
+                    var over = smooth01((Math.abs(wh.slip) - 0.1 - 0.3 * dr) / 0.17);     // чим більша пробуксовка, тим сильніше зрізаємо момент
+                    var cap = wh.D * Rm * (1.08 + 0.6 * dr) * (1 - over) + 20;
                     if (Ti > cap) Ti = cap; else if (Ti < -cap) Ti = -cap;
                 }
             }
@@ -813,6 +846,7 @@
                 var dFdk = (pacejka(Bx, def.tireC, 0.0, D, kappa + 0.02) - pacejka(Bx, def.tireC, 0.0, D, kappa - 0.02)) / 0.04;
                 kw = dFdk > 0 ? dFdk * Rm / vden : 0;             // жорсткість шини за обертанням колеса (для неявного кроку)
                 var Fy0 = -pacejka(def.tireB, def.tireC, -0.3, D, alpha);
+                if (!w.steer && c.drift > 0) Fy0 *= 1 - DRIFT.rearLat * c.drift;          // дріфт: задня вісь легко ковзає вбік
                 var mag = Math.sqrt(Fx0 * Fx0 + Fy0 * Fy0);
                 if (mag > D && mag > 0) { Fx0 *= D / mag; Fy0 *= D / mag; }
                 // повільний рух: «прилипання» — гасимо швидкість за один-два кроки в межах кола тертя
@@ -858,6 +892,15 @@
             Fx -= drag * c.vx * inv; Fy -= drag * c.vy * inv; Fz -= drag * c.vz * inv;
             Fy -= 0.5 * CAR.airDensity * def.clA * vm * vm / S;            // притиск
         }
+        // Регулятор швидкості: на землі вище ліміту (довгий спуск) м'яко гальмує; у польоті не діє
+        if (nGround >= 2) {
+            var vfw = (c.vx * R[6] + c.vy * R[7] + c.vz * R[8]) * S;
+            var exs = vfw - def.topMs * 1.02;
+            if (exs > 0) {
+                var ga = Math.min(1, exs / (def.topMs * 0.1)) * 6 / S * m;
+                Fx -= R[6] * ga; Fy -= R[7] * ga; Fz -= R[8] * ga;
+            }
+        }
         // легкий опір обертанню в повітрі й ковзанню бортами
         Tx -= _Wd[0] * m * 0.9; Ty -= _Wd[1] * m * 0.9; Tz -= _Wd[2] * m * 0.9;
 
@@ -894,12 +937,14 @@
 
     // ------------------------------------------------------------------ зіткнення корпуса з землею й гіркою
     var _ct = { depth: 0, nx: 0, ny: 1, nz: 0, solid: false };
+    var _nl = [0, 0, 0], _bn = [0, 0, 0];
     var _rv = [0, 0, 0];
 
     function hullPoints(c, def) {
         // справжні точки корпуса + точки на місці відірваних коліс (кут «сідає» на землю)
-        if (!c.dm || (c.dm >> WHEEL_BIT0) === 0) return def.hull;
-        var pts = def.hull.slice();
+        var base = c.hullEff || def.hull;
+        if (!c.dm || ((c.dm & 0x7fff) >> WHEEL_BIT0) === 0) return base;
+        var pts = base.slice();
         for (var i = 0; i < def.nWheels; i++) {
             if (partGone(c, 1 << (WHEEL_BIT0 + i))) pts.push([def.wheels[i].x, 0.5, def.wheels[i].z]);
         }
@@ -908,7 +953,7 @@
 
     function hullContacts(c, def, h) {
         var pts = hullPoints(c, def), com = def.com;
-        var best = 0, bestLp = null;
+        var best = 0, bestLp = null, bestN = _bn;
         for (var iter = 0; iter < 2; iter++) {
             matFromQ(_R, c.q);
             var R = _R;
@@ -924,6 +969,8 @@
                 var vn = vpx * nx + vpy * ny + vpz * nz;
                 if (vn < 0) {
                     var e = vn < -14 ? 0.2 : (vn < -5 ? 0.08 : 0);
+                    _nl[0] = nx * R[0] + ny * R[1] + nz * R[2]; _nl[1] = nx * R[3] + ny * R[4] + nz * R[5]; _nl[2] = nx * R[6] + ny * R[7] + nz * R[8];   // нормаль у координатах машини
+                    if (-vn * S > def.crush.v0 && crushScore(def, lp, null, _nl) >= 0.45) e = 0.02;   // кузов зминається, а не відскакує (удар у днище — як і раніше)
                     var den = impulseDenom(def, R, rx, ry, rz, nx, ny, nz);
                     var j = -(1 + e) * vn / den;
                     applyImpulse(c, def, R, rx, ry, rz, nx * j, ny * j, nz * j);
@@ -936,7 +983,7 @@
                         var jt = Math.min(tl / denT, (cont.solid ? 0.45 : 0.62) * j);
                         applyImpulse(c, def, R, rx, ry, rz, -tx * jt, -ty * jt, -tz * jt);
                     }
-                    if (iter === 0 && -vn > best) { best = -vn; bestLp = lp; }
+                    if (iter === 0 && -vn > best) { best = -vn; bestLp = lp; bestN[0] = _nl[0]; bestN[1] = _nl[1]; bestN[2] = _nl[2]; }
                     c.hit = true;
                 }
                 if (iter === 0 && depth > 0.001) {
@@ -949,7 +996,7 @@
             var dv = best * S;
             if (dv > c.impact) c.impact = dv;
             if (dv > 2.2) c.events.push({ t: 'ground', v: dv, lx: bestLp[0], ly: bestLp[1], lz: bestLp[2] });
-            damageFrom(c, def, bestLp, dv, 'ground');
+            damageFrom(c, def, bestLp, dv, 'ground', bestN);
             c.bump = Math.max(c.bump, best);
         }
     }
@@ -957,10 +1004,23 @@
     // ------------------------------------------------------------------ пошкодження й відламування деталей
     var DAMAGE_MIN = 4.5;               // зміна швидкості (м/с), нижче якої нічого не ламається (~16 км/год)
 
-    function damageFrom(c, def, lp, dvSI, kind) {
+    // Які деталі до якої зони зминання належать і при якому зминанні зони вони вже НЕ відлітають (їх зім'яло разом із кузовом).
+    // Дзеркала можуть відлетіти завжди. Колеса мають власні правила (міцність колеса, удар підвіски).
+    var PART_ZONE = { fbump: ZONE_FRONT, hood: ZONE_FRONT, rbump: ZONE_REAR, trunk: ZONE_REAR, doorL: ZONE_LEFT, doorR: ZONE_RIGHT, mirL: ZONE_LEFT, mirR: ZONE_RIGHT };
+    var PART_LIMIT = { fbump: 0.42, hood: 0.42, rbump: 0.42, trunk: 0.42, doorL: 0.55, doorR: 0.55, extra: 0.5, mirL: 9, mirR: 9 };
+
+    // Псевдовипадкове число 0..1 для (машини, індексу деталі): однакове при повторі, різне для різних машин
+    function partRand(c, i) {
+        var h = Math.imul(((c.seed | 0) + Math.imul(i + 1, 374761393)) | 0, 668265263);
+        h ^= h >>> 15; h = Math.imul(h, 2246822519); h ^= h >>> 13;
+        return (h >>> 0) / 4294967296;
+    }
+
+    function damageFrom(c, def, lp, dvSI, kind, nl) {
         if (dvSI <= DAMAGE_MIN) return;
         var e = dvSI - DAMAGE_MIN;
         if (e / 22 > c.dent) c.dent = Math.min(1, e / 22);
+        addCrush(c, def, lp, dvSI, nl);                               // від ~22 км/год кузов починає зминатися
         var list = def.partList;
         for (var i = 0; i < list.length; i++) {
             var part = list[i];
@@ -969,14 +1029,149 @@
             var d2 = (dx * dx + dy * dy + dz * dz) / (part.r * part.r);
             var infl = Math.exp(-d2 * 1.1);
             if (infl < 0.04) continue;
-            var dd = e * infl / part.hp;
+            var hpMul = 0.85 + 0.9 * partRand(c, i);                  // деталі різної міцності: одні відлітають від слабшого удару, інші тримаються
+            var dd = e * infl / (part.hp * hpMul);
             if (kind === 'ground' && part.wheel !== undefined) dd *= 0.5;      // колесо краще переносить удар об землю
             c.pd[part.name] = (c.pd[part.name] || 0) + dd;
-            if (c.pd[part.name] >= 1) detachPart(c, def, part, lp, dvSI);
+            if (c.pd[part.name] >= 1) {
+                var zone = part.wheel === undefined ? (part.name === 'extra' ? def.extraZone : PART_ZONE[part.name]) : -1;
+                var lim = PART_LIMIT[part.name] === undefined ? 0.5 : PART_LIMIT[part.name];
+                if (zone >= 0 && c.cr && c.cr[zone] >= lim) c.pd[part.name] = 0.98;      // зім'ята разом із кузовом — лишається на машині
+                else detachPart(c, def, part, lp, dvSI);
+            }
         }
     }
 
-    // Відламує деталь: біт у масці, подія й уламок, що летить із швидкістю точки удару
+    // ------------------------------------------------------------------ зминання кузова
+    function sstep(a, b, x) { var t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); }
+    function crNoise(x, y, z) {
+        return Math.sin(x * 2.9 + z * 1.3) * Math.sin(y * 3.7 - z * 2.1) + 0.5 * Math.sin(x * 6.3 + y * 5.1 + z * 3.7);
+    }
+    function crushActive(cr) { return !!cr && (cr[0] > 0.004 || cr[1] > 0.004 || cr[2] > 0.004 || cr[3] > 0.004 || cr[4] > 0.004); }
+
+    // Куди переходить точка кузова (x, y, z — локальні координати моделі) при зминанні cr. Те саме рахує вершинний шейдер у game.js
+    // (функція crushP): якщо міняєте тут — міняйте й там. Шум рахується з початкової точки, ваги зон — теж.
+    function crushPoint(def, cr, x, y, z, out) {
+        out = out || [0, 0, 0];
+        var hl = def.len * 0.5, hw = def.wid * 0.5, H = def.height;
+        var f = cr[0], r = cr[1], l = cr[2], rt = cr[3], rf = cr[4];
+        var n0 = crNoise(x, y, z);
+        var zf0 = hl * CRUSH.zf, xs0 = hw * CRUSH.xs;
+        var wf = f * sstep(zf0, hl * 1.05, z), wr = r * sstep(zf0, hl * 1.05, -z);
+        var wl = l * sstep(xs0, hw * 1.05, x), wt = rt * sstep(xs0, hw * 1.05, -x);
+        var wroof = rf * sstep(H * 0.45, H, y);
+        var yb = H * 0.52;
+        if (y > yb) y = yb + (y - yb) * (1 - CRUSH.roof * rf);                     // дах сплющується вниз
+        if (z > zf0) z = zf0 + (z - zf0) * (1 - CRUSH.front * f);                  // передок стискається по довжині
+        else if (z < -zf0) z = -zf0 + (z + zf0) * (1 - CRUSH.front * r);           // задок теж
+        if (x > xs0) x = xs0 + (x - xs0) * (1 - CRUSH.side * l);                   // борти вдавлюються всередину
+        else if (x < -xs0) x = -xs0 + (x + xs0) * (1 - CRUSH.side * rt);
+        y += wf * 0.3 + wr * 0.14 + (wf + wr + wl + wt + wroof) * CRUSH.noise * n0;    // капот «вигинається» догори, поверхня гофрується
+        x = x * (1 - 0.12 * (wf + wr)) * (1 + 0.06 * wroof) - (wl - wt) * 0.18 * (0.6 + 0.4 * n0);
+        out[0] = x; out[1] = y; out[2] = z;
+        return out;
+    }
+
+    // Габаритна коробка зіткнень зім'ятої машини (симетризована: переднє й заднє зминання усереднюються)
+    function crushBoxOf(def, cr) {
+        var B = def.box, hl = def.len * 0.5, hw = def.wid * 0.5;
+        var zf0 = hl * CRUSH.zf, xs0 = hw * CRUSH.xs;
+        var zF = zf0 + (B.hz - zf0) * (1 - CRUSH.front * cr[0]), zR = zf0 + (B.hz - zf0) * (1 - CRUSH.front * cr[1]);
+        var xL = xs0 + (B.hx - xs0) * (1 - CRUSH.side * cr[2]), xR = xs0 + (B.hx - xs0) * (1 - CRUSH.side * cr[3]);
+        var top = B.cy + B.hy, bot = B.cy - B.hy, yb = def.height * 0.52;
+        if (top > yb) top = yb + (top - yb) * (1 - CRUSH.roof * cr[4]);
+        return { hx: (xL + xR) / 2, hz: (zF + zR) / 2, hy: (top - bot) / 2, cy: (top + bot) / 2 };
+    }
+
+    // Перераховує точки корпуса й коробку після зміни зминання
+    function crushHull(c, def) {
+        if (!crushActive(c.cr)) { c.hullEff = null; c.boxEff = null; return; }
+        var cr = c.cr;
+        c.hullEff = def.hull.map(function (p) { return crushPoint(def, cr, p[0], p[1], p[2], [0, 0, 0]); });
+        c.boxEff = crushBoxOf(def, cr);
+    }
+
+    // Наскільки точка lp (локальні координати) «дивиться» у кожну зону; повертає найбільше значення. Менше ~0.45 — це днище/центр.
+    var _crs = [0, 0, 0, 0, 0];
+    // nl — нормаль удару в координатах машини (від перешкоди до машини, одинична), якщо відома: вона вирішує, яка зона «дивиться» на перешкоду
+    // (лобовий удар кутовою точкою мне передок, а не борт). Без нормалі рахуємо лише за положенням точки.
+    function crushScore(def, lp, sc, nl) {
+        sc = sc || _crs;
+        var B = def.box;
+        var nx = lp[0] / B.hx, nz = lp[2] / B.hz, ny = (lp[1] - B.cy) / B.hy;
+        sc[0] = nz > 0 ? nz : 0; sc[1] = nz < 0 ? -nz : 0; sc[2] = nx > 0 ? nx : 0; sc[3] = nx < 0 ? -nx : 0; sc[4] = ny > 0.35 ? ny * 0.95 : 0;
+        if (nl) {
+            var ux = -nl[0], uy = -nl[1], uz = -nl[2];                // куди «дивиться» поверхня машини, що вдарилась
+            sc[0] *= 0.15 + 0.85 * clamp(uz, 0, 1); sc[1] *= 0.15 + 0.85 * clamp(-uz, 0, 1);
+            sc[2] *= 0.15 + 0.85 * clamp(ux, 0, 1); sc[3] *= 0.15 + 0.85 * clamp(-ux, 0, 1);
+            sc[4] *= 0.15 + 0.85 * clamp(uy, 0, 1);
+        }
+        var mx = 0;
+        for (var i = 0; i < ZONES; i++) if (sc[i] > mx) mx = sc[i];
+        return mx;
+    }
+
+    // Додає зминання від удару в локальній точці lp зі зміною швидкості dvSI (м/с). Повертає величину приросту.
+    function addCrush(c, def, lp, dvSI, nl) {
+        var K = def.crush;
+        if (dvSI <= K.v0) return 0;
+        if (!c.cr) c.cr = [0, 0, 0, 0, 0];
+        var add = clamp((dvSI - K.v0) / K.span, 0, 1.6);
+        var sc = _crs, mx = crushScore(def, lp, sc, nl), i;
+        if (mx < 0.45) return 0;                                      // удар у днище чи центр: кузов не зминається (лише підвіска)
+        for (i = 0; i < ZONES; i++) {
+            var w = sc[i] >= mx * 0.999 ? 1 : (sc[i] >= mx * 0.6 ? 0.35 : 0);
+            if (w > 0) c.cr[i] = Math.min(1, c.cr[i] + add * w * (1 - 0.5 * c.cr[i]));
+        }
+        var avg = (c.cr[0] + c.cr[1] + c.cr[2] + c.cr[3] + c.cr[4]) / 2.5;
+        if (avg > c.dent) c.dent = Math.min(1, avg);
+        crushHull(c, def);
+        c.events.push({ t: 'crush', v: dvSI });
+        return add;
+    }
+
+    // Мережева маска: біти деталей (0..14) + зминання зон «термометром» по 3 біти (від біта 16): 0 -> 000, рівень 1 -> 001, 2 -> 011, 3 -> 111
+    function crLevel(v) { return v < 0.08 ? 0 : (v < 0.4 ? 1 : (v < 0.75 ? 2 : 3)); }
+    function netMask(c) {
+        var m = (c.dm | 0) & 0x7fff;
+        if (c.cr) for (var z = 0; z < ZONES; z++) m |= ((1 << crLevel(c.cr[z])) - 1) << (CR_BIT0 + 3 * z);
+        return m;
+    }
+    function decodeCrush(mask, out) {
+        out = out || [0, 0, 0, 0, 0];
+        for (var z = 0; z < ZONES; z++) {
+            var b = ((mask | 0) >> (CR_BIT0 + 3 * z)) & 7;
+            out[z] = CR_LEVELS[(b & 1) + ((b >> 1) & 1) + ((b >> 2) & 1)];
+        }
+        return out;
+    }
+    // Віддалена машина: плавно наближає показане зминання до отриманого від сервера
+    function easeCrush(c, dt) {
+        if (!c.crT) return;
+        if (!c.cr) c.cr = [0, 0, 0, 0, 0];
+        var k = Math.min(1, dt * 5), mx = 0;
+        for (var z = 0; z < ZONES; z++) { c.cr[z] += (c.crT[z] - c.cr[z]) * k; if (c.cr[z] > mx) mx = c.cr[z]; }
+        if (mx > c.dent) c.dent = Math.min(1, mx);
+    }
+
+    // Контролер дріфту: тримає кут ковзання машини (між курсом і напрямком руху) таким, якого просить кермо
+    function driftControl(c, def, h) {
+        var d = c.drift;
+        if (!(d > 0.001)) { c.driftBeta = 0; c.driftFresh = true; return; }
+        matFromQ(_R, c.q);
+        var lat = c.vx * _R[0] + c.vy * _R[1] + c.vz * _R[2];
+        var lon = c.vx * _R[6] + c.vy * _R[7] + c.vz * _R[8];
+        var vmag = Math.sqrt(lat * lat + lon * lon);
+        var beta = Math.atan2(lat, Math.max(lon, 1));
+        var target = clamp(c.stIn, -1, 1) * DRIFT.maxSlip * def.driftK * smooth01((vmag * S - 6) / 8);
+        if (c.driftFresh) { c.driftDb = 0; c.driftFresh = false; }
+        else c.driftDb += ((beta - c.driftBeta) / h - c.driftDb) * Math.min(1, h * 40);
+        var a = clamp(-DRIFT.kp * (target - beta) + DRIFT.kd * c.driftDb, -DRIFT.maxAcc, DRIFT.maxAcc) * d;
+        c.wy += a * h;
+        c.driftBeta = beta;
+    }
+
+    // Відламує деталь    // Відламує деталь: біт у масці, подія й уламок, що летить із швидкістю точки удару
     function detachPart(c, def, part, lp, dvSI) {
         if (c.dm & part.bit) return;
         c.dm |= part.bit;
@@ -1022,7 +1217,9 @@
     // Для віддалених машин: нова маска пошкоджень -> уламки зі стану машини (без швидкостей)
     function applyDamageMask(c, mask) {
         var def = CARS[c.type] || CARS.sedan;
-        var changed = (mask | 0) & ~c.dm;
+        c.crT = decodeCrush(mask, c.crT);                           // нове зминання: машина плавно наближається до нього (easeCrush)
+        if (!c.cr) c.cr = [0, 0, 0, 0, 0];
+        var changed = ((mask | 0) & 0x7fff) & ~c.dm;
         if (!changed) { return 0; }
         for (var i = 0; i < def.partList.length; i++) {
             var part = def.partList[i];
@@ -1132,7 +1329,7 @@
         matFromQ(_Ra, a.q);
         var bq = b.q && b.q.length === 4 ? b.q : qFromEuler(_qb, b.ry || 0, b.pitch || 0, b.roll || 0);
         matFromQ(_Rb, bq);
-        var A = defA.box, B = defB.box;
+        var A = a.boxEff || defA.box, B = b.boxEff || defB.box;       // зім'ятий кузов має менші габарити
         rotV(_Ra, 0, A.cy, 0, _ca);
         var ax0 = a.x + _ca[0], ay0 = a.y + _ca[1], az0 = a.z + _ca[2];
         rotV(_Rb, 0, B.cy, 0, _cb);
@@ -1193,6 +1390,7 @@
             if (dx0 * dx0 + dz0 * dz0 > far * far) continue;
             if (isNum(o.y) && Math.abs(o.y - c.y) > 9) continue;
             var od = CARS[o.type] || CARS.sedan;
+            if (o.cr && !o.boxEff && crushActive(o.cr)) o.boxEff = crushBoxOf(od, o.cr);
             var ov = overlapBoxes(c, def, o, od);
             if (!ov) continue;
             hit = true;
@@ -1215,7 +1413,7 @@
             var push = Math.min(ov.depth, 4) * (0.3 + 0.5 * share);
             c.px += ov.nx * push; c.py += ov.ny * push * 0.5; c.pz += ov.nz * push;
             if (vn < 0) {
-                var e = 0.24;
+                var e = (-vn * S > def.crush.v0) ? 0.05 : 0.24;
                 var denA = impulseDenom(def, R, rx, ry, rz, ov.nx, ov.ny, ov.nz);
                 var den = denA + 1 / od.mass;
                 var j = -(1 + e) * vn / den;
@@ -1235,7 +1433,8 @@
                 unrotV(R, ov.px - c.x, ov.py - c.y, ov.pz - c.z, _v1);
                 var lp = [_v1[0], _v1[1], _v1[2]];
                 c.events.push({ t: 'car', v: -vn * S, dv: dv, lx: lp[0], ly: lp[1], lz: lp[2] });
-                damageFrom(c, def, lp, dv * 1.25, 'car');
+                _nl[0] = ov.nx * R[0] + ov.ny * R[1] + ov.nz * R[2]; _nl[1] = ov.nx * R[3] + ov.ny * R[4] + ov.nz * R[5]; _nl[2] = ov.nx * R[6] + ov.ny * R[7] + ov.nz * R[8];
+                damageFrom(c, def, lp, dv * 1.25, 'car', _nl);
             }
         }
         if (hit) c.hit = true;
@@ -1250,7 +1449,7 @@
     }
 
     // ------------------------------------------------------------------ головний крок машини
-    var _inp = { throttle: 0, brake: 0, handbrake: 0 };
+    var _inp = { throttle: 0, brake: 0, handbrake: 0, drift: 0 };
 
     // input: { throttle: -1..1 (вперед +), steer: -1..1 (праворуч +), brake: 0..1 (необов'язково), handbrake: 0..1 (необов'язково) }
     // others — інші машини для зіткнень. dt — не більше ~1/60 с (більші кадри поділяються всередині).
@@ -1261,13 +1460,19 @@
         var st = clamp(isNum(input.steer) ? input.steer : 0, -1, 1);
         _inp.brake = clamp(isNum(input.brake) ? input.brake : 0, 0, 1);
         _inp.handbrake = clamp(isNum(input.handbrake) ? input.handbrake : (input.handbrake ? 1 : 0), 0, 1);
+        _inp.drift = clamp(isNum(input.drift) ? input.drift : (input.drift ? 1 : 0), 0, 1);
+        c.stIn = st;
         if (!(dt > 0)) return c;
         dt = Math.min(dt, 0.1);
 
         // допомога при заносі (контркермо): якщо машину несе боком, передні колеса м'яко повертаються в бік ковзання — як
         // стабілізація в сучасних авто; корисно при керуванні кнопками (є лише «вліво/вправо», без плавного руля)
         var vm = Math.abs(c.speed) * S;
-        if (vm > 7 && !(_inp.handbrake > 0.1) && c.nGround >= 2) {
+        // дріфт (клавіша P): вмикається на ходу, на землі, не перекинутою; плавно вмикається й вимикається
+        var wantDrift = _inp.drift > 0.5 && c.nGround >= 2 && c.speed * S > DRIFT.minSpeed && c.upY > 0.7;
+        c.drift += clamp((wantDrift ? 1 : 0) - c.drift, -DRIFT.fall * dt, DRIFT.rise * dt);
+        if (c.drift < 0.001) c.drift = 0;
+        if (vm > 7 && !(_inp.handbrake > 0.1) && !(c.drift > 0.05) && c.nGround >= 2) {
             matFromQ(_R, c.q);
             var vlatB = c.vx * _R[0] + c.vy * _R[1] + c.vz * _R[2];          // швидкість убік (до лівого боку)
             var beta = Math.atan2(vlatB, Math.max(Math.abs(c.speed), 2) * (c.speed < 0 ? -1 : 1));
@@ -1275,7 +1480,10 @@
         }
         // кермо: цільовий кут зменшується з швидкістю; повернення до центру швидше, ніж поворот
         var target = st * steerLock(def, vm);
+        // у дріфті передні колеса «контркермують»: дивляться туди, куди їде машина (кут задає контролер заносу)
+        if (c.drift > 0.02) target = target * (1 - c.drift) + clamp(-(c.driftBeta || 0) * 0.9, -0.5, 0.5) * c.drift;
         var rate = (Math.abs(target) > Math.abs(c.steer) && target * c.steer >= 0) ? 2.3 : 3.8;
+        if (c.drift > 0.02) rate = 9;
         var dsteer = target - c.steer;
         c.steer += clamp(dsteer, -rate * dt, rate * dt);
 
@@ -1334,7 +1542,7 @@
     function describe(c) {
         var def = CARS[c.type] || CARS.sedan;
         return {
-            kmh: kmh(c.speed), gear: c.gear, rpm: Math.round(c.rpm), air: !!c.air, grounded: c.nGround | 0, dent: +(c.dent || 0).toFixed(2), dm: c.dm | 0,
+            kmh: kmh(c.speed), gear: c.gear, rpm: Math.round(c.rpm), air: !!c.air, grounded: c.nGround | 0, dent: +(c.dent || 0).toFixed(2), dm: c.dm | 0, drift: +(c.drift || 0).toFixed(2), crush: (c.cr || []).map(function (v) { return +v.toFixed(2); }),
             upright: c.upY > 0.5, steerDeg: +(c.steer * 57.2958).toFixed(1),
             wheels: c.wh.map(function (w, i) {
                 return {
@@ -1372,6 +1580,8 @@
         collideCars: collideCars, overlapCars: overlapCars, overlapBoxes: overlapBoxes,
         kmh: kmh, gearOf: gearOf, spawnSpot: spawnSpot, stepMany: stepMany, angDiff: angDiff,
         damageFrom: damageFrom, detachPart: detachPart, applyDamageMask: applyDamageMask,
+        DRIFT: DRIFT, CRUSH: CRUSH, ZONES: ZONES, crushPoint: crushPoint, crushActive: crushActive, crushBoxOf: crushBoxOf, addCrush: addCrush, crushHull: crushHull,
+        netMask: netMask, decodeCrush: decodeCrush, easeCrush: easeCrush,
         debris: debris, stepDebris: stepDebris, clearDebris: clearDebris, addDebris: addDebris,
         pointVelocity: pointVelocity, describe: describe, pushWalkerOutOfCars: pushWalkerOutOfCars, qForRemote: qForRemote, steerLock: steerLock, wheelSteerAngle: wheelSteerAngle,
         qFromEuler: qFromEuler, eulerFromQ: eulerFromQ, qFromAxisAngle: qFromAxisAngle, qMul: qMul, qNormalize: qNormalize,
