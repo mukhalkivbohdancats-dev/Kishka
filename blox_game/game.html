@@ -145,6 +145,7 @@
     display: none; align-items: center; cursor: pointer; touch-action: manipulation; box-shadow: 0 3px 12px rgba(0,0,0,0.35); z-index: 6;
   }
   #flipBtn.show { display: flex; }
+  #flipBtn .flipIco { width: 22px; height: 22px; margin-right: 8px; flex: none; }
   #left { left: calc(var(--safe-l) + 22px); bottom: calc(var(--safe-b) + 22px); width: 84px; height: 84px; }
   #right { left: calc(var(--safe-l) + 122px); bottom: calc(var(--safe-b) + 22px); width: 84px; height: 84px; }
   #carAct {
@@ -208,8 +209,8 @@
 <div class="ctl" id="rev" aria-label="Reverse">
   <svg class="ico" viewBox="0 0 24 24"><path d="M4 9 L12 18 L20 9 H15 V4 H9 V9 Z" fill="rgba(255,255,255,0.95)"/></svg>
 </div>
-<div class="ctl" id="hand" aria-label="Handbrake">P</div>
-<button id="flipBtn" type="button"></button>
+<div class="ctl" id="hand" aria-label="Drift (P)">P</div>
+<button id="flipBtn" type="button"><svg class="flipIco" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.7-6" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><path d="M20.6 3.2v5.4h-5.4" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span id="flipTxt"></span></button>
 <div class="ctl" id="gas" aria-label="Gas">
   <svg class="ico" viewBox="0 0 24 24"><path d="M12 3 L3.5 13 H9 V21 H15 V13 H20.5 Z" fill="rgba(255,255,255,0.97)"/></svg>
 </div>
