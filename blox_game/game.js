@@ -152,11 +152,41 @@
     };
 
     // ---------------------------------------------------------------- WebGL-малювальник (є два: головний і для попереднього перегляду машин)
+    // Вершинний шейдер. uCrOn = 1 вмикає зминання кузова: uCr = (передок, задок, лівий борт, правий борт), uCr2 = (дах, піввдовжини,
+    // піввширини, висота). Формула — копія Phys.crushPoint (physics.js): якщо міняєте там, міняйте й тут. Константи беруться з Phys.CRUSH.
+    var CRK = Phys.CRUSH;
+    function gf(v) { return v.toFixed(4); }
     var VS =
         'attribute vec3 aPos;\nattribute vec3 aNrm;\nattribute vec3 aCol;\n' +
-        'uniform mat4 uVP;\nuniform mat4 uM;\nuniform mat3 uN;\n' +
+        'uniform mat4 uVP;\nuniform mat4 uM;\nuniform mat3 uN;\nuniform vec4 uCr;\nuniform vec4 uCr2;\nuniform float uCrOn;\n' +
         'varying vec3 vN;\nvarying vec3 vW;\nvarying vec3 vC;\n' +
-        'void main() {\n  vec4 w = uM * vec4(aPos, 1.0);\n  vW = w.xyz;\n  vN = uN * aNrm;\n  vC = aCol;\n  gl_Position = uVP * w;\n}\n';
+        'void main() {\n' +
+        '  vec3 p = aPos; vec3 nr = aNrm; vec3 cl = aCol;\n' +
+        '  if (uCrOn > 0.5) {\n' +
+        '    float hl = uCr2.y, hw = uCr2.z, H = uCr2.w;\n' +
+        '    float f = uCr.x, r = uCr.y, l = uCr.z, rt = uCr.w, rf = uCr2.x;\n' +
+        '    float A = p.x * 2.9 + p.z * 1.3, B = p.y * 3.7 - p.z * 2.1, Cc = p.x * 6.3 + p.y * 5.1 + p.z * 3.7;\n' +
+        '    float n0 = sin(A) * sin(B) + 0.5 * sin(Cc);\n' +
+        '    float zf0 = hl * ' + gf(CRK.zf) + ', xs0 = hw * ' + gf(CRK.xs) + ';\n' +
+        '    float wf = f * smoothstep(zf0, hl * 1.05, p.z), wr = r * smoothstep(zf0, hl * 1.05, -p.z);\n' +
+        '    float wl = l * smoothstep(xs0, hw * 1.05, p.x), wt = rt * smoothstep(xs0, hw * 1.05, -p.x);\n' +
+        '    float wroof = rf * smoothstep(H * 0.45, H, p.y);\n' +
+        '    float yb = H * 0.52;\n' +
+        '    float x = p.x, y = p.y, z = p.z;\n' +
+        '    if (y > yb) y = yb + (y - yb) * (1.0 - ' + gf(CRK.roof) + ' * rf);\n' +
+        '    if (z > zf0) z = zf0 + (z - zf0) * (1.0 - ' + gf(CRK.front) + ' * f); else if (z < -zf0) z = -zf0 + (z + zf0) * (1.0 - ' + gf(CRK.front) + ' * r);\n' +
+        '    if (x > xs0) x = xs0 + (x - xs0) * (1.0 - ' + gf(CRK.side) + ' * l); else if (x < -xs0) x = -xs0 + (x + xs0) * (1.0 - ' + gf(CRK.side) + ' * rt);\n' +
+        '    float wsum = wf + wr + wl + wt + wroof;\n' +
+        '    y += wf * 0.3 + wr * 0.14 + wsum * ' + gf(CRK.noise) + ' * n0;\n' +
+        '    x = x * (1.0 - 0.12 * (wf + wr)) * (1.0 + 0.06 * wroof) - (wl - wt) * 0.18 * (0.6 + 0.4 * n0);\n' +
+        // нормаль: нахил за градієнтом шуму, щоб вм\'ятини ловили світло; колір: подряпаний метал і сажа
+        '    vec3 g = vec3(2.9 * cos(A) * sin(B) + 3.15 * cos(Cc), 3.7 * sin(A) * cos(B) + 2.55 * cos(Cc), 1.3 * cos(A) * sin(B) - 2.1 * sin(A) * cos(B) + 1.85 * cos(Cc));\n' +
+        '    nr = normalize(nr - (g - dot(g, nr) * nr) * ' + gf(CRK.noise) + ' * wsum * 1.4);\n' +
+        '    float dmg = clamp(wsum, 0.0, 1.0);\n' +
+        '    cl = mix(cl, vec3(0.36, 0.37, 0.4), dmg * 0.5) * (1.0 - 0.25 * dmg);\n' +
+        '    p = vec3(x, y, z);\n' +
+        '  }\n' +
+        '  vec4 w = uM * vec4(p, 1.0);\n  vW = w.xyz;\n  vN = uN * nr;\n  vC = cl;\n  gl_Position = uVP * w;\n}\n';
     var FS =
         '#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n' +
         'varying vec3 vN;\nvarying vec3 vW;\nvarying vec3 vC;\n' +
@@ -220,7 +250,7 @@
         }
         var prog = program(VS, FS, ['aPos', 'aNrm', 'aCol']);
         var loc = {};
-        ['uVP', 'uM', 'uN', 'uTint', 'uLight', 'uCam', 'uFog', 'uFogR', 'uAlpha', 'uSpec', 'uCheck', 'uTile'].forEach(function (n) { loc[n] = gl.getUniformLocation(prog, n); });
+        ['uVP', 'uM', 'uN', 'uTint', 'uLight', 'uCam', 'uFog', 'uFogR', 'uAlpha', 'uSpec', 'uCheck', 'uTile', 'uCr', 'uCr2', 'uCrOn'].forEach(function (n) { loc[n] = gl.getUniformLocation(prog, n); });
         var skyProg = program(SKY_VS, SKY_FS, ['aP']);
         var skyLoc = { uHor: gl.getUniformLocation(skyProg, 'uHor'), uTop: gl.getUniformLocation(skyProg, 'uTop'), uHorizon: gl.getUniformLocation(skyProg, 'uHorizon') };
         var skyBuf = gl.createBuffer();
@@ -337,7 +367,15 @@
             else gl.disable(gl.POLYGON_OFFSET_FILL);
         }
 
-        return { gl: gl, id: id, mesh: mesh, begin: begin, sky: sky, draw: draw, blend: blend, offset: offset, checker: checker, release: release };
+        // Зминання кузова для наступних draw(): cr — [передок, задок, лівий, правий, дах], def — розміри машини з Phys.CARS
+        function crush(cr, def) {
+            gl.uniform4f(loc.uCr, cr[0], cr[1], cr[2], cr[3]);
+            gl.uniform4f(loc.uCr2, cr[4], def.len * 0.5, def.wid * 0.5, def.height);
+            gl.uniform1f(loc.uCrOn, 1);
+        }
+        function crushOff() { gl.uniform1f(loc.uCrOn, 0); }
+
+        return { gl: gl, id: id, mesh: mesh, begin: begin, sky: sky, draw: draw, blend: blend, offset: offset, checker: checker, release: release, crush: crush, crushOff: crushOff };
     }
 
     // ---------------------------------------------------------------- стан гри
@@ -499,6 +537,7 @@
     }
     var darkTint = [1, 1, 1];
 
+    var wOff = [0, 0, 0];
     function drawCarOpaque(r, c, tint) {
         var mdl = carModels[c.type];
         if (!mdl) return;
@@ -508,6 +547,8 @@
         var dent = c.dent || 0;
         var tn = tint;
         if (dent > 0.04) { var k = 1 - 0.3 * Math.min(1, dent); darkTint[0] = k; darkTint[1] = k; darkTint[2] = k * 0.98; tn = darkTint; }
+        var cr = c.cr, crOn = Phys.crushActive(cr);                 // деформація кузова: шейдер зминає кузов і всі прикріплені деталі однаково
+        if (crOn) r.crush(cr, def);
         r.draw(mdl.opaqueMesh, carBase, tn, 1, 0.35);
         var pn, pm, bit, pdent;
         for (pn in mdl.partMeshes) {
@@ -517,6 +558,7 @@
             pdent = c.pd ? Math.min(1, c.pd[pn] || 0) : 0;
             r.draw(pm.mesh, partMatrix(carBase, pm, pdent), tn, 1, 0.35);
         }
+        if (crOn) r.crushOff();
         var local = !!c.wh;
         for (var i = 0; i < mdl.wheelPos.length; i++) {
             if (dm & (1 << (Phys.WHEEL_BIT0 + i))) continue;
@@ -530,7 +572,8 @@
             } else {
                 steerA = -(c.steer || 0) * 0.9; spin = c.wheel || 0;
             }
-            M.translate(wheelM, w.x, wy, w.z);
+            if (crOn) { Phys.crushPoint(def, cr, w.x, wy, w.z, wOff); M.translate(wheelM, wOff[0], wOff[1], wOff[2]); }   // колесо їде разом із зім'ятим кузовом
+            else M.translate(wheelM, w.x, wy, w.z);
             if (w.steer) M.rotateY(wheelM, steerA);
             M.rotateX(wheelM, spin);
             r.draw(mdl.wheelMesh, wheelM, null, 1, 0.15);
@@ -564,7 +607,14 @@
         var mdl = carModels[c.type];
         if (!mdl) return;
         carMatrix(carBase, c);
-        r.draw(mdl.glassMesh, carBase, null, 0.5, 0.9);
+        var cr = c.cr, crOn = Phys.crushActive(cr), al = 0.5;
+        if (crOn) {
+            r.crush(cr, Phys.CARS[c.type]);
+            var mxc = Math.max(cr[0], cr[1], cr[2], cr[3], cr[4]);
+            al = 0.5 * (1 - 0.8 * clamp(mxc * 1.25 - 0.2, 0, 1));      // сильний удар б'є скло: воно майже зникає
+        }
+        r.draw(mdl.glassMesh, carBase, null, al, 0.9);
+        if (crOn) r.crushOff();
     }
     // Персонаж за кермом: матриця машини -> місце водія
     function drawSeated(r, c, pose, tint) {
@@ -794,7 +844,8 @@
     function newRemoteCar(e) {
         return {
             id: e.id, cid: e.cid, type: e.type, snaps: [], x: e.x, y: e.y, z: e.z, ry: e.ry, pitch: 0, roll: 0, speed: 0, steer: 0, wheel: 0,
-            q: [0, 0, 0, 1], vx: 0, vy: 0, vz: 0, wx: 0, wy: 0, wz: 0, dm: (e.dm | 0), pd: {}, dent: 0, upY: 1
+            q: [0, 0, 0, 1], vx: 0, vy: 0, vz: 0, wx: 0, wy: 0, wz: 0, dm: (e.dm | 0) & 0x7fff, netDm: e.dm | 0, pd: {}, dent: 0, upY: 1,
+            cr: Phys.decodeCrush(e.dm | 0), crT: Phys.decodeCrush(e.dm | 0)          // зминання зон кузова (стрибком із маски, далі плавно)
         };
     }
     function carSnap(rc, x, y, z, ry, speed, steer, first, q) {
@@ -824,7 +875,8 @@
                     var wasDriving = driving;
                     myCar = Phys.createCar(e.type, +e.x, +e.z, +e.ry);
                     myCar.cid = e.cid;
-                    myCar.dm = e.dm | 0;
+                    myCar.dm = (e.dm | 0) & 0x7fff;
+                    myCar.cr = Phys.decodeCrush(e.dm | 0); Phys.crushHull(myCar, Phys.CARS[e.type]);
                     if (wasDriving) setDriving(false, true);
                 }
                 continue;
@@ -957,7 +1009,7 @@
         otherCars.length = 0;
         for (var id in remoteCars) {
             var rc = remoteCars[id];
-            otherCars.push({ x: rc.x, y: rc.y, z: rc.z, ry: rc.ry, type: rc.type, speed: rc.speed || 0, q: rc.q, vx: rc.vx, vy: rc.vy, vz: rc.vz });
+            otherCars.push({ x: rc.x, y: rc.y, z: rc.z, ry: rc.ry, type: rc.type, speed: rc.speed || 0, q: rc.q, vx: rc.vx, vy: rc.vy, vz: rc.vz, cr: rc.cr });
         }
         return otherCars;
     }
@@ -968,8 +1020,9 @@
         if (driving && myCar) {
             var th = (input.gas || k.ArrowUp || k.KeyW ? 1 : 0) - (input.rev || k.ArrowDown || k.KeyS ? 1 : 0);
             var st = (input.right || k.ArrowRight || k.KeyD ? 1 : 0) - (input.left || k.ArrowLeft || k.KeyA ? 1 : 0);
-            var hb = input.hand || k.Space ? 1 : 0;
-            Phys.stepMany(dt, function (h) { Phys.stepCar(myCar, { throttle: th, steer: st, handbrake: hb }, h, otherCars); });
+            var hb = k.Space ? 1 : 0;                                   // пробіл — ручник (блокує задні колеса)
+            var dr = (input.hand || k.KeyP) ? 1 : 0;                    // P (кнопка «P» або клавіша) — дріфт
+            Phys.stepMany(dt, function (h) { Phys.stepCar(myCar, { throttle: th, steer: st, handbrake: hb, drift: dr }, h, otherCars); });
             walker.x = myCar.x; walker.y = myCar.y; walker.z = myCar.z; walker.ry = myCar.ry;
             walker.a = 0; walker.speed = 0;
             afterCarStep(dt);
@@ -1012,7 +1065,8 @@
             var show = !!(myCar.flipped && driving);
             if (show !== fb.classList.contains('show')) {
                 fb.classList.toggle('show', show);
-                fb.textContent = lt('flip');
+                var ft = $('flipTxt');
+                if (ft) ft.textContent = lt('flip'); else fb.textContent = lt('flip');
             }
         }
     }
@@ -1032,7 +1086,7 @@
             var r3 = function (v) { return Math.round(v * 1000) / 1000; };
             var c = {
                 t: myCar.type, x: r2(myCar.x), y: r2(myCar.y), z: r2(myCar.z), ry: r2(myCar.ry), s: r2(myCar.speed), st: r2(myCar.steer),
-                q: [r3(myCar.q[0]), r3(myCar.q[1]), r3(myCar.q[2]), r3(myCar.q[3])], dm: myCar.dm | 0
+                q: [r3(myCar.q[0]), r3(myCar.q[1]), r3(myCar.q[2]), r3(myCar.q[3])], dm: Phys.netMask(myCar)
             };
             var ck = c.x + ',' + c.y + ',' + c.z + ',' + c.ry + ',' + c.s + ',' + c.st + ',' + c.q.join(':') + ',' + c.dm;
             if (ck !== lastCarSent || sinceCarBeat > 1500) {
@@ -1063,6 +1117,7 @@
             else { var g = Phys.groundSample(def, rc); Phys.qFromEuler(rc.q, rc.ry, g.pitch, g.roll); rc.y = Math.max(rc.y, g.y - 0.5); }
             rc.speed = snapOut.speed; rc.steer = snapOut.steer;
             rc.wheel += (rc.speed * dt) / def.wheelR;
+            Phys.easeCrush(rc, dt);
             // швидкість для зіткнень (вектор), згладжена
             if (dt > 0.0005) {
                 var kk = Math.min(1, dt * 10);
@@ -1259,7 +1314,8 @@
         var lang = I18.lang;
         if (v === speedoLast.kmh && gear === speedoLast.gear && lang === speedoLast.lang) return;
         speedoLast.kmh = v; speedoLast.gear = gear; speedoLast.lang = lang;
-        var p = clamp(v / SPEEDO_MAX, 0, 1);
+        var smax = driving && myCar && Phys.CARS[myCar.type] ? Phys.CARS[myCar.type].topKmh * 1.04 : SPEEDO_MAX;   // шкала під ліміт швидкості машини
+        var p = clamp(v / smax, 0, 1);
         speedoEls.num.textContent = String(v);
         speedoEls.bar.setAttribute('stroke-dasharray', (p * SPEEDO_ARC).toFixed(1) + ' 490.09');
         speedoEls.bar.setAttribute('stroke', 'hsl(' + Math.round(130 - 130 * p) + ',78%,55%)');   // зелений -> жовтий -> червоний
@@ -1469,11 +1525,12 @@
     bindHold($('left'), function (on) { input.left = on; });
     bindHold($('right'), function (on) { input.right = on; });
     bindHold($('hand'), function (on) { input.hand = on; });
-    $('flipBtn').addEventListener('click', function () {
-        if (!myCar) return;
+    function doFlip() {
+        if (!myCar || !driving) return;
         Phys.flipCar(myCar);
         $('flipBtn').classList.remove('show');
-    });
+    }
+    $('flipBtn').addEventListener('click', doFlip);
 
     $('carsBtn').addEventListener('click', function () { if (panelOpen()) closePanel(); else openPanel(); });
     $('carsClose').addEventListener('click', closePanel);
@@ -1534,7 +1591,10 @@
     canvas.addEventListener('lostpointercapture', endCam);
     canvas.addEventListener('wheel', function (e) { Cam.wheel(cam, e.deltaY); e.preventDefault(); }, { passive: false });
 
-    window.addEventListener('keydown', function (e) { input.keys[e.code] = true; });
+    window.addEventListener('keydown', function (e) {
+        input.keys[e.code] = true;
+        if (e.code === 'KeyR' && myCar && myCar.flipped) doFlip();         // R — перевернути машину на колеса
+    });
     window.addEventListener('keyup', function (e) { input.keys[e.code] = false; });
     window.addEventListener('blur', releaseAll);
     document.addEventListener('visibilitychange', function () { if (document.hidden) releaseAll(); });
@@ -1601,7 +1661,8 @@
                 var qq = t.length >= 13 ? [+t[9], +t[10], +t[11], +t[12]] : null;
                 carSnap(rc, +t[2], +t[3], +t[4], +t[5], +t[6], +t[7], false, qq);
                 var dmask = t.length >= 14 ? (t[13] | 0) : 0;
-                if (dmask !== rc.dm) {
+                if (dmask !== rc.netDm) {
+                    rc.netDm = dmask;
                     if (qq) { rc.q[0] = qq[0]; rc.q[1] = qq[1]; rc.q[2] = qq[2]; rc.q[3] = qq[3]; }
                     rc.x = +t[2]; rc.y = +t[3]; rc.z = +t[4];
                     Phys.applyDamageMask(rc, dmask);                 // нові відламані деталі -> уламки біля машини
