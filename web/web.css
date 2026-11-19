@@ -1,0 +1,42 @@
+/* KishkaBlox — сторінка входу (index.html). Ігрова сторінка (game.html) має власні стилі. */
+:root { --bg: #1b1d23; --panel: #23262e; --panel2: #2c3039; --text: #f2f4f8; --muted: #9aa1b0; --blue: #3a7bd5; --red: #d4474c; --green: #3fbf6a; color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+body { min-height: 100vh; display: flex; flex-direction: column; }
+header { display: flex; align-items: center; gap: 12px; padding: 12px 18px; background: #14161b; border-bottom: 1px solid rgba(255,255,255,.08); }
+header img { width: 38px; height: 38px; border-radius: 10px; object-fit: cover; }
+header .brand { font-size: 20px; font-weight: 800; letter-spacing: .3px; }
+header .sp { flex: 1; }
+.langs { display: flex; gap: 6px; }
+.langs button { border: 1px solid rgba(255,255,255,.2); background: transparent; color: var(--muted); border-radius: 8px; padding: 6px 10px; font-weight: 700; cursor: pointer; }
+.langs button.on { background: var(--blue); border-color: var(--blue); color: #fff; }
+main { flex: 1; width: 100%; max-width: 980px; margin: 0 auto; padding: 22px 16px 40px; }
+.card { background: var(--panel); border-radius: 16px; padding: 22px; box-shadow: 0 8px 28px rgba(0,0,0,.35); }
+.login { max-width: 420px; margin: 40px auto 0; }
+.login h1 { margin: 0 0 6px; font-size: 24px; }
+.login p.sub { margin: 0 0 18px; color: var(--muted); font-size: 14px; line-height: 1.45; }
+label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 6px; }
+input[type=text], input[type=password] { width: 100%; height: 46px; border-radius: 10px; border: 1.5px solid rgba(255,255,255,.14); background: var(--panel2); color: var(--text); padding: 0 14px; font-size: 16px; outline: none; }
+input:focus { border-color: var(--blue); }
+.row { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--muted); font-size: 14px; }
+.btn { display: inline-flex; align-items: center; justify-content: center; height: 48px; padding: 0 22px; border-radius: 12px; border: 0; background: var(--blue); color: #fff; font-size: 17px; font-weight: 800; cursor: pointer; }
+.btn.full { width: 100%; margin-top: 18px; }
+.btn.ghost { background: transparent; border: 1.5px solid rgba(255,255,255,.25); color: var(--text); }
+.btn.green { background: var(--green); }
+.btn:disabled { opacity: .55; cursor: default; }
+.msg { min-height: 22px; margin-top: 12px; font-size: 14px; color: #ff8d92; }
+.msg.info { color: var(--muted); }
+.hello { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; flex-wrap: wrap; }
+.hello .avatar { width: 54px; height: 54px; border-radius: 50%; background: #3b3e46; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 800; }
+.hello .nick { font-size: 22px; font-weight: 800; }
+.hello .sp { flex: 1; }
+.tiles { display: flex; gap: 16px; flex-wrap: wrap; }
+.tile { width: 190px; background: var(--panel2); border-radius: 16px; overflow: hidden; cursor: pointer; border: 2px solid transparent; }
+.tile:hover { border-color: var(--blue); }
+.tile img { display: block; width: 100%; height: 150px; object-fit: cover; background: #3b3e46; }
+.tile div { padding: 10px 12px; font-weight: 800; font-size: 16px; }
+.play { margin-top: 22px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.help { margin-top: 26px; font-size: 14px; color: var(--muted); line-height: 1.7; }
+.help b { color: var(--text); }
+kbd { background: var(--panel2); border: 1px solid rgba(255,255,255,.18); border-bottom-width: 2px; border-radius: 6px; padding: 1px 7px; font-family: inherit; font-size: 13px; color: var(--text); }
+.hidden { display: none !important; }
