@@ -14,6 +14,7 @@
     var HOME = CFG.home || 'index.html';
     var SESSION_KEY = 'kishkablox.web.session';
     var LANG_KEY = 'kishkablox.web.lang';
+    var INVERT_KEY = 'kishkablox.web.invertCamera';
     var JOIN_TIMEOUT_MS = 12000;
     var JOIN_ATTEMPTS = 4;
     var AVATAR = CFG.avatar || 'Assets/Kishkablox.png';
@@ -29,10 +30,18 @@
         return 'en';
     }
     var LANG = pickLang();
+    // Інверсія камери (рух миші/пальця вгору-вниз навпаки): зберігається в браузері, як і в застосунку
+    function readInvert() {
+        try { return window.localStorage.getItem(INVERT_KEY) === '1'; } catch (e) { return false; }
+    }
+    function saveInvert(on) {
+        try { window.localStorage.setItem(INVERT_KEY, on ? '1' : '0'); } catch (e) { /* сховище недоступне */ }
+    }
+    var invertCamera = readInvert();
     var TR = {
         uk: {
             title: 'Realistic cars', joining: 'Вхід у гру…', waking: 'Сервер прокидається, це може тривати до хвилини…', menu: 'Меню',
-            players: 'Гравці', respawn: 'Відродитися', leave: 'Вийти з гри', resume: 'Продовжити', sure: 'Ви впевнені?', yes: 'Так', no: 'Ні',
+            players: 'Гравці', invert: 'Інверсія камери', respawn: 'Відродитися', leave: 'Вийти з гри', resume: 'Продовжити', sure: 'Ви впевнені?', yes: 'Так', no: 'Ні',
             back: 'Назад', ok: 'Гаразд', you: 'ви', reconnecting: 'З’єднання втрачено, підключаємося…',
             e_session: 'Сесія закінчилась. Увійдіть знову.', e_kick_other: 'Ви зайшли в гру з іншого пристрою.', e_kick_timeout: 'З’єднання з грою втрачено (вкладка була неактивною). Зайдіть знову.',
             e_join: 'Не вдалося увійти в гру. Спробуйте ще раз.', e_webgl: 'Ваш браузер не підтримує WebGL, тож гра не запуститься.', e_lib: 'Не завантажилась бібліотека зв’язку з сервером. Перевірте інтернет і оновіть сторінку.',
@@ -40,7 +49,7 @@
         },
         ru: {
             title: 'Realistic cars', joining: 'Вход в игру…', waking: 'Сервер просыпается, это может занять до минуты…', menu: 'Меню',
-            players: 'Игроки', respawn: 'Возродиться', leave: 'Выйти из игры', resume: 'Продолжить', sure: 'Вы уверены?', yes: 'Да', no: 'Нет',
+            players: 'Игроки', invert: 'Инверсия камеры', respawn: 'Возродиться', leave: 'Выйти из игры', resume: 'Продолжить', sure: 'Вы уверены?', yes: 'Да', no: 'Нет',
             back: 'Назад', ok: 'Хорошо', you: 'вы', reconnecting: 'Соединение потеряно, подключаемся…',
             e_session: 'Сессия закончилась. Войдите снова.', e_kick_other: 'Вы зашли в игру с другого устройства.', e_kick_timeout: 'Связь с игрой потеряна (вкладка была неактивной). Зайдите снова.',
             e_join: 'Не удалось войти в игру. Попробуйте ещё раз.', e_webgl: 'Ваш браузер не поддерживает WebGL, поэтому игра не запустится.', e_lib: 'Не загрузилась библиотека связи с сервером. Проверьте интернет и обновите страницу.',
@@ -48,7 +57,7 @@
         },
         en: {
             title: 'Realistic cars', joining: 'Joining the game…', waking: 'The server is waking up, this can take up to a minute…', menu: 'Menu',
-            players: 'Players', respawn: 'Respawn', leave: 'Leave game', resume: 'Resume', sure: 'Are you sure?', yes: 'Yes', no: 'No',
+            players: 'Players', invert: 'Invert camera', respawn: 'Respawn', leave: 'Leave game', resume: 'Resume', sure: 'Are you sure?', yes: 'Yes', no: 'No',
             back: 'Back', ok: 'OK', you: 'you', reconnecting: 'Connection lost, reconnecting…',
             e_session: 'Your session has expired. Please sign in again.', e_kick_other: 'You joined the game from another device.', e_kick_timeout: 'The connection to the game was lost (the tab was inactive). Please join again.',
             e_join: 'Could not join the game. Please try again.', e_webgl: 'Your browser does not support WebGL, so the game cannot start.', e_lib: 'The server connection library failed to load. Check your internet and reload the page.',
@@ -125,13 +134,22 @@
         var panel = el('div', 'position:fixed;left:calc(env(safe-area-inset-left,0px) + 12px);top:calc(env(safe-area-inset-top,0px) + 66px);bottom:calc(env(safe-area-inset-bottom,0px) + 12px);width:300px;max-width:calc(100% - 24px);background:rgba(18,20,26,.82);border-radius:14px;color:#fff;display:none;flex-direction:column;pointer-events:auto;z-index:56;box-shadow:0 8px 28px rgba(0,0,0,.45);overflow:hidden;');
         var head = el('div', 'padding:14px 16px 8px;font-size:17px;font-weight:800;', t('players'));
         var list = el('div', 'flex:1;overflow-y:auto;padding:0 8px 8px;');
+        // перемикач «Інверсія камери»
+        var optRow = el('div', 'padding:12px 16px;display:flex;align-items:center;justify-content:space-between;border-top:1px solid rgba(255,255,255,.12);font-size:16px;');
+        var optLabel = el('span', '', t('invert'));
+        var sw = el('button', 'width:52px;height:30px;border-radius:15px;border:0;position:relative;cursor:pointer;padding:0;flex:none;margin-left:12px;');
+        var knob = el('span', 'position:absolute;top:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:left .15s;');
+        sw.appendChild(knob);
+        sw.setAttribute('role', 'switch');
+        sw.setAttribute('aria-label', t('invert'));
+        optRow.appendChild(optLabel); optRow.appendChild(sw);
         var foot = el('div', 'padding:10px;display:flex;flex-direction:column;gap:8px;border-top:1px solid rgba(255,255,255,.12);');
         function mkBtn(label, bg) {
             return el('button', 'height:44px;border-radius:10px;border:0;background:' + bg + ';color:#fff;font-size:16px;font-weight:700;cursor:pointer;', label);
         }
         var bResume = mkBtn(t('resume'), '#3a7bd5'), bRespawn = mkBtn(t('respawn'), '#4a4f5c'), bLeave = mkBtn(t('leave'), '#d4474c');
         foot.appendChild(bResume); foot.appendChild(bRespawn); foot.appendChild(bLeave);
-        panel.appendChild(head); panel.appendChild(list); panel.appendChild(foot);
+        panel.appendChild(head); panel.appendChild(list); panel.appendChild(optRow); panel.appendChild(foot);
         root.appendChild(panel);
 
         // діалог (підтвердження виходу / помилка)
@@ -147,7 +165,14 @@
 
         document.body.appendChild(root);
         u.root = root; u.load = load; u.loadMsg = msg; u.btn = btn; u.panel = panel; u.list = list; u.head = head;
-        u.dlgWrap = dlgWrap; u.dText = dText; u.dRow = dRow; u.bar = bar;
+        u.dlgWrap = dlgWrap; u.dText = dText; u.dRow = dRow; u.bar = bar; u.sw = sw; u.knob = knob;
+        u.paintSwitch = function () {
+            sw.style.background = invertCamera ? '#3a7bd5' : '#4a4f5c';
+            knob.style.left = invertCamera ? '25px' : '3px';
+            sw.setAttribute('aria-checked', invertCamera ? 'true' : 'false');
+        };
+        u.paintSwitch();
+        sw.addEventListener('click', function () { setInvert(!invertCamera); });
 
         function mkDlgBtn(label, bg, fn) {
             var b = mkBtn(label, bg); b.style.minWidth = '110px'; b.style.padding = '0 16px';
@@ -210,6 +235,12 @@
     }
 
     // ------------------------------------------------------------------ дії меню
+    function setInvert(on) {
+        invertCamera = !!on;
+        saveInvert(invertCamera);
+        toGame('config', { invertCamera: invertCamera });          // гра застосовує одразу, без перезапуску
+        if (ui) ui.paintSwitch();
+    }
     function respawn() {
         if (!socket || !joined) return;
         socket.emit('blox_game_respawn', function (res) {
@@ -267,7 +298,7 @@
         players = {}; players[myId] = res.nick || session.nick;
         var others = res.players || [];
         for (var i = 0; i < others.length; i++) if (others[i] && typeof others[i].id === 'number') players[others[i].id] = others[i].nick || '';
-        toGame('config', { lang: LANG, invertCamera: false });
+        toGame('config', { lang: LANG, invertCamera: invertCamera });
         toGame(first ? 'start' : 'resync', res);
         setBar('');
         if (ui) { ui.btn.style.display = 'block'; if (ui.menuOpen) renderPlayers(); }
@@ -374,7 +405,8 @@
 
     // Для тестів і діагностики з консолі браузера
     window.KishkaWebBridge = {
-        state: function () { return { identified: identified, joined: joined, joinedOnce: joinedOnce, myId: myId, players: players, lang: LANG, session: session ? { nick: session.nick } : null }; },
+        setInvert: setInvert,
+        state: function () { return { invertCamera: invertCamera, identified: identified, joined: joined, joinedOnce: joinedOnce, myId: myId, players: players, lang: LANG, session: session ? { nick: session.nick } : null }; },
         respawn: respawn, leave: leave
     };
     start();
