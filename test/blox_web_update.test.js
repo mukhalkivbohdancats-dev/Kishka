@@ -277,6 +277,7 @@ function makeBridgeEnv(opts) {
     const timers = [];
     const loc = { href: 'https://x.github.io/Kishka/game.html' };
     const store = { session: new Map(), local: new Map() };
+    Object.keys(opts.local || {}).forEach((k) => store.local.set(k, opts.local[k]));     // збережені налаштування браузера
     if (opts.session !== null) store.session.set('kishkablox.web.session', JSON.stringify(opts.session || { token: 'a'.repeat(48), nick: 'Racer', email: 'racer@mail.com' }));
     function mk(tag) {
         const e = { tag, style: { cssText: '' }, children: [], listeners: {}, _text: '', attrs: {}, src: '', alt: '' };
@@ -324,6 +325,7 @@ function makeBridgeEnv(opts) {
     vm.runInContext(fs.readFileSync(path.join(ROOT, 'web', 'web-bridge.js'), 'utf8'), ctx, { filename: 'web-bridge.js' });
     return { win, sock, kg, loc, store, timers, ioUrl: () => ioUrl, doc: document, flushTimers: (ms) => { const t = timers.splice(0); t.forEach((x) => { if (ms === undefined || x.ms <= ms) x.fn(); }); } };
 }
+function findAll(el, pred, acc) { acc = acc || []; if (pred(el)) acc.push(el); (el.children || []).forEach((c) => findAll(c, pred, acc)); return acc; }
 function texts(el, acc) { acc = acc || []; if (el._text) acc.push(el._text); (el.children || []).forEach((c) => texts(c, acc)); return acc; }
 
 const JOIN_OK = { success: true, id: 3, nick: 'Racer', game: 'realistic_cars', x: 1, y: 2, z: 3, ry: 0.5, a: 0, count: 2, tickMs: 100, players: [{ id: 5, nick: 'Anna' }], cars: [] };
@@ -410,6 +412,51 @@ test('веб-міст: прострочений токен, викидання �
     assert.strictEqual(e.loc.href, 'index.html');
     e = makeBridgeEnv({ noIo: true });
     assert.ok(texts(e.doc.body).some((s) => /socket|сервер|server/i.test(s)), 'видно причину, чому гра не стартує');
+});
+
+test('веб-міст: у меню є перемикач «Інверсія камери»: стартове значення з браузера, перемикання діє одразу, зберігається', () => {
+    const resp = { blox_web_resume: { success: true, nick: 'Racer', email: 'racer@mail.com' }, blox_game_join: JOIN_OK };
+    // за замовчуванням вимкнено
+    let e = makeBridgeEnv({ responders: resp });
+    e.sock.connected = true; e.sock.fire('connect'); e.win.Android.ready();
+    assert.strictEqual(plain(e.kg.calls.find((c) => c[0] === 'config')[1]).invertCamera, false);
+    const sw = findAll(e.doc.body, (x) => x.attrs && x.attrs.role === 'switch')[0];
+    assert.ok(sw, 'у меню є перемикач');
+    assert.strictEqual(sw.attrs['aria-checked'], 'false');
+    assert.ok(texts(e.doc.body).some((x) => x === 'Інверсія камери'), 'підпис українською');
+    // вмикаємо: гра отримує config, налаштування записане в браузер
+    e.kg.calls.length = 0;
+    sw.click();
+    assert.deepStrictEqual(plain(e.kg.calls.filter((c) => c[0] === 'config').map((c) => c[1])), [{ invertCamera: true }]);
+    assert.strictEqual(e.store.local.get('kishkablox.web.invertCamera'), '1');
+    assert.strictEqual(sw.attrs['aria-checked'], 'true');
+    assert.strictEqual(e.win.KishkaWebBridge.state().invertCamera, true);
+    sw.click();                                                       // і назад
+    assert.strictEqual(plain(e.kg.calls.filter((c) => c[0] === 'config').pop()[1]).invertCamera, false);
+    assert.strictEqual(e.store.local.get('kishkablox.web.invertCamera'), '0');
+    // наступного разу (нова сторінка) значення береться зі збереженого
+    e = makeBridgeEnv({ responders: resp, local: { 'kishkablox.web.invertCamera': '1' }, lang: 'en-US' });
+    e.sock.connected = true; e.sock.fire('connect'); e.win.Android.ready();
+    const cfg = plain(e.kg.calls.find((c) => c[0] === 'config')[1]);
+    assert.strictEqual(cfg.invertCamera, true, 'збережена інверсія діє з першого кадру');
+    assert.strictEqual(findAll(e.doc.body, (x) => x.attrs && x.attrs.role === 'switch')[0].attrs['aria-checked'], 'true');
+    assert.ok(texts(e.doc.body).some((x) => x === 'Invert camera'), 'англійською теж');
+});
+
+test('справжня гра: config({invertCamera}) діє до старту й після нього, а інверсія справді міняє напрямок руху камери вгору-вниз', () => {
+    const { loadGame } = require('./helpers/fakedom.js');
+    const g = loadGame();
+    g.win.KishkaGame.config({ lang: 'uk', invertCamera: true });                 // міст викликає config ДО start
+    g.win.KishkaGame.start({ id: 1, nick: 'Tester', x: 0, y: 3, z: 0, ry: 0, players: [], cars: [] });
+    g.frame(5);
+    const cam = g.win.KishkaGameDebug.cam;
+    assert.strictEqual(cam.invert, true, 'інверсія пережила старт');
+    const Cam = require(path.join(GAME_DIR, 'camera.js'));
+    const a = { yaw: 0, pitch: 0.3, dist: 10, invert: false }, b = { yaw: 0, pitch: 0.3, dist: 10, invert: true };
+    Cam.drag(a, 0, -40); Cam.drag(b, 0, -40);
+    assert.ok(a.pitch > 0.3 && b.pitch < 0.3, 'палець угору: звичайна камера піднімається, інвертована опускається');
+    g.win.KishkaGame.config({ invertCamera: false });
+    assert.strictEqual(g.win.KishkaGameDebug.cam.invert, false, 'вимкнули — і гра одразу це застосувала');
 });
 
 // ------------------------------------------------------------------ вхід з сайту на справжній SQLite
