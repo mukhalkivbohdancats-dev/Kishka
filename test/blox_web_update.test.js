@@ -503,11 +503,15 @@ test('збирання сайту: ті самі файли гри, що й у �
     } finally { fs.rmSync(out, { recursive: true, force: true }); }
 });
 
-test('Pages: у workflow є права, збирання сайту й публікація; в застосунок нові файли web/ не потрапляють', () => {
-    const yml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'pages.yml'), 'utf8');
-    assert.ok(/pages: write/.test(yml) && /id-token: write/.test(yml) && /deploy-pages@v\d/.test(yml) && /upload-pages-artifact@v\d/.test(yml) && /node web\/build-site\.js/.test(yml));
+test('Pages: workflow сайту має права, збирання й публікацію (в репозиторії сайту або, за бажання, в основному); в застосунок нові файли web/ не потрапляють', () => {
+    const check = (yml) => assert.ok(/pages: write/.test(yml) && /id-token: write/.test(yml) && /deploy-pages@v\d/.test(yml) && /upload-pages-artifact@v\d/.test(yml));
+    // workflow для окремого репозиторію KishkaBlox.github.io: код гри береться з основного репозиторію в папку src
     const org = fs.readFileSync(path.join(ROOT, 'web', 'KishkaBlox.github.io.workflow.yml'), 'utf8');
-    assert.ok(/repository: mukhalkivbohdancats-dev\/Kishka/.test(org) && /--src src/.test(org));
+    check(org);
+    assert.ok(/repository: mukhalkivbohdancats-dev\/Kishka/.test(org) && /node src\/web\/build-site\.js --src src/.test(org), 'забирає основний репозиторій і збирає з нього');
+    // необов'язковий workflow самого основного репозиторію (проєктний сайт mukhalkivbohdancats-dev.github.io/Kishka/)
+    const own = path.join(ROOT, '.github', 'workflows', 'pages.yml');
+    if (fs.existsSync(own)) { const y = fs.readFileSync(own, 'utf8'); check(y); assert.ok(/node web\/build-site\.js/.test(y)); }
     const cfg = fs.readFileSync(path.join(ROOT, 'web', 'web-config.js'), 'utf8');
     assert.ok(/server: 'https:\/\/kishka\.onrender\.com'/.test(cfg));
     // файли гри для застосунку беруться з blox_game/: у ній немає веб-файлів
