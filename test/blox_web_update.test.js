@@ -55,12 +55,13 @@ function cruise(type, kmh, th) {
 }
 
 // ------------------------------------------------------------------ гірка
-test('гірка стала значно вищою (було 52 студи), кут підйому той самий, а зона приземлення довга й рівна', () => {
+test('гірка: у 17 разів довша, значно вища й крутіша за стару (12°), а зона приземлення за краєм довга й рівна', () => {
     const R = World.RAMP;
     assert.ok(R.h >= 110, 'висота гірки ' + R.h);
+    assert.ok(R.lenRamp >= 560 * 17, 'довжина підйому ' + R.lenRamp);
     const slope = Math.atan2(R.h, R.lenRamp) * 57.3;
-    assert.ok(slope > 9 && slope < 15, 'кут підйому ~12°, а зараз ' + slope.toFixed(1));
-    assert.ok(Math.abs(World.heightAt(R.x0 + R.lenRamp + 50, 0) - R.h) < 0.5, 'на верху гірки висота = h');
+    assert.ok(slope > 15 && slope < 22, 'кут підйому крутіший за старі 12°, а зараз ' + slope.toFixed(1));
+    assert.ok(Math.abs(World.heightAt(R.xTop + 50, 0) - R.h) < 0.5, 'на верху гірки висота = h');
     // за краєм гірки ґрунт рівний ще щонайменше 400 студів (з такої висоти летять далеко)
     for (let d = 40; d <= 440; d += 80) {
         const h = World.heightAt(R.xEnd + d, 0);
