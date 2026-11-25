@@ -314,6 +314,78 @@ class KishkaManager(ctx: Context) {
         })
     }
 
+    // ===================== ЧИСЛОВИЙ ID І ПОСИЛАННЯ НА ПРОФІЛЬ =====================
+
+    fun appContext(): Context = context
+
+    /** Запит до сервера з відповіддю й тайм-аутом (слабкий інтернет не повинен «вішати» екран). onResult(null) — відповіді не було. */
+    private fun emitWithAck(event: String, payload: Any, timeoutMs: Long = 9000L, onResult: (JSONObject?) -> Unit) {
+        val answered = AtomicBoolean(false)
+        ensureConnected()
+        socket.emit(event, payload, io.socket.client.Ack { args ->
+            if (answered.compareAndSet(false, true)) {
+                mainHandler.post { onResult(args.firstOrNull() as? JSONObject) }
+            }
+        })
+        mainHandler.postDelayed({
+            if (answered.compareAndSet(false, true)) onResult(null)
+        }, timeoutMs)
+    }
+
+    /** ID акаунта (сервер видає його по черзі й створює автоматично, навіть для давно зареєстрованих). Після першого разу береться з пам'яті. */
+    fun getMyUid(email: String, onResult: (Long?) -> Unit) {
+        val clean = email.trim().lowercase()
+        if (clean.isEmpty()) { onResult(null); return }
+        val cached = prefs.getLong("uid_$clean", 0L)
+        if (cached > 0L) { onResult(cached); return }
+        emitWithAck("get_my_uid", clean) { obj ->
+            val uid = obj?.optLong("uid", 0L) ?: 0L
+            if (obj != null && obj.optBoolean("success", false) && uid > 0L) {
+                prefs.edit().putLong("uid_$clean", uid).apply()
+                onResult(uid)
+            } else {
+                onResult(null)
+            }
+        }
+    }
+
+    /** Профіль за ID (з посилання). onResult(профіль, null) або onResult(null, код): not_found / error. */
+    fun getUserByUid(uid: Long, myEmail: String, onResult: (LinkProfile?, String?) -> Unit) {
+        val payload = JSONObject().put("uid", uid).put("myEmail", myEmail.trim().lowercase())
+        emitWithAck("get_user_by_uid", payload) { obj ->
+            if (obj == null) { onResult(null, "error"); return@emitWithAck }
+            if (!obj.optBoolean("success", false)) { onResult(null, obj.optString("code", "error")); return@emitWithAck }
+            val avatar = if (obj.isNull("avatarUrl")) null else obj.optString("avatarUrl", "").ifEmpty { null }
+            val email = if (obj.isNull("email")) null else obj.optString("email", "").ifEmpty { null }
+            onResult(
+                LinkProfile(
+                    uid = obj.optLong("uid", uid),
+                    name = obj.optString("name", ""),
+                    avatarUrl = avatar,
+                    isContact = obj.optBoolean("isContact", false),
+                    isMe = obj.optBoolean("isMe", false),
+                    email = email
+                ),
+                null
+            )
+        }
+    }
+
+    /** Додає в контакти того, чий ID у посиланні. onResult(користувач) або null, якщо не вдалось. */
+    fun addContactByUid(myEmail: String, uid: Long, onResult: (User?) -> Unit) {
+        val payload = JSONObject().put("uid", uid).put("myEmail", myEmail.trim().lowercase())
+        emitWithAck("add_contact_by_uid", payload) { obj ->
+            val user = obj?.optJSONObject("user")
+            if (obj != null && obj.optBoolean("success", false) && user != null) {
+                val email = user.optString("email", "").trim().lowercase()
+                val avatar = if (user.isNull("avatarUrl")) null else user.optString("avatarUrl", "").ifEmpty { null }
+                onResult(User(uid = email, email = email, name = user.optString("name", email.substringBefore("@")), avatarUrl = avatar))
+            } else {
+                onResult(null)
+            }
+        }
+    }
+
     // ===================== КОНТАКТИ =====================
 
     /**
