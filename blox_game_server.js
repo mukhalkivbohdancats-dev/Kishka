@@ -25,7 +25,16 @@
 //   blox_game_report { target }                         + ack -> { success:true } | { success:false, code } (code: not_in_game | bad_target | rate)
 //        скарга на гравця з меню: пишеться в журнал Render, щоб адміністратор міг розібратися.
 //   blox_game_leave  {}                                 + необов'язковий ack -> { success:true }
+//   blox_chat        { text }                           + ack -> { success:true } | { success:false, code }   code: not_in_game | empty | rate
+//        повідомлення в чат гри (один спільний чат «Here»): до 160 символів, не частіше ~1.7/с і 10 за 20 с.
+//   blox_door_code   { code }                           + ack -> { success:true, openMs } | { success:false, code }   code: not_in_game | bad_code | rate
+//        код дверей коробки на вершині гірки. Правильний код (на сервері, змінна BLOX_DOOR_CODE) відчиняє двері на 5 с для всіх.
+//   blox_nuke_launch {}                                 + ack -> { success:true, t0 } | { success:false, code }   code: not_in_game | door_closed | too_far | busy
+//        червона кнопка всередині коробки. Запускає ядерну подію для всього сервера (таймлайн — blox_game/nuke.js).
 // ---------- Події сервер -> клієнт ----------
+//   blox_chat_msg    { id, nick, text, t }                  нове повідомлення в чаті (отримують усі в кімнаті, і автор)
+//   blox_door        { open:true, now, openMs }             двері на вершині відчинено на openMs мс
+//   blox_nuke        { state:'launch'|'reset', t0, now }    запуск (t0 — час сервера в мс) або скидання світу в початковий стан
 //   blox_game_roster { game, count, players:[{id,nick}] }   повний список гравців кімнати (кількість = довжина списку)
 //   blox_game_tick   [[id, x, y, z, ry, a, d], ...]         лише ті, хто змінився за останні 100 мс (10 разів на секунду)
 //   blox_game_cars   { game, count, cars:[{id, cid, type, x, y, z, ry, kmh}] }   ПОВНИЙ список машин (id — власник; cid — номер створення)
@@ -41,12 +50,22 @@
 // тому підміна email з іншого сокета, який вже назвався чужою поштою, неможлива, але це не криптографічний захист.
 // =====================================================================
 
+// Таймлайн ядерної події й координати споруд — з тих самих файлів, що й у грі (blox_game/). Якщо їх немає, ядерна подія вимкнена, решта працює.
+let Nuke = null, GameWorld = null;
+try { GameWorld = require('./blox_game/world.js'); Nuke = require('./blox_game/nuke.js'); } catch (e) { /* ядерна подія недоступна */ }
+const DOOR_CODE = String(process.env.BLOX_DOOR_CODE || '1620').replace(/[^0-9]/g, '').slice(0, 12) || '1620';
+const DOOR_OPEN_MS = 5000;                           // двері коробки відчинені 5 секунд, потім зачиняються самі
+const CHAT_MAX = 160;                                // символів у повідомленні чату
+const CHAT_HISTORY = 40;                             // скільки останніх повідомлень отримує той, хто зайшов пізніше
+const CODE_FAILS_MAX = 6;                            // скільки неправильних кодів можна ввести за хвилину
+const CODE_LOCK_MS = 30000;                          // потім код блокується на 30 секунд
+
 const GAMES = new Set(['realistic_cars']);          // дозволені ідентифікатори ігор (Bloxgame.kt -> BloxGame.GAME_ID)
 const MAX_PLAYERS = 50;
 const TICK_MS = 100;                                // частота розсилки станів (10 Гц)
-const BOUND_XZ = 2600;                              // світ — коло радіуса 2480 (world.js limitR; площа в 15 разів більша за стару), запас на край
+const BOUND_XZ = 17700;                             // світ — коло радіуса 17500 (world.js limitR; площа в 50 разів більша за версію з радіусом 2480), запас на край
 const BOUND_Y_MIN = -90;                             // долини й чаші рельєфу йдуть нижче нуля
-const BOUND_Y_MAX = 460;                             // гори до ~310 студів плюс запас на польоти з гірки й горбів
+const BOUND_Y_MAX = 3900;                            // верх гірки 3100 студів + коробка 38 + запас на польоти з гірки (гори по краю карти нижчі)
 const RATE_BURST = 30;                              // ведро: сплеск пакетів
 const RATE_PER_SEC = 20;                            // ведро: сталий темп (клієнт надсилає ~11/с)
 const STALE_MS = 60 * 1000;                         // жодного пакета стану 60 с -> гравець виходить із гри
@@ -63,7 +82,7 @@ const RESPAWN_COOLDOWN_MS = 1000;
 const MAX_STEER = 1.2;
 const MAX_DM = 0x7fffffff;                           // маска пошкоджень: біти 0..14 — відламані деталі (9) і колеса (до 6); біти 16..30 — зминання п'яти зон кузова (по 3 біти «термометром»)
 const CAR_SPAWN_COOLDOWN_MS = 1200;                  // не частіше одного spawn на 1,2 с від гравця
-const CAR_SPAWN_MAX_DIST = 60;                       // машину можна створити лише поблизу себе
+const CAR_SPAWN_MAX_DIST = 400;                      // машину можна створити лише поблизу себе; запас на слабкий інтернет (позиція гравця на сервері може відставати на секунду-дві)
 
 function isNum(v) {
     return typeof v === 'number' && Number.isFinite(v);
@@ -174,7 +193,7 @@ function createBloxGame(options) {
     function getRoom(game) {
         let r = rooms.get(game);
         if (!r) {
-            r = { players: new Map(), byEmail: new Map(), reserved: new Map(), nextId: 1, timer: null };
+            r = { players: new Map(), byEmail: new Map(), reserved: new Map(), nextId: 1, timer: null, chat: [], doorUntil: 0, nuke: null, nukeTimer: null, nukeEndedAt: -1e9 };
             rooms.set(game, r);
         }
         return r;
@@ -377,9 +396,126 @@ function createBloxGame(options) {
                 if (p.id !== id) others.push({ id: p.id, nick: p.nick, x: p.x, y: p.y, z: p.z, ry: p.ry, a: p.a, d: p.d });
             }
             try {
-                ack({ success: true, id, nick, game, x: player.x, y: player.y, z: player.z, ry: player.ry, a: 0, count: room.players.size, tickMs, players: others, cars: carsPayload(game, room).cars });
+                ack(Object.assign({ success: true, id, nick, game, x: player.x, y: player.y, z: player.z, ry: player.ry, a: 0, count: room.players.size, tickMs, players: others, cars: carsPayload(game, room).cars }, sharedState(room)));
             } catch (e) { /* клієнт уже відключився */ }
         }
+    }
+
+
+    // ------------------------------------------------------------------ чат, код дверей, ядерна подія
+    function playerOf(socket) {
+        const m = socket.bloxGame;
+        const room = m && rooms.get(m.game);
+        const p = room && room.players.get(m.id);
+        if (!p || p.socketId !== socket.id) return null;
+        return { m, room, p };
+    }
+
+    function cleanChat(text) {
+        let t = String(text === undefined || text === null ? '' : text);
+        t = t.replace(/[\u0000-\u001f\u007f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, ' ').replace(/\s+/g, ' ').trim();
+        // Рядок із символів-«ламачів» (дуже довгі слова без пробілів) обрізаємо як є: клієнт переносить слова сам
+        return Array.from(t).slice(0, CHAT_MAX).join('');
+    }
+
+    function handleChat(socket, data, ack) {
+        const ctx = playerOf(socket);
+        if (!ctx) return carAck(ack, { success: false, code: 'not_in_game' });
+        const { m, room, p } = ctx;
+        const text = cleanChat(data && data.text);
+        if (!text) return carAck(ack, { success: false, code: 'empty' });
+        const t = now();
+        p.chatTimes = (p.chatTimes || []).filter((x) => t - x < 20000);
+        if (p.chatTimes.length >= 10 || (p.chatTimes.length && t - p.chatTimes[p.chatTimes.length - 1] < 600)) {
+            return carAck(ack, { success: false, code: 'rate' });
+        }
+        p.chatTimes.push(t);
+        const msg = { id: p.id, nick: p.nick, text, t };
+        room.chat.push(msg);
+        if (room.chat.length > CHAT_HISTORY) room.chat.splice(0, room.chat.length - CHAT_HISTORY);
+        io.to(roomName(m.game)).emit('blox_chat_msg', msg);
+        carAck(ack, { success: true });
+    }
+
+    function safeEqualStr(a, b) {
+        const x = Buffer.from(String(a)), y = Buffer.from(String(b));
+        if (x.length !== y.length) return false;
+        return require('crypto').timingSafeEqual(x, y);
+    }
+
+    function handleDoorCode(socket, data, ack) {
+        const ctx = playerOf(socket);
+        if (!ctx) return carAck(ack, { success: false, code: 'not_in_game' });
+        const { m, room, p } = ctx;
+        const t = now();
+        if (p.codeLockUntil && t < p.codeLockUntil) return carAck(ack, { success: false, code: 'rate' });
+        const code = String((data && data.code) === undefined ? '' : data.code).replace(/[^0-9]/g, '').slice(0, 12);
+        if (!code || !safeEqualStr(code, DOOR_CODE)) {
+            p.codeFails = (p.codeFails || []).filter((x) => t - x < 60000);
+            p.codeFails.push(t);
+            if (p.codeFails.length >= CODE_FAILS_MAX) {
+                p.codeLockUntil = t + CODE_LOCK_MS;
+                p.codeFails = [];
+                log.warn('[blox-game] забагато неправильних кодів дверей: id=' + p.id + ' нік=' + logNick(p.nick) + ' — код заблоковано на ' + (CODE_LOCK_MS / 1000) + ' с');
+            }
+            return carAck(ack, { success: false, code: 'bad_code' });
+        }
+        p.codeFails = [];
+        room.doorUntil = t + DOOR_OPEN_MS;
+        log.log('[blox-game] двері коробки відчинено: id=' + p.id + ' нік=' + logNick(p.nick));
+        io.to(roomName(m.game)).emit('blox_door', { open: true, now: t, openMs: DOOR_OPEN_MS });
+        carAck(ack, { success: true, openMs: DOOR_OPEN_MS });
+    }
+
+    // Гравець біля червоної кнопки? Позицію бере з останнього стану, який надіслав клієнт (із запасом на інтернет)
+    function nearButton(p) {
+        if (!GameWorld) return true;
+        const S = GameWorld.SUMMIT;
+        return Math.abs(p.x - (S.x0 + 22)) < 70 && Math.abs(p.z) < 45 && p.y > S.top - 30 && p.y < S.top + 60;
+    }
+
+    function startNuke(game, room, by) {
+        const t = now();
+        room.nuke = { t0: t, by };
+        io.to(roomName(game)).emit('blox_nuke', { state: 'launch', t0: t, now: t });
+        if (room.nukeTimer) clearTimeout(room.nukeTimer);
+        room.nukeTimer = setTimeout(() => resetNuke(game, room, 'час вичерпано'), Nuke.T.total + 500);
+        if (room.nukeTimer.unref) room.nukeTimer.unref();
+    }
+
+    function resetNuke(game, room, why) {
+        if (room.nukeTimer) { clearTimeout(room.nukeTimer); room.nukeTimer = null; }
+        if (!room.nuke) return;
+        room.nuke = null;
+        room.nukeEndedAt = now();
+        room.doorUntil = 0;
+        io.to(roomName(game)).emit('blox_nuke', { state: 'reset', now: now() });
+        log.log('[blox-game] ядерну подію завершено (' + why + '): світ повернуто як було');
+    }
+
+    function handleNukeLaunch(socket, ack) {
+        const ctx = playerOf(socket);
+        if (!ctx) return carAck(ack, { success: false, code: 'not_in_game' });
+        const { m, room, p } = ctx;
+        if (!Nuke) return carAck(ack, { success: false, code: 'busy' });
+        const t = now();
+        if (room.nuke || t - room.nukeEndedAt < 8000) return carAck(ack, { success: false, code: 'busy' });
+        if (t > room.doorUntil + 4000) return carAck(ack, { success: false, code: 'door_closed' });
+        if (!nearButton(p)) return carAck(ack, { success: false, code: 'too_far' });
+        log.warn('[blox-game] ЗАПУСК ЯДЕРНОЇ БОМБИ: id=' + p.id + ' нік=' + logNick(p.nick));
+        startNuke(m.game, room, p.nick);
+        carAck(ack, { success: true, t0: room.nuke.t0 });
+    }
+
+    // Знімок спільного стану для того, хто заходить у гру: чат, двері, ядерна подія
+    function sharedState(room) {
+        const t = now();
+        return {
+            serverNow: t,
+            chat: room.chat.slice(-CHAT_HISTORY),
+            door: { openMs: Math.max(0, room.doorUntil - t) },
+            nuke: room.nuke ? { t0: room.nuke.t0 } : null
+        };
     }
 
     function handleState(socket, data) {
@@ -643,6 +779,27 @@ function createBloxGame(options) {
                 carAck(cb, { success: false, code: 'error' });
             }
         });
+        socket.on('blox_chat', (data, ack) => {
+            const cb = typeof data === 'function' ? data : ack;
+            try { handleChat(socket, typeof data === 'function' ? null : data, cb); } catch (e) {
+                log.error('[blox-game] blox_chat: ' + (e && e.stack || e));
+                carAck(cb, { success: false, code: 'error' });
+            }
+        });
+        socket.on('blox_door_code', (data, ack) => {
+            const cb = typeof data === 'function' ? data : ack;
+            try { handleDoorCode(socket, typeof data === 'function' ? null : data, cb); } catch (e) {
+                log.error('[blox-game] blox_door_code: ' + (e && e.stack || e));
+                carAck(cb, { success: false, code: 'error' });
+            }
+        });
+        socket.on('blox_nuke_launch', (data, ack) => {
+            const cb = typeof data === 'function' ? data : ack;
+            try { handleNukeLaunch(socket, cb); } catch (e) {
+                log.error('[blox-game] blox_nuke_launch: ' + (e && e.stack || e));
+                carAck(cb, { success: false, code: 'error' });
+            }
+        });
         socket.on('blox_game_leave', (data, ack) => {
             // Клієнт може надіслати leave без даних і без ack (Bloxgame.kt): тоді перший аргумент — ack
             const cb = typeof data === 'function' ? data : ack;
@@ -673,10 +830,12 @@ function createBloxGame(options) {
         for (const r of rooms.values()) {
             if (r.timer) clearInterval(r.timer);
             r.timer = null;
+            if (r.nukeTimer) clearTimeout(r.nukeTimer);
+            r.nukeTimer = null;
         }
     }
 
-    return { attach, stats, shutdown, rooms };
+    return { attach, stats, shutdown, rooms, DOOR_CODE_LENGTH: DOOR_CODE.length };
 }
 
 module.exports = { createBloxGame, sanitizeState, sanitizeCar, kmhOf, STUD_TO_KMH, CAR_TYPES, GAMES, TICK_MS, BOUND_XZ, BOUND_Y_MIN, BOUND_Y_MAX, RATE_BURST, RATE_PER_SEC };
