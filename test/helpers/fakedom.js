@@ -30,11 +30,12 @@ function makeEl(id, doc) {
     const el = {
         id, style: {}, dataset: {}, children: [], _listeners: listeners, _html: '', textContent: '',
         get innerHTML() { return this._html; }, set innerHTML(v) { this._html = v; this.children = []; }, width: 800, height: 400,
+        get childNodes() { return this.children; }, get firstChild() { return this.children[0]; }, scrollTop: 0, scrollHeight: 100, value: '',
         classList: { _s: new Set(), add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); }, contains(c) { return this._s.has(c); }, toggle(c, f) { if (f === undefined ? !this._s.has(c) : f) this._s.add(c); else this._s.delete(c); } },
         attrs: {},
         setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k] === undefined ? null : this.attrs[k]; },
         addEventListener(ev, fn) { (listeners[ev] = listeners[ev] || []).push(fn); },
-        removeEventListener() {}, appendChild(c) { this.children.push(c); return c; }, removeChild() {}, remove() {},
+        removeEventListener() {}, appendChild(c) { this.children.push(c); return c; }, removeChild(c) { const i = this.children.indexOf(c); if (i >= 0) this.children.splice(i, 1); return c; }, remove() {},
         getBoundingClientRect() { return { left: 0, top: 0, width: 800, height: 400, right: 800, bottom: 400 }; },
         setPointerCapture() {}, releasePointerCapture() {}, focus() {}, blur() {},
         querySelector() { return makeEl('q', doc); }, querySelectorAll() { return []; },
@@ -73,7 +74,7 @@ function loadGame(opts) {
     };
     win.window = win; win.self = win; win.globalThis = win;
     const ctx = vm.createContext(win);
-    for (const f of ['world.js', 'physics.js', 'camera.js', 'i18n.js', 'models.js', 'game.js']) {
+    for (const f of ['world.js', 'physics.js', 'camera.js', 'i18n.js', 'models.js', 'structures.js', 'nuke.js', 'features.js', 'game.js']) {
         vm.runInContext(fs.readFileSync(path.join(dir, f), 'utf8'), ctx, { filename: f });
     }
     let t = 1000;
