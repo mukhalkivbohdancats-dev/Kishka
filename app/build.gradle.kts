@@ -52,6 +52,9 @@ android {
         release {
             // Справжній релізний APK: не debuggable, без тестових позначок
             isDebuggable = false
+            // ic_launcher.png у проєкті насправді JPEG із розширенням .png. У debug-збірці це проходило, а в release AAPT2 стискає PNG
+            // («crunch») і падає. Вимикаємо стискання, щоб збірка проходила й зі старим файлом (справжній PNG теж працює).
+            isCrunchPngs = false
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
