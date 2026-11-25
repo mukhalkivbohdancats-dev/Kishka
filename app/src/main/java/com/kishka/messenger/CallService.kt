@@ -152,13 +152,13 @@ class CallService : Service() {
                 startFg(buildIncomingNotification(), microphone = false)
                 startRingtone()
                 // Голосовий канал відкриваємо ще до відповіді: до початку розмови він уже готовий
-                if (myEmail.isNotEmpty()) VoiceChannel.open(myEmail)
+                if (myEmail.isNotEmpty() && targetEmail.isNotEmpty()) VoiceChannel.open(myEmail, targetEmail)
             }
             ACTION_OUTGOING -> {
                 stopped = false
                 hadCall = true
                 startFg(buildOngoingNotification(outgoing = true), microphone = true)
-                if (myEmail.isNotEmpty()) VoiceChannel.open(myEmail)
+                if (myEmail.isNotEmpty() && targetEmail.isNotEmpty()) VoiceChannel.open(myEmail, targetEmail)
                 // Довгі гудки, як у телефоні, поки співрозмовник не відповів
                 enableHighQualityAudio()
                 setMinimumCallVolume()
@@ -568,7 +568,7 @@ class CallService : Service() {
             if (myEmail.isNotEmpty()) {
                 // Голос приходить голосовим каналом; основний сокет теж слухаємо — звідти він приходить,
                 // якщо в співрозмовника голосовий канал ще не готовий (старий шлях лишено як запасний)
-                VoiceChannel.open(myEmail)
+                if (targetEmail.isNotEmpty()) VoiceChannel.open(myEmail, targetEmail)
                 VoiceChannel.setListener { chunk ->
                     if (isCallActive) {
                         audioQueue.offer(chunk)
