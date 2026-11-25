@@ -30,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.SaveAlt
@@ -99,6 +100,9 @@ fun ChatScreen(
     var showAttachDialog by remember { mutableStateOf(false) }
     var forwardTarget by remember { mutableStateOf<Message?>(null) }
     var showAvatar by remember { mutableStateOf(false) }
+    // Три крапки зверху зліва -> «Поділитися» цим контактом (посилання з ID відкриває сайт, а той — застосунок)
+    var showContactMenu by remember { mutableStateOf(false) }
+    var contactShareUid by remember { mutableStateOf<Long?>(null) }
 
     var htmlViewer by remember { mutableStateOf<Message?>(null) }
     var apkInstall by remember { mutableStateOf<Message?>(null) }
@@ -168,9 +172,21 @@ fun ChatScreen(
         onDispose { manager.sendTyping(currentEmail, targetUser.email, false) }
     }
 
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+    // Переписка завжди відкривається в КІНЦІ (без прокручування годинами): перший показ і великі довантаження — миттєвий стрибок до
+    // останнього повідомлення; нове повідомлення — плавний доскрол, але лише якщо ви й так біля низу (щоб не збивати, коли читаєте вище).
+    var shownCount by remember(targetUser.email) { mutableStateOf(0) }
+    LaunchedEffect(messages.size, targetUser.email) {
+        val n = messages.size
+        if (n == 0) { shownCount = 0; return@LaunchedEffect }
+        val before = shownCount
+        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+        val nearBottom = before == 0 || lastVisible >= before - 3
+        val mineLast = messages.lastOrNull()?.senderEmail?.trim()?.lowercase() == currentEmail.trim().lowercase()
+        shownCount = n
+        if (before == 0 || n - before > 3) {
+            listState.scrollToItem(n - 1)
+        } else if (nearBottom || mineLast) {
+            listState.animateScrollToItem(n - 1)
         }
     }
 
@@ -242,11 +258,32 @@ fun ChatScreen(
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White),
                 navigationIcon = {
-                    IconButton(onClick = {
-                        manager.leaveChatRoom()
-                        onBack()
-                    }) {
-                        Icon(Icons.Default.Close, contentDescription = null)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = {
+                            manager.leaveChatRoom()
+                            onBack()
+                        }) {
+                            Icon(Icons.Default.Close, contentDescription = null)
+                        }
+                        // Три крапки: у меню — кнопка «Поділитися» (іконка), що веде на сайт, а той відкриває застосунок
+                        Box {
+                            IconButton(onClick = { showContactMenu = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = null)
+                            }
+                            DropdownMenu(expanded = showContactMenu, onDismissRequest = { showContactMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text(ShareText.get("share_cd", lang)) },
+                                    leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                                    onClick = {
+                                        showContactMenu = false
+                                        manager.getMyUid(targetUser.email) { uid ->
+                                            if (uid != null) contactShareUid = uid
+                                            else Toast.makeText(context, ShareText.get("no_id", lang), Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                )
+                            }
+                        }
                     }
                 },
                 title = {
@@ -297,6 +334,17 @@ fun ChatScreen(
     ) { padding ->
         if (showAvatar) {
             AvatarViewer(url = targetUser.avatarUrl, name = targetUser.name.ifEmpty { targetUser.email }, onClose = { showAvatar = false })
+        }
+        val shareUidNow = contactShareUid
+        if (shareUidNow != null) {
+            ShareProfileSheet(
+                mode = ShareMode.CONTACT,
+                uid = shareUidNow,
+                name = targetUser.name.ifEmpty { targetUser.email.substringBefore("@") },
+                avatarUrl = targetUser.avatarUrl,
+                lang = lang,
+                onDismiss = { contactShareUid = null }
+            )
         }
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             LazyColumn(
