@@ -263,7 +263,7 @@
             }
             var c = World.clampToWorld(w.x, w.z, WALK.radius);
             w.x = c.x; w.z = c.z;
-            var o = World.resolveObstacles(w.x, w.z, WALK.radius);
+            var o = World.resolveObstacles(w.x, w.z, WALK.radius, w.y);
             w.x = o.x; w.z = o.z;
             pushWalkerOutOfCars(w, cars);
         }
@@ -322,7 +322,7 @@
                 { x: 2.15, z: -3.3, steer: false, drive: true, brake: 0.16 }, { x: -2.15, z: -3.3, steer: false, drive: true, brake: 0.16 }
             ],
             springK: 31000, bumpC: 2300, reboundC: 3400, arbK: 15000, travelUp: 0.55, travelDown: 0.75,
-            engine: { idle: 900, redline: 6900, peak: 450, torque: [[0, 0.5], [900, 0.62], [2000, 0.84], [3500, 0.97], [4800, 1.0], [5800, 0.94], [6600, 0.8], [6900, 0.55], [7100, 0]] },
+            engine: { idle: 900, redline: 6900, peak: 500, torque: [[0, 0.5], [900, 0.62], [2000, 0.84], [3500, 0.97], [4800, 1.0], [5800, 0.94], [6600, 0.8], [6900, 0.55], [7100, 0]] },
             gears_r: [3.58, 2.2, 1.52, 1.12, 0.89, 0.72], reverseRatio: 3.3, final: 3.42, brakeTotal: 5200, handbrake: 0.9, brakeBias: 0.66,
             cdA: 0.72, clA: 0.18, tireMu: 1.25, tireB: 9.5, tireC: 1.45, wheelI: 1.4, driveEff: 0.9,
             hullH: 3.95, deck: 2.6, cabin: [-2.8, 2.2],
@@ -343,7 +343,7 @@
                 { x: 2.35, z: -3.6, steer: false, drive: true, brake: 0.16 }, { x: -2.35, z: -3.6, steer: false, drive: true, brake: 0.16 }
             ],
             springK: 42000, bumpC: 3300, reboundC: 5000, arbK: 20000, travelUp: 0.6, travelDown: 0.8,
-            engine: { idle: 850, redline: 5600, peak: 320, torque: [[0, 0.5], [850, 0.7], [1800, 0.9], [3000, 1.0], [4200, 0.96], [5000, 0.85], [5600, 0.6], [5800, 0]] },
+            engine: { idle: 850, redline: 5600, peak: 480, torque: [[0, 0.5], [850, 0.7], [1800, 0.9], [3000, 1.0], [4200, 0.96], [5000, 0.85], [5600, 0.6], [5800, 0]] },
             gears_r: [3.9, 2.3, 1.5, 1.0, 0.78], reverseRatio: 3.6, final: 3.9, brakeTotal: 7600, handbrake: 0.9, brakeBias: 0.62,
             cdA: 1.6, clA: 0.0, tireMu: 1.15, tireB: 8.8, tireC: 1.4, wheelI: 1.9, driveEff: 0.88,
             hullH: 5.1, deck: 3.0, cabin: [-5.0, 3.0],
@@ -365,7 +365,7 @@
                 { x: 2.4, z: -5.5, steer: false, drive: true, brake: 0.15 }, { x: -2.4, z: -5.5, steer: false, drive: true, brake: 0.15 }
             ],
             springK: 125000, bumpC: 9500, reboundC: 14500, arbK: 70000, travelUp: 0.7, travelDown: 0.9,
-            engine: { idle: 700, redline: 2600, peak: 1100, torque: [[0, 0.6], [700, 0.8], [1200, 1.0], [1800, 1.0], [2200, 0.9], [2600, 0.6], [2750, 0]] },
+            engine: { idle: 700, redline: 2600, peak: 1700, torque: [[0, 0.6], [700, 0.8], [1200, 1.0], [1800, 1.0], [2200, 0.9], [2600, 0.6], [2750, 0]] },
             gears_r: [7.6, 4.6, 3.1, 2.1, 1.45, 1.0], reverseRatio: 7.2, final: 3.7, brakeTotal: 26000, handbrake: 0.8, brakeBias: 0.45,
             cdA: 3.6, clA: 0.0, tireMu: 1.05, tireB: 8.2, tireC: 1.38, wheelI: 4.5, driveEff: 0.86,
             hullH: 7.5, deck: 3.9, cabin: [-7.0, 1.6],
@@ -994,6 +994,8 @@
         }
         if (best > 0) {
             var dv = best * S;
+            // їзда по гірці без польоту: дотик днища/бампера до схилу майже не шкодить (колеса й деталі не відлітають)
+            if (!((c.airT || 0) > 0.7) && World.rampness(c.px, c.pz)) dv *= 0.3;
             if (dv > c.impact) c.impact = dv;
             if (dv > 2.2) c.events.push({ t: 'ground', v: dv, lx: bestLp[0], ly: bestLp[1], lz: bestLp[2] });
             damageFrom(c, def, bestLp, dv, 'ground', bestN);
@@ -1493,6 +1495,11 @@
         var h = dt / n;
         for (var i = 0; i < n; i++) substep(c, def, _inp, h);
 
+        // політ: скільки секунд машина була в повітрі поспіль; після приземлення значення тримається ще 0.6 с
+        // (потрібно, щоб відрізнити справжнє приземлення від їзди по схилу гірки)
+        if (c.air) { c.airT = (c.airT || 0) + dt; c.sinceAir = 0; }
+        else { c.sinceAir = (c.sinceAir || 0) + dt; if (c.sinceAir > 0.6) c.airT = 0; }
+
         // ковзаючі колеса: сума обертання для старого поля
         var ws = 0; for (var k = 0; k < c.wh.length; k++) ws += c.wh[k].rot;
         c.wheel = ws / c.wh.length;
@@ -1508,7 +1515,9 @@
         if (c.bottomed > 0) {
             var dvL = c.bottomed * S;
             if (dvL > 3) c.events.push({ t: 'land', v: dvL });
-            if (dvL > 9) {
+            // Колесо відлітає від удару підвіски ЛИШЕ після справжнього польоту й жорсткого приземлення (понад 0.7 с в повітрі).
+            // Раніше воно відлітало й при в'їзді на гірку (різка зміна нахилу стискає підвіску) — тепер їзда по схилу колеса не ламає.
+            if (dvL > 9 && (c.airT || 0) > 0.7) {
                 // удар по підвісці: колеса, що найбільше навантажені, гинуть першими
                 for (var q = 0; q < def.nWheels; q++) {
                     var wp = def.partList[PART_NAMES.length + q];
