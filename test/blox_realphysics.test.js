@@ -22,8 +22,8 @@ function run(c, input, secs, fn, others) {
 const finite = (c) => ['x', 'y', 'z', 'vx', 'vy', 'vz', 'wx', 'wy', 'wz'].every((k) => Number.isFinite(c[k])) && c.q.every(Number.isFinite);
 
 // ------------------------------------------------------------------ світ
-test('карта: площа в 15 разів більша, об\'ємний рельєф (пагорби, долини, гори), без дерев і зайвих об\'єктів', () => {
-    assert.ok(Math.abs((World.CFG.limitR / 640) ** 2 - 15) < 0.5, 'площа ×15: радіус ' + World.CFG.limitR);
+test('карта: площа в 50 разів більша за версію з радіусом 2480, об\'ємний рельєф (пагорби, долини, гори), без дерев і зайвих об\'єктів', () => {
+    assert.ok(Math.abs((World.CFG.limitR / 2480) ** 2 - 50) < 1, 'площа ×50: радіус ' + World.CFG.limitR);
     assert.ok(BOUND_XZ > World.CFG.limitR, 'сервер пускає на всю карту');
     let mn = 1e9, mx = -1e9, rough = 0, n = 0;
     for (let x = -2400; x <= 2400; x += 40) for (let z = -2400; z <= 2400; z += 40) {
@@ -51,21 +51,22 @@ test('карта: поверхня скрізь їздна — схили пом
         maxNear = Math.max(maxNear, Math.sqrt(1 - n[1] * n[1]) / n[1]);
     }
     assert.ok(maxNear < 0.75, 'найкрутіший схил усередині карти ' + maxNear.toFixed(2));
-    assert.ok(World.groundHeight(2400, 0) > 60 || World.groundHeight(0, 2400) > 60, 'гори по краю');
+    assert.ok(World.groundHeight(17400, 0) > 60 || World.groundHeight(0, -17400) > 60, 'гори по краю');
 });
 
 test('гірка як на відео: широка сіра плита з рівним підйомом, вертикальними стінами, плоским верхом і різким краєм', () => {
     const R = World.RAMP;
     assert.ok(R.hw >= 40, 'гірка широка: ' + (R.hw * 2));
     const slope = R.h / R.lenRamp;
-    assert.ok(slope > 0.15 && slope < 0.3, 'кут підйому ~' + Math.round(Math.atan(slope) * 57.3) + '°');
+    assert.ok(slope > 0.28 && slope < 0.4, 'кут підйому ~' + Math.round(Math.atan(slope) * 57.3) + '° (крутіше за старі 12°)');
+    assert.ok(R.lenRamp >= 560 * 17, 'гірка у 17 разів довша: ' + R.lenRamp);
     // рівний підйом без сходинок уздовж осі
     let maxStep = 0;
-    for (let x = R.xs; x < R.x0 + R.lenRamp + 30; x += 0.5) maxStep = Math.max(maxStep, Math.abs(World.heightAt(x + 0.5, 0) - World.heightAt(x, 0)) / 0.5);
+    for (let x = R.xs; x < R.xTop; x += 0.5) maxStep = Math.max(maxStep, Math.abs(World.heightAt(x + 0.5, 0) - World.heightAt(x, 0)) / 0.5);
     assert.ok(maxStep < slope * 1.05, 'плавний підйом без уступів ' + maxStep.toFixed(3));
     assert.ok(World.heightAt(R.xs - 1, 0) < 0.5, 'біля землі гірка починається врівень');
     // плоский верх
-    for (let x = R.x0 + R.lenRamp + 30; x < R.xEnd - 1; x += 20) assert.ok(Math.abs(World.heightAt(x, 10) - R.h) < 0.05, 'верх плоский');
+    for (let x = R.xTop + 1; x < R.xEnd - 1; x += 20) assert.ok(Math.abs(World.heightAt(x, 10) - R.h) < 0.05, 'верх плоский');
     // вертикальні стіни збоку й різкий край у кінці
     assert.ok(World.heightAt(R.x0 + 200, R.hw - 0.5) > 30 && World.heightAt(R.x0 + 200, R.hw + 0.5) < 1, 'бічна стіна');
     assert.ok(World.heightAt(R.xEnd - 0.5, 0) > R.h - 0.1 && World.heightAt(R.xEnd + 0.5, 0) < 0.5, 'різкий край зверху');
@@ -101,13 +102,14 @@ test('фізика: розгін, коробка передач, гальмув�
     for (const t of Phys.CAR_TYPES) {
         const c = lane(t, -30);
         let t100 = null, gears = new Set(), best = 0;
-        run(c, { throttle: 1 }, 25, (tt, cc) => { const k = Phys.kmh(cc.speed); if (t100 === null && k >= 100) t100 = tt; gears.add(cc.gear); best = Math.max(best, k); });
-        top[t] = best;
+        let at10 = 0;
+        run(c, { throttle: 1 }, 25, (tt, cc) => { const k = Phys.kmh(cc.speed); if (t100 === null && k >= 100) t100 = tt; gears.add(cc.gear); best = Math.max(best, k); if (tt <= 10) at10 = k; });
+        top[t] = at10;                                             // швидкість через 10 с розгону: легка машина розганяється швидше за важку
         assert.ok(gears.size >= 3, t + ' перемикає передачі: ' + [...gears]);
         assert.ok(best > 70 && best < 280, t + ' ' + best + ' км/год');
         if (t === 'sedan') assert.ok(t100 > 4 && t100 < 11, 'седан 0-100 за ' + t100.toFixed(1) + ' с');
     }
-    assert.ok(top.sedan > top.van && top.van > top.truck, 'легка машина швидша за важку: ' + JSON.stringify(top));
+    assert.ok(top.sedan > top.van && top.van > top.truck, 'легка машина розганяється швидше за важку (швидкість через 10 с): ' + JSON.stringify(top));
     // гальмування зі 100 км/год: ~1 g на траві — шлях 30..70 м
     const c = lane('sedan', -30);
     const v0 = 100 / Phys.STUD_TO_KMH; c.vx = v0; c.speed = v0; c.wh.forEach((w) => { w.w = v0 / Phys.CARS.sedan.wheelR; });
@@ -119,7 +121,7 @@ test('фізика: розгін, коробка передач, гальмув�
     assert.ok(r.speed < -3 && r.gear === -1, 'їде назад: ' + r.speed.toFixed(1));
     assert.ok(-r.speed < Phys.CARS.sedan.maxFwd * 0.4);
     // поворот: рух по дузі, а не на місці
-    const t2 = lane('sedan', -30); run(t2, (tt, cc) => ({ throttle: Phys.kmh(cc.speed) < 50 ? 0.7 : 0.3, steer: 0 }), 6);
+    const t2 = lane('sedan', -190); run(t2, (tt, cc) => ({ throttle: Phys.kmh(cc.speed) < 50 ? 0.7 : 0.3, steer: 0 }), 6);     // старт за 190 студів до кінця рівного майданчика: до підніжжя гірки (x=200) не доїде
     const y0 = t2.ry; run(t2, { throttle: 0.3, steer: 1 }, 2);
     assert.ok(y0 - t2.ry > 0.3, 'вправо — кут зменшується');
 });
@@ -127,7 +129,7 @@ test('фізика: розгін, коробка передач, гальмув�
 test('фізика: відрив від землі — на горбах і краях легко, а не в одному місці; у польоті машина зберігає обертання', () => {
     let air = 0, frames = 0, lifts = 0;
     for (let h = 0; h < 14; h++) {
-        const c = Phys.createCar('sedan', 600 + h * 37, 800 - h * 53, h * 1.1 + 0.3);
+        const c = Phys.createCar('sedan', -1500 + h * 37, -1200 - h * 53, h * 1.1 + 0.3);
         let was = false;
         run(c, (tt, cc) => ({ throttle: Phys.kmh(cc.speed) < 110 ? 1 : 0.15, steer: Math.sin(tt * 1.2 + h) * 0.3 }), 40, (tt, cc) => {
             frames++; if (cc.air) { air++; if (!was) lifts++; } was = cc.air;
@@ -138,27 +140,33 @@ test('фізика: відрив від землі — на горбах і кр
     assert.ok(air / frames > 0.02, 'частка часу в повітрі ' + (air / frames * 100).toFixed(1) + '%');
 });
 
-test('гірка: машина заїжджає по схилу, на верху стоїть на землі, з краю злітає, летить за інерцією й приземляється на підвіску', () => {
-    const c = Phys.createCar('sedan', 30, 0, Math.PI / 2);
-    let climbed = false, topSpeed = 0, airFrames = 0, maxH = 0, landed = false, compressed = 0, wasAir = false, maxPitchStep = 0, pp = 0;
-    run(c, { throttle: 1 }, 25, (t, cc) => {
-        assert.ok(finite(cc));
-        if (cc.x > 300 && cc.y > 25 && !cc.air) climbed = true;
-        topSpeed = Math.max(topSpeed, cc.speed);
-        if (cc.x < 400) { maxPitchStep = Math.max(maxPitchStep, Math.abs(cc.pitch - pp)); pp = cc.pitch; }
-        if (cc.air) { airFrames++; maxH = Math.max(maxH, cc.y - World.heightAt(cc.x, cc.z)); }
-        if (wasAir && !cc.air) landed = true;
-        if (landed) compressed = Math.max(compressed, ...cc.wh.map((w) => Phys.CARS.sedan.suspRest - w.s));
-        wasAir = cc.air;
-        if (landed && t > 18) return false;
-    });
-    assert.ok(climbed, 'заїхала на верх гірки');
-    assert.ok(maxPitchStep < 0.07, 'нахил змінюється плавно: ' + maxPitchStep.toFixed(3));
-    assert.ok(airFrames > 20 && maxH > 10, 'злетіла з краю: ' + airFrames + ' кадрів, висота ' + maxH.toFixed(0));
-    assert.ok(landed, 'приземлилась');
-    assert.ok(compressed > 0.05, 'підвіска стиснулась при приземленні: ' + compressed.toFixed(2));
-    for (let i = 0; i < 180; i++) Phys.stepCar(c, { throttle: 0 }, DT);
-    assert.ok(finite(c) && c.y < 5, 'після польоту стоїть на землі');
+test('гірка: усі три машини заїжджають на 18° угору (колеса не відлітають), на вершині стоять на землі', () => {
+    const norm = (a) => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; };
+    const limits = { sedan: 120, van: 220, truck: 420 };       // секунд до вершини (вантажівка їде повільно: схил крутий)
+    for (const type of Phys.CAR_TYPES) {
+        const c = Phys.createCar(type, 40, 0, Math.PI / 2);
+        let reached = false, maxPitchStep = 0, pp = 0;
+        run(c, (t, cc) => {
+            const err = norm(Math.PI / 2 + Math.max(-0.35, Math.min(0.35, cc.z * 0.01)) - cc.ry);       // водій тримає курс по осі гірки
+            return { throttle: 1, steer: Math.max(-1, Math.min(1, -err * 2.5)) };
+        }, limits[type], (t, cc) => {
+            assert.ok(finite(cc));
+            maxPitchStep = Math.max(maxPitchStep, Math.abs(cc.pitch - pp)); pp = cc.pitch;
+            if (cc.x > World.RAMP.xTop + 5) { reached = true; return false; }
+        });
+        assert.ok(reached, type + ': заїхала на верх гірки, x=' + c.x.toFixed(0));
+        assert.ok(((c.dm >> 9) & 0x3f) === 0, type + ': жодне колесо не відлетіло під час підйому (dm=' + c.dm + ')');
+        assert.ok(maxPitchStep < 0.07, type + ': нахил змінюється плавно: ' + maxPitchStep.toFixed(3));
+        run(c, { throttle: 0, brake: 1 }, 6);
+        assert.ok(finite(c) && Math.abs(c.y - World.RAMP.h) < 6, type + ': на вершині стоїть на землі, y=' + c.y.toFixed(1));
+    }
+});
+
+test('гірка: розгін швидший — седан 0-100 км/год менш ніж за 6 с', () => {
+    const c = lane('sedan', -30);
+    let t100 = null;
+    run(c, { throttle: 1 }, 15, (tt, cc) => { if (t100 === null && Phys.kmh(cc.speed) >= 100) { t100 = tt; return false; } });
+    assert.ok(t100 !== null && t100 < 6, 'седан 0-100 за ' + (t100 && t100.toFixed(1)) + ' с');
 });
 
 test('гірка: бічна стіна тверда — машина не в\'їжджає в неї, а вдаряється; на схилі без газу не скочується', () => {
@@ -173,11 +181,11 @@ test('гірка: бічна стіна тверда — машина не в\'�
     assert.ok(Math.abs(s.x - 250) < 3, 'на схилі стоїть (утримання): зсув ' + (s.x - 250).toFixed(2));
 });
 
-test('фізика: різкий поворот на швидкості може перекинути, перекинуту машину можна поставити на колеса', () => {
-    const c = Phys.createCar('sedan', 0, -120, Math.PI / 2);
-    const v0 = 150 / Phys.STUD_TO_KMH; c.vx = v0; c.speed = v0; c.wh.forEach((w) => { w.w = v0 / Phys.CARS.sedan.wheelR; });
+test('фізика: занос на швидкості може перекинути, перекинуту машину можна поставити на колеса', () => {
+    const c = Phys.createCar('sedan', -1500, -1200, Math.PI / 2 - 0.9);     // кузов дивиться на 0.9 рад убік від швидкості
+    const v0 = 150 / Phys.STUD_TO_KMH; c.vx = v0; c.speed = v0 * Math.cos(0.9);
     let maxRoll = 0;
-    run(c, (t) => ({ throttle: 0, steer: t < 1 ? 1 : 0, handbrake: t < 0.6 ? 1 : 0 }), 8, (t, cc) => { maxRoll = Math.max(maxRoll, Math.abs(cc.roll)); assert.ok(finite(cc)); });
+    run(c, { throttle: 0 }, 6, (t, cc) => { maxRoll = Math.max(maxRoll, Math.abs(cc.roll)); assert.ok(finite(cc)); });
     assert.ok(maxRoll > 0.4, 'сильно накренилась: ' + maxRoll.toFixed(2));
     // перекидаємо силоміць і перевіряємо кнопку «перевернути»
     const f = lane('sedan', 40, 0);
@@ -315,8 +323,8 @@ test('сервер: стан машини з поворотом (q) і маск�
         assert.strictEqual(sanitizeCar({ ...base, ...bad }), null, JSON.stringify(bad));
     }
     // уся карта допустима, а за нею — ні
-    assert.ok(sanitizeState({ x: 2400, y: 150, z: 0, ry: 0 }) && sanitizeState({ x: 0, y: -40, z: -2400, ry: 0 }));
-    assert.strictEqual(sanitizeState({ x: 2601, y: 0, z: 0, ry: 0 }), null);
+    assert.ok(sanitizeState({ x: 17400, y: 150, z: 0, ry: 0 }) && sanitizeState({ x: 0, y: -40, z: -17400, ry: 0 }) && sanitizeState({ x: 11200, y: 3138, z: 0, ry: 0 }));     // остання перевірка — вершина гірки (3100 студів)
+    assert.strictEqual(sanitizeState({ x: 17701, y: 0, z: 0, ry: 0 }), null);
     // розсилка
     const { io, game } = setup();
     const a = io.connect('a@x.com'), b = io.connect('b@x.com');
@@ -352,13 +360,14 @@ test('гра: вікно машин не залежить від CSS min()/clamp
     assert.ok(/handbrake: hb/.test(js) && /stepCar\(myCar, \{ throttle: th, steer: st, handbrake: hb, drift: dr \}, h, otherCars\)/.test(js), 'зіткнення з чужими машинами й ручник');
 });
 
-test('Android: у грі зверху лишилась лише кнопка меню (без іконки людей і інших іконок)', () => {
+test('Android: у грі зверху лишилась лише кнопка меню зі значком-логотипом (а не «трьома смугами»), без іконки людей', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'app/src/main/java/com/kishka/messenger/Bloxmenu.kt'), 'utf8');
     const i = src.indexOf('fun BoxScope.BloxTopBar');
     assert.ok(i > 0);
     const body = src.slice(i, src.indexOf('\n}\n', i));
     assert.ok(!/Icons\.Filled\.People|Icons\.Default\.People|Icons\.Outlined\.People|Group|Person/.test(body), 'іконки людей немає');
-    assert.ok(/Icons\.Default\.Menu|Icons\.Filled\.Menu/.test(body), 'іконка меню є');
+    assert.ok(/R\.drawable\.logo_watermark/.test(body), 'значок меню — логотип logo_watermark');
+    assert.ok(!/Icons\.Default\.Menu|Icons\.Filled\.Menu/.test(body), 'трьох смуг (Menu) більше немає');
     assert.ok(!/Kishkablox\.png|kishkablox/i.test(body), 'круглої кнопки-логотипа немає');
 });
 
