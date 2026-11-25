@@ -18,6 +18,8 @@
     var JOIN_TIMEOUT_MS = 12000;
     var JOIN_ATTEMPTS = 4;
     var AVATAR = CFG.avatar || 'Assets/Kishkablox.png';
+    var MENU_ICON = CFG.menuIcon || 'Assets/logo_watermark.png';       // значок кнопки меню — логотип Kishka (а не «три смуги»)
+    var RPC_EVENTS = { blox_chat: 1, blox_door_code: 1, blox_nuke_launch: 1, blox_game_respawn: 1 };      // що гра може просити в сервера
 
     // ------------------------------------------------------------------ мова й написи (uk / ru / en)
     function pickLang() {
@@ -93,10 +95,10 @@
     var ui = null;
 
     function game() { return window.KishkaGame || null; }
-    function toGame(name, arg) {
+    function toGame(name, arg, arg2) {
         var g = game();
         if (!g || typeof g[name] !== 'function') return;
-        try { g[name](arg); } catch (e) { if (window.console) console.error('[bridge] ' + name + ': ' + (e && e.message)); }
+        try { g[name](arg, arg2); } catch (e) { if (window.console) console.error('[bridge] ' + name + ': ' + (e && e.message)); }
     }
     function dbg(text) { if (CFG.debug && window.console) console.log('[bridge] ' + text); }
 
@@ -125,8 +127,11 @@
         root.appendChild(load);
 
         // кругла кнопка меню з логотипом: зліва вгорі
-        var btn = el('button', 'position:fixed;left:calc(env(safe-area-inset-left,0px) + 12px);top:calc(env(safe-area-inset-top,0px) + 12px);width:46px;height:46px;border-radius:50%;border:2px solid rgba(255,255,255,.75);background:rgba(20,22,28,.55) center/cover no-repeat;cursor:pointer;pointer-events:auto;z-index:55;padding:0;display:none;');
-        btn.style.backgroundImage = 'url("' + AVATAR + '")';
+        var btn = el('button', 'position:fixed;left:calc(env(safe-area-inset-left,0px) + 12px);top:calc(env(safe-area-inset-top,0px) + 10px);width:46px;height:46px;border-radius:50%;border:2px solid rgba(255,255,255,.75);background:rgba(20,22,28,.85) center/72% no-repeat;cursor:pointer;pointer-events:auto;z-index:55;padding:0;display:none;');
+        btn.style.backgroundImage = 'url("' + MENU_ICON + '")';
+        if (document.documentElement && document.documentElement.style && document.documentElement.style.setProperty) {
+            document.documentElement.style.setProperty('--topbtn', '46px');      // чат і кнопка машин у game.html стають поруч із цією кнопкою
+        }
         btn.setAttribute('aria-label', t('menu'));
         root.appendChild(btn);
 
@@ -336,6 +341,8 @@
         socket.on('blox_game_tick', function (arr) { toGame('tick', arr); });
         socket.on('blox_game_cars', function (data) { toGame('cars', data); });
         socket.on('blox_car_tick', function (arr) { toGame('carTick', arr); });
+        // нові події гри: чат, двері коробки на вершині, ядерна подія
+        ['blox_chat_msg', 'blox_door', 'blox_nuke'].forEach(function (ev) { socket.on(ev, function (data) { toGame('serverEvent', ev, data); }); });
         socket.on('blox_game_kicked', function (data) {
             if (leaving) return;
             joined = false;
@@ -386,6 +393,17 @@
         },
         carRemove: function () {
             if (socket && joined) socket.emit('blox_car_remove');
+        },
+        // Запит до сервера від гри (чат, код дверей, запуск, відродження): відповідь повертається в KishkaGame.rpcResult(id, res)
+        rpc: function (event, json, id) {
+            var done = false;
+            function finish(res) { if (done) return; done = true; toGame('rpcResult', id, res); }
+            if (!RPC_EVENTS[event] || !socket || !joined) { finish({ success: false, code: 'offline' }); return; }
+            var payload;
+            try { payload = JSON.parse(json); } catch (e) { payload = {}; }
+            if (event === 'blox_game_respawn') socket.emit(event, function (res) { finish(res); });
+            else socket.emit(event, payload, function (res) { finish(res); });
+            setTimeout(function () { finish({ success: false, code: 'timeout' }); }, 7000);
         }
     };
 
