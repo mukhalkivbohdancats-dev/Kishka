@@ -100,7 +100,7 @@ test('spawn: частота, відстань, координати, гра бе
 
     const env = await twoPlayers({ opts: { logger: rec.logger } });
     env.clock.t += 5000;
-    assert.deepStrictEqual(await env.a.call('blox_car_spawn', car({ x: 250, z: 250 })), { success: false, code: 'too_far' });
+    assert.deepStrictEqual(await env.a.call('blox_car_spawn', car({ x: 450, z: 450 })), { success: false, code: 'too_far' });
     assert.deepStrictEqual(await env.a.call('blox_car_spawn', car({ x: NaN })), { success: false, code: 'bad_payload' });
     assert.deepStrictEqual(await env.a.call('blox_car_spawn', car({ y: 'високо' })), { success: false, code: 'bad_payload' });
     assert.deepStrictEqual(await env.a.call('blox_car_spawn', null), { success: false, code: 'bad_payload' });
@@ -158,7 +158,7 @@ test('перевірка чисел: sanitizeState / sanitizeCar', () => {
     const ok = { x: 1, y: 2, z: 3, ry: 4, a: 1, d: 0 };
     assert.ok(sanitizeState(ok));
     for (const bad of [
-        { ...ok, x: Infinity }, { ...ok, y: NaN }, { ...ok, z: '3' }, { ...ok, x: 2601 }, { ...ok, y: 461 }, { ...ok, a: 3 }, { ...ok, d: 2 },
+        { ...ok, x: Infinity }, { ...ok, y: NaN }, { ...ok, z: '3' }, { ...ok, x: 17701 }, { ...ok, y: 3901 }, { ...ok, a: 3 }, { ...ok, d: 2 },
         { ...ok, c: { t: 'sedan', x: 1, y: 1, z: 1, ry: 0, s: 1 } },
         { ...ok, c: { t: 'boat', x: 1, y: 1, z: 1, ry: 0, s: 1, st: 0 } },
         { ...ok, c: { t: 'sedan', x: 1, y: 1, z: 1, ry: 0, s: 281, st: 0 } },
