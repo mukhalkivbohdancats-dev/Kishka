@@ -1,0 +1,14 @@
+# Ключі підпису та паролі НІКОЛИ не комітимо
+*.jks
+*.keystore
+keystore.properties
+local.properties
+
+# Збірка
+build/
+.gradle/
+.idea/
+*.iml
+_site/
+node_modules/
+chat.db
