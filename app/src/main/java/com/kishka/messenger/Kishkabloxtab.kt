@@ -895,19 +895,18 @@ private fun BloxLoginScreen(lang: String, displayName: String, accountExists: Bo
                     }
                 }
 
-                // Якщо в акаунта Kishka уже є KishkaBlox, створювати другий не можна — перемикача немає
-                if (!accountExists) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    TextButton(onClick = {
-                        registerMode = !registerMode
-                        error = ""
-                    }) {
-                        Text(
-                            if (registerMode) b("to_login") else b("to_register"),
-                            color = ViberPurple,
-                            textAlign = TextAlign.Center
-                        )
-                    }
+                // Безліміт: акаунтів KishkaBlox можна створювати скільки завгодно, тому перемикач «Створити / Увійти» є завжди
+                Spacer(modifier = Modifier.height(10.dp))
+                TextButton(onClick = {
+                    registerMode = !registerMode
+                    if (registerMode) nickInput = "" else if (accountExists) nickInput = BloxAuth.nick
+                    error = ""
+                }) {
+                    Text(
+                        if (registerMode) b("to_login") else b("to_register"),
+                        color = ViberPurple,
+                        textAlign = TextAlign.Center
+                    )
                 }
                 Spacer(modifier = Modifier.height(16.dp))
             }
