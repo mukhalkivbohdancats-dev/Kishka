@@ -205,6 +205,12 @@ db.serialize(() => {
         name TEXT NOT NULL,
         avatar_url TEXT
     )`);
+    // Числовий ID користувача (для посилань .../ID/153663). Колонка додається до вже наявної таблиці; помилку «вже є» ігноруємо.
+    db.run(`ALTER TABLE users ADD COLUMN uid INTEGER`, () => {});
+    db.run(`CREATE UNIQUE INDEX IF NOT EXISTS users_uid_idx ON users (uid)`, () => {
+        // Усім уже зареєстрованим видаємо ID (по черзі), навіть якщо вони давно в застосунку й ще жодного разу його не просили
+        setTimeout(() => backfillUids().catch((e) => console.error('ID для наявних акаунтів:', e && e.message)), 2000);
+    });
 
     db.run(`CREATE TABLE IF NOT EXISTS contacts (
         owner_email TEXT NOT NULL,
@@ -629,6 +635,64 @@ function emitCallEnded(originSocket, email, payload) {
     else io.to(email).emit(`call_ended_${email}`, payload);
 }
 
+
+// ====================================================================== ЧИСЛОВІ ID КОРИСТУВАЧІВ
+// Кожен акаунт має свій ID: 100000, 100001, 100002 ... — видаються ПО ЧЕРЗІ й ніколи не змінюються. ID автоматично створюється
+// навіть для тих, хто зареєструвався раніше (їм видається при заході в застосунок або під час фонового заповнення при старті сервера).
+// Посилання на профіль: <сайт>/ID/<число>. Адреса пошти за ID НЕ віддається нікому: лише ім'я й аватарка.
+const UID_START = 100000;
+let uidChain = Promise.resolve();
+function dbGetP(sql, params) { return new Promise((res, rej) => db.get(sql, params || [], (e, r) => (e ? rej(e) : res(r)))); }
+function dbRunP(sql, params) { return new Promise((res, rej) => db.run(sql, params || [], function (e) { return e ? rej(e) : res(this); })); }
+function dbAllP(sql, params) { return new Promise((res, rej) => db.all(sql, params || [], (e, r) => (e ? rej(e) : res(r || [])))); }
+
+// Повертає ID акаунта (створює, якщо ще немає); null — якщо такого користувача нема
+function ensureUid(email) {
+    const job = uidChain.then(async () => {
+        const row = await dbGetP('SELECT uid FROM users WHERE email = ?', [email]);
+        if (!row) return null;
+        if (row.uid) return Number(row.uid);
+        for (let attempt = 0; attempt < 6; attempt++) {
+            const m = await dbGetP('SELECT COALESCE(MAX(uid), ' + (UID_START - 1) + ') AS m FROM users', []);
+            const next = Number(m && m.m ? m.m : UID_START - 1) + 1;
+            try { await dbRunP('UPDATE users SET uid = ? WHERE email = ? AND uid IS NULL', [next, email]); } catch (e) { continue; }   // ID зайняв хтось інший — пробуємо наступний
+            const r2 = await dbGetP('SELECT uid FROM users WHERE email = ?', [email]);
+            if (r2 && r2.uid) return Number(r2.uid);
+        }
+        return null;
+    });
+    uidChain = job.catch(() => {});
+    return job;
+}
+async function backfillUids() {
+    const rows = await dbAllP('SELECT email FROM users WHERE uid IS NULL ORDER BY email', []);
+    for (const r of rows) await ensureUid(r.email);
+    if (rows.length) console.log('Видано ID наявним акаунтам: ' + rows.length);
+}
+function publicProfileByUid(uid) {
+    return dbGetP('SELECT uid, name, avatar_url AS "avatarUrl" FROM users WHERE uid = ?', [uid]).then((r) => (r ? { uid: Number(r.uid), name: r.name, avatarUrl: r.avatarUrl || null } : null));
+}
+// Публічна сторінка профілю для сайту посилань (ім'я й аватарка; без пошти). Невеликий ліміт запитів, щоб не перебирали всі ID підряд.
+const uidHits = new Map();
+app.get('/api/user/:uid', (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Cache-Control', 'public, max-age=60');
+    const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+    const now = Date.now();
+    const hits = (uidHits.get(ip) || []).filter((t) => now - t < 60000);
+    if (hits.length >= 40) return res.status(429).json({ ok: false, code: 'rate' });
+    hits.push(now); uidHits.set(ip, hits);
+    if (uidHits.size > 5000) uidHits.clear();
+    const uid = /^\d{1,12}$/.test(req.params.uid) ? Number(req.params.uid) : NaN;
+    if (!Number.isFinite(uid)) return res.status(400).json({ ok: false, code: 'invalid' });
+    publicProfileByUid(uid).then((p) => {
+        if (!p) return res.status(404).json({ ok: false, code: 'not_found' });
+        let avatar = p.avatarUrl;
+        if (avatar && avatar.startsWith('/')) avatar = (process.env.PUBLIC_URL || (req.protocol + '://' + req.get('host'))).replace(/\/+$/, '') + avatar;
+        res.json({ ok: true, uid: p.uid, name: p.name, avatarUrl: avatar || null });
+    }).catch(() => res.status(500).json({ ok: false, code: 'error' }));
+});
+
 io.on('connection', (socket) => {
     console.log('Клієнт підключився:', socket.id);
 
@@ -651,6 +715,7 @@ io.on('connection', (socket) => {
                 [cleanEmail, cleanName, cleanAvatar],
                 (err) => {
                     if (err) return console.error('Помилка збереження профілю:', err.message);
+                    ensureUid(cleanEmail).catch(() => {});
                     // Ім'я чи аватарка змінились — контакти одразу бачать нове
                     const changed = old && (old.name !== cleanName || (cleanAvatar && old.avatarUrl !== cleanAvatar));
                     if (changed) {
@@ -677,14 +742,65 @@ io.on('connection', (socket) => {
         db.get("SELECT email, name, avatar_url as \"avatarUrl\" FROM users WHERE email = ?", [cleanEmail], (err, row) => {
             if (err) return safeCallback(null);
             if (row) {
-                safeCallback(row);
+                ensureUid(cleanEmail).then((uid) => safeCallback(Object.assign({}, row, { uid: uid || null }))).catch(() => safeCallback(row));
             } else {
                 const defaultName = cleanEmail.split('@')[0];
                 db.run("INSERT OR IGNORE INTO users (email, name, avatar_url) VALUES (?, ?, NULL)", [cleanEmail, defaultName], () => {
-                    safeCallback({ email: cleanEmail, name: defaultName, avatarUrl: null });
+                    ensureUid(cleanEmail).then((uid) => safeCallback({ email: cleanEmail, name: defaultName, avatarUrl: null, uid: uid || null }))
+                        .catch(() => safeCallback({ email: cleanEmail, name: defaultName, avatarUrl: null, uid: null }));
                 });
             }
         });
+    });
+
+    // Мій числовий ID (створюється автоматично, навіть якщо акаунт давно зареєстрований)
+    socket.on('get_my_uid', (email, callback) => {
+        const safeCallback = typeof callback === 'function' ? callback : () => {};
+        const clean = (typeof email === 'string' ? email : '').trim().toLowerCase();
+        if (!clean || !clean.includes('@')) return safeCallback({ success: false, code: 'invalid' });
+        ensureUid(clean).then((uid) => safeCallback(uid ? { success: true, uid } : { success: false, code: 'not_found' }))
+            .catch(() => safeCallback({ success: false, code: 'error' }));
+    });
+
+    // Профіль за ID (відкрито посилання): ім'я, аватарка й чи вже в моїх контактах. Пошту не віддаємо.
+    socket.on('get_user_by_uid', async (data, callback) => {
+        const safeCallback = typeof callback === 'function' ? callback : () => {};
+        try {
+            const uid = Number(data && typeof data === 'object' ? data.uid : data);
+            if (!Number.isFinite(uid) || uid < 1) return safeCallback({ success: false, code: 'invalid' });
+            const row = await dbGetP('SELECT email, uid, name, avatar_url AS "avatarUrl" FROM users WHERE uid = ?', [uid]);
+            if (!row) return safeCallback({ success: false, code: 'not_found' });
+            const myEmail = typeof (data && data.myEmail) === 'string' ? data.myEmail.trim().toLowerCase() : (socket.userEmail || '');
+            let isContact = false, isMe = false;
+            if (myEmail) {
+                isMe = myEmail === row.email;
+                const c = await dbGetP('SELECT 1 AS x FROM contacts WHERE owner_email = ? AND contact_email = ?', [myEmail, row.email]);
+                isContact = !!c;
+            }
+            // Пошту віддаємо лише тому, хто вже має цей контакт (йому вона й так відома); решті — тільки ім'я й аватарка
+            safeCallback({ success: true, uid: Number(row.uid), name: row.name, avatarUrl: row.avatarUrl || null, isContact, isMe, email: isContact ? row.email : null });
+        } catch (e) { safeCallback({ success: false, code: 'error' }); }
+    });
+
+    // Додати в контакти того, чий ID у посиланні (пошта лишається на сервері)
+    socket.on('add_contact_by_uid', async (data, callback) => {
+        const safeCallback = typeof callback === 'function' ? callback : () => {};
+        try {
+            const cleanMy = (typeof (data && data.myEmail) === 'string' ? data.myEmail : '').trim().toLowerCase();
+            const uid = Number(data && data.uid);
+            if (!cleanMy || !Number.isFinite(uid)) return safeCallback({ success: false, code: 'invalid' });
+            socket.userEmail = cleanMy; userSockets.set(cleanMy, socket.id); socket.join(cleanMy);
+            const target = await dbGetP('SELECT email, name, avatar_url AS "avatarUrl" FROM users WHERE uid = ?', [uid]);
+            if (!target) return safeCallback({ success: false, code: 'not_found' });
+            if (target.email === cleanMy) return safeCallback({ success: false, code: 'invalid' });
+            await dbRunP('DELETE FROM contact_removed WHERE owner_email = ? AND contact_email = ?', [cleanMy, target.email]);
+            await dbRunP('DELETE FROM contact_removed WHERE owner_email = ? AND contact_email = ?', [target.email, cleanMy]);
+            await dbRunP('INSERT OR IGNORE INTO contacts (owner_email, contact_email) VALUES (?, ?)', [cleanMy, target.email]);
+            await dbRunP('INSERT OR IGNORE INTO contacts (owner_email, contact_email) VALUES (?, ?)', [target.email, cleanMy]);
+            io.to(cleanMy).emit('contact_updated');
+            io.to(target.email).emit('contact_updated');
+            safeCallback({ success: true, user: { email: target.email, name: target.name, avatarUrl: target.avatarUrl, uid } });
+        } catch (e) { safeCallback({ success: false, code: 'error' }); }
     });
 
     // Додати контакт можна лише того, хто вже зареєстрований у Kishka (хоча б раз входив у застосунок)
