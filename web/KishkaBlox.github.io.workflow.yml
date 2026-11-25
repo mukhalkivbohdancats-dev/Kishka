@@ -1,7 +1,10 @@
-# НЕОБОВ'ЯЗКОВО. Для адреси https://kishkablox.github.io (окремий репозиторій KishkaBlox.github.io в організації/акаунті KishkaBlox).
-# Покладіть цей файл у той репозиторій як .github/workflows/pages.yml (див. інструкцію). Він забирає код гри з репозиторію Kishka
-# (має бути публічним) і публікує сайт. Оновлення: Actions -> «Сайт KishkaBlox» -> Run workflow (або само щодоби о 03:00 UTC).
-name: Сайт KishkaBlox (GitHub Pages)
+# Покладіть цей файл у репозиторій KishkaBlox.github.io як .github/workflows/pages.yml.
+# Він забирає код з основного репозиторію Kishka (має бути публічним) і публікує ОБИДВА сайти одним розгортанням:
+#   https://kishkablox.github.io/                    — KishkaBlox (вхід і гра в браузері)
+#   https://kishkablox.github.io/messenger/          — Kishka Messenger (сторінка завантаження)
+#   https://kishkablox.github.io/messenger/ID/153663 — посилання на профіль: показує ім'я й аватарку та відкриває застосунок Android
+# Оновлення: Actions -> «Сайти KishkaBlox і Kishka Messenger» -> Run workflow (або само щодоби о 03:00 UTC, і при кожному push).
+name: Сайти KishkaBlox і Kishka Messenger (GitHub Pages)
 
 on:
   workflow_dispatch:
@@ -33,7 +36,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Зібрати сайт
+      - name: Зібрати обидва сайти (KishkaBlox + Kishka Messenger)
         run: node src/web/build-site.js --src src --out _site
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
