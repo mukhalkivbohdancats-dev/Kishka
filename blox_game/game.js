@@ -32,6 +32,8 @@
 
     var World = window.KishkaWorld, Phys = window.KishkaPhysics, Cam = window.KishkaCamera;
     var Models = window.KishkaModels, I18 = window.KishkaI18n;
+    var Nuke = window.KishkaNuke, Structures = window.KishkaStructures, Features = window.KishkaFeatures;
+    var Feat = null;                      // нові можливості (features.js): чат, двері, HP, ядерна подія
 
     // ---------------------------------------------------------------- зв'язок із застосунком
     function nativeFn(name) {
@@ -42,7 +44,7 @@
     var N = {
         ready: nativeFn('ready'), started: nativeFn('started'), fail: nativeFn('fail'), failReason: nativeFn('failReason'),
         log: nativeFn('log'), sendState: nativeFn('sendState'), oldState: nativeFn('state'),
-        carSpawn: nativeFn('carSpawn'), carRemove: nativeFn('carRemove')
+        carSpawn: nativeFn('carSpawn'), carRemove: nativeFn('carRemove'), rpc: nativeFn('rpc')
     };
     function call(fn) {
         if (!fn) return;
@@ -191,7 +193,7 @@
         '#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n' +
         'varying vec3 vN;\nvarying vec3 vW;\nvarying vec3 vC;\n' +
         'uniform vec3 uTint;\nuniform vec3 uLight;\nuniform vec3 uCam;\nuniform vec3 uFog;\nuniform vec2 uFogR;\n' +
-        'uniform float uAlpha;\nuniform float uSpec;\nuniform float uCheck;\nuniform float uTile;\n' +
+        'uniform float uAlpha;\nuniform float uSpec;\nuniform float uCheck;\nuniform float uTile;\nuniform float uWin;\nuniform float uWinY;\nuniform float uUnlit;\n' +
         'void main() {\n' +
         '  vec3 n = normalize(vN);\n' +
         '  vec3 L = normalize(uLight);\n' +
@@ -203,9 +205,19 @@
         '    float fd = 1.0 - smoothstep(120.0, 280.0, length(vW - uCam));\n' +
         '    c *= 1.0 + (k - 0.5) * 0.17 * fd;\n' +
         '  }\n' +
+        '  if (uWin > 0.5 && abs(n.y) < 0.5 && vW.y > uWinY) {\n' +
+        '    float hz = abs(n.x) > abs(n.z) ? vW.z : vW.x;\n' +
+        '    vec2 cell = vec2(hz / 7.0, vW.y / 12.0);\n' +
+        '    vec2 f = fract(cell);\n' +
+        '    float win = step(0.2, f.x) * step(f.x, 0.8) * step(0.28, f.y) * step(f.y, 0.78);\n' +
+        '    float rnd = fract(sin(dot(floor(cell), vec2(12.9898, 78.233))) * 43758.5453);\n' +
+        '    vec3 glass = mix(vec3(0.10, 0.17, 0.27), vec3(0.98, 0.84, 0.45), step(0.8, rnd));\n' +
+        '    c = mix(c, glass, win * 0.92);\n' +
+        '  }\n' +
         '  vec3 amb = mix(vec3(0.36, 0.34, 0.32), vec3(0.64, 0.72, 0.86), hemi) * 0.8;\n' +
         '  vec3 sun = vec3(1.0, 0.95, 0.86) * (0.72 * d);\n' +
         '  vec3 lit = c * (amb + sun);\n' +
+        '  if (uUnlit > 0.5) lit = c;\n' +
         '  vec3 V = normalize(uCam - vW);\n' +
         '  vec3 H = normalize(L + V);\n' +
         '  lit += vec3(1.0, 0.97, 0.9) * pow(max(dot(n, H), 0.0), 48.0) * uSpec;\n' +
@@ -221,6 +233,10 @@
 
     var FOG = [0.72, 0.84, 0.96];
     var SKY_TOP = [0.32, 0.58, 0.92];
+    var FOG0 = FOG.slice(), SKY0 = SKY_TOP.slice(), FOG_ASH = [0.4, 0.34, 0.3], SKY_ASH = [0.22, 0.18, 0.17];
+    // k = 0 — звичайне небо, k = 1 — небо й туман після ядерного вибуху
+    function setBurn(k) { for (var i = 0; i < 3; i++) { FOG[i] = FOG0[i] + (FOG_ASH[i] - FOG0[i]) * k; SKY_TOP[i] = SKY0[i] + (SKY_ASH[i] - SKY0[i]) * k; } }
+    var worldTint = null;                 // колір рельєфу й гірки (темніє після вибуху)
     var rendererSeq = 0;
 
     function createRenderer(canvas, o) {
@@ -250,7 +266,7 @@
         }
         var prog = program(VS, FS, ['aPos', 'aNrm', 'aCol']);
         var loc = {};
-        ['uVP', 'uM', 'uN', 'uTint', 'uLight', 'uCam', 'uFog', 'uFogR', 'uAlpha', 'uSpec', 'uCheck', 'uTile', 'uCr', 'uCr2', 'uCrOn'].forEach(function (n) { loc[n] = gl.getUniformLocation(prog, n); });
+        ['uVP', 'uM', 'uN', 'uTint', 'uLight', 'uCam', 'uFog', 'uFogR', 'uAlpha', 'uSpec', 'uCheck', 'uTile', 'uWin', 'uWinY', 'uUnlit', 'uCr', 'uCr2', 'uCrOn'].forEach(function (n) { loc[n] = gl.getUniformLocation(prog, n); });
         var skyProg = program(SKY_VS, SKY_FS, ['aP']);
         var skyLoc = { uHor: gl.getUniformLocation(skyProg, 'uHor'), uTop: gl.getUniformLocation(skyProg, 'uTop'), uHorizon: gl.getUniformLocation(skyProg, 'uHorizon') };
         var skyBuf = gl.createBuffer();
@@ -307,6 +323,9 @@
             gl.uniform2f(loc.uFogR, o.fogNear || 160, o.fogFar || 420);
             cur = null;
             gl.uniform1f(loc.uCheck, 0);
+            gl.uniform1f(loc.uWin, 0);
+            gl.uniform1f(loc.uWinY, 0);
+            gl.uniform1f(loc.uUnlit, 0);
             gl.uniform1f(loc.uTile, World.CFG.tile || 8);
             gl.disable(gl.BLEND);
             gl.depthMask(true);
@@ -317,6 +336,12 @@
             gl.uniform1f(loc.uCheck, on ? 1 : 0);
             if (on) gl.uniform1f(loc.uTile, tile || World.CFG.tile || 8);
         }
+        // Вікна будинків малює шейдер на вертикальних гранях вище висоти y0
+        function windows(on, y0) { gl.uniform1f(loc.uWin, on ? 1 : 0); gl.uniform1f(loc.uWinY, y0 || 0); }
+        // Без освітлення (вогонь, спалах)
+        function unlit(on) { gl.uniform1f(loc.uUnlit, on ? 1 : 0); }
+        // Туман: (n, f) — свій діапазон; (0, 0) — повернути стандартний
+        function fogRange(n, f) { if (!n && !f) gl.uniform2f(loc.uFogR, o.fogNear || 160, o.fogFar || 420); else gl.uniform2f(loc.uFogR, n, f); }
         // Звільняє GPU-буфери геометрії (для шматків рельєфу, які вже далеко)
         function release(geo) {
             var m = geo.__gl && geo.__gl[id];
@@ -375,7 +400,7 @@
         }
         function crushOff() { gl.uniform1f(loc.uCrOn, 0); }
 
-        return { gl: gl, id: id, mesh: mesh, begin: begin, sky: sky, draw: draw, blend: blend, offset: offset, checker: checker, release: release, crush: crush, crushOff: crushOff };
+        return { gl: gl, id: id, mesh: mesh, begin: begin, sky: sky, draw: draw, blend: blend, offset: offset, checker: checker, windows: windows, unlit: unlit, fogRange: fogRange, release: release, crush: crush, crushOff: crushOff };
     }
 
     // ---------------------------------------------------------------- стан гри
@@ -535,7 +560,7 @@
         }
         return partM;
     }
-    var darkTint = [1, 1, 1];
+    var darkTint = [1, 1, 1], BURNT_TINT = [0.16, 0.14, 0.13];
 
     var wOff = [0, 0, 0];
     function drawCarOpaque(r, c, tint) {
@@ -547,6 +572,7 @@
         var dent = c.dent || 0;
         var tn = tint;
         if (dent > 0.04) { var k = 1 - 0.3 * Math.min(1, dent); darkTint[0] = k; darkTint[1] = k; darkTint[2] = k * 0.98; tn = darkTint; }
+        if (c.burnt) tn = BURNT_TINT;                                // згоріла від ядерного вибуху: чорна
         var cr = c.cr, crOn = Phys.crushActive(cr);                 // деформація кузова: шейдер зминає кузов і всі прикріплені деталі однаково
         if (crOn) r.crush(cr, def);
         r.draw(mdl.opaqueMesh, carBase, tn, 1, 0.35);
@@ -702,7 +728,7 @@
                             if (d < bestD) { bestD = d; bestMissing = [ci, cj, lod]; }
                             if (!c) continue;
                         }
-                        r.draw(r.mesh(c.geo), mat, null, 1, 0);
+                        r.draw(r.mesh(c.geo), mat, worldTint, 1, 0);
                         drawn++;
                     }
                 }
@@ -754,6 +780,7 @@
         R.discMesh = R.mesh(discGeo);
         R.rampTop = R.mesh(rampGeo.top);
         R.rampWalls = R.mesh(rampGeo.walls);
+        if (Feat) Feat.buildMeshes(R);
         tstream.preload(0, 0);              // шматки рельєфу навколо майданчика готові ще до першого кадру
     }
 
@@ -869,7 +896,7 @@
             if (!e || typeof e.id !== 'number' || CAR_TYPES.indexOf(e.type) < 0) continue;
             if (e.id === myId) {
                 seen.me = true;
-                if (pendingSpawn) continue;                              // ще чекаємо відповідь на мій spawn
+                if (pendingSpawn || (myCar && myCar.unreg)) continue;    // ще чекаємо відповідь на мій spawn
                 if (!myCar || myCar.cid !== e.cid) {
                     // Сервер тримає іншу мою машину (повторне підключення, інший пристрій): беремо її
                     var wasDriving = driving;
@@ -889,7 +916,7 @@
             }
         }
         for (var id in remoteCars) if (!seen[id]) delete remoteCars[id];
-        if (myCar && !seen.me && !pendingSpawn) removeMyCarLocal();      // сервер прибрав мою машину
+        if (myCar && !seen.me && !pendingSpawn && !myCar.unreg) removeMyCarLocal();      // сервер прибрав мою машину (але не ту, яку ще реєструємо через слабкий інтернет)
     }
 
     function begin(data, isResync) {
@@ -918,6 +945,7 @@
         }
         applyCars(data.cars || []);
         started = true;
+        if (Feat) Feat.onJoin(data);
         updateCarAct();
     }
 
@@ -1022,6 +1050,7 @@
             var st = (input.right || k.ArrowRight || k.KeyD ? 1 : 0) - (input.left || k.ArrowLeft || k.KeyA ? 1 : 0);
             var hb = k.Space ? 1 : 0;                                   // пробіл — ручник (блокує задні колеса)
             var dr = (input.hand || k.KeyP) ? 1 : 0;                    // P (кнопка «P» або клавіша) — дріфт
+            if (Feat && Feat.inputLocked()) { th = 0; st = 0; hb = 0; dr = 0; }       // анімація вибуху / падіння після смерті
             Phys.stepMany(dt, function (h) { Phys.stepCar(myCar, { throttle: th, steer: st, handbrake: hb, drift: dr }, h, otherCars); });
             walker.x = myCar.x; walker.y = myCar.y; walker.z = myCar.z; walker.ry = myCar.ry;
             walker.a = 0; walker.speed = 0;
@@ -1030,6 +1059,7 @@
         }
         var dir = currentMoveDir();
         var jump = input.jump || k.Space;
+        if (Feat && Feat.inputLocked()) { dir = { mx: 0, mz: 0, mag: 0 }; jump = false; }
         Phys.stepMany(dt, function (h) {
             Phys.stepWalker(walker, { mx: dir.mx * dir.mag, mz: dir.mz * dir.mag, jump: jump }, h, walkCars());
         });
@@ -1054,6 +1084,7 @@
         Phys.stepDebris(dt);
         if (!myCar) return;
         var ev = myCar.events;
+        if (Feat) Feat.onCarEvents(ev);
         for (var i = 0; i < ev.length; i++) {
             var e = ev[i];
             var dv = e.dv || e.v || 0;
@@ -1077,6 +1108,7 @@
         sinceCarBeat += dt * 1000;
         if (sendTimer < SEND_EVERY_MS) return;
         sendTimer = 0;
+        if (Feat && Feat.isDead()) return;
         var r2 = function (v) { return Math.round(v * 100) / 100; };
         var o = { x: r2(walker.x), y: r2(walker.y), z: r2(walker.z), ry: r2(walker.ry), a: driving ? 0 : walker.a, d: driving ? 1 : 0 };
         var key = o.x + ',' + o.y + ',' + o.z + ',' + o.ry + ',' + o.a + ',' + o.d;
@@ -1151,6 +1183,17 @@
             Cam.followYaw(cam, myCar.ry + (myCar.speed >= 0 ? Math.PI : 0), dt, 1.3);
         }
         Cam.eye(cam, camTarget, World.heightAt, eye);
+        var oc = Feat ? Feat.cameraOverride() : null;
+        if (oc) {                                                    // кінематографічна камера ядерної анімації
+            eye.x = oc.eye[0]; eye.y = oc.eye[1]; eye.z = oc.eye[2]; eye.dist = 999;
+            camTarget.x = oc.at[0]; camTarget.y = oc.at[1]; camTarget.z = oc.at[2];
+            tx = oc.at[0]; ty = oc.at[1]; tz = oc.at[2];
+            shake = 0;
+            M.lookAt(V, eye.x, eye.y, eye.z, tx, ty, tz);
+            M.perspective(P, oc.fov, W / H, 0.4, oc.far);
+            M.mul(VP, P, V);
+            return;
+        }
         if (shake > 0.01) {
             var t = nowMs() * 0.05;
             eye.x += Math.sin(t * 1.7) * shake * 0.5; eye.y += Math.cos(t * 2.3) * shake * 0.4; eye.z += Math.sin(t * 1.3) * shake * 0.5;
@@ -1176,15 +1219,16 @@
         R.checker(true, World.CFG.tile);
         tstream.draw(R, eye.x, eye.z, fx, fz, TIER_CFG.fogFar + 160);
         R.checker(true, World.CFG.rampTile);
-        R.draw(R.rampTop, M.ident(stk), null, 1, 0);
+        R.draw(R.rampTop, M.ident(stk), worldTint, 1, 0);
         R.checker(false);
-        R.draw(R.rampWalls, M.ident(stk), null, 1, 0);
+        R.draw(R.rampWalls, M.ident(stk), worldTint, 1, 0);
         R.checker(false);
         R.offset(true);
         R.draw(R.decalsMesh, M.ident(stk), null, 1, 0);
         R.offset(false);
         if (propsGeo && propsGeo.idx.length > 0) R.draw(R.propsMesh, M.ident(stk), null, 1, 0);
         drawDebris(R);
+        if (Feat) Feat.renderWorld(R, eye);
 
         // Машини й персонажі
         var hideMe = !driving && eye.dist < 1.8;
@@ -1194,6 +1238,8 @@
         if (driving && myCar) { if (eye.dist > 2.2) drawSeated(R, myCar, myPose); }
         else if (!hideMe) {
             M.ident(stk); M.translate(stk, walker.x, walker.y, walker.z); M.rotateY(stk, walker.ry);
+            var dpose = Feat ? Feat.deadPose() : null;
+            if (dpose) { M.translate(stk, 0, 0.55 * dpose.tilt, 0); M.rotateX(stk, -1.5 * dpose.tilt); }     // персонаж падає на спину
             drawChar(R, stk, myPose);
         }
         var drawnBase = new Float32Array(16);
@@ -1223,6 +1269,7 @@
         if (myCar) drawCarGlass(R, myCar);
         for (id in remoteCars) drawCarGlass(R, remoteCars[id]);
         R.blend(false);
+        if (Feat) Feat.renderFx(R);
     }
 
     function drawTags() {
@@ -1592,10 +1639,13 @@
     canvas.addEventListener('wheel', function (e) { Cam.wheel(cam, e.deltaY); e.preventDefault(); }, { passive: false });
 
     window.addEventListener('keydown', function (e) {
+        var ae = document.activeElement;
+        if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) return;       // друкуємо в чаті — персонаж не рухається
         input.keys[e.code] = true;
         if (e.code === 'KeyR' && myCar && myCar.flipped) doFlip();         // R — перевернути машину на колеса
     });
     window.addEventListener('keyup', function (e) { input.keys[e.code] = false; });
+    canvas.addEventListener('pointerdown', function () { var ae = document.activeElement; if (ae && ae.tagName === 'INPUT') ae.blur(); });
     window.addEventListener('blur', releaseAll);
     document.addEventListener('visibilitychange', function () { if (document.hidden) releaseAll(); });
     window.addEventListener('resize', resize);
@@ -1612,6 +1662,8 @@
         dt = Math.min(dt, 0.1);
 
         stepLocal(dt);
+        if (Feat) Feat.update(dt);
+        retryRegister(dt);
         // поза мого персонажа
         var mode = driving ? 3 : (walker.a === 2 ? 2 : (walker.a === 1 ? 1 : 0));
         updatePose(myPose, mode, walker.speed || 16, dt, driving && myCar ? myCar.steer / 0.6 : 0);
@@ -1684,6 +1736,7 @@
         // Меню «Respawn»: сервер підтвердив нове місце — виходимо з машини й ставимо персонажа на майданчик
         respawn: function (data) {
             if (!walker) return;
+            if (Feat) { Feat.respawnByMenu(data); return; }        // HP -> 0, персонаж падає, потім з'являється на майданчику
             var s0 = World.spawnPoint();
             var x = data && isFinite(+data.x) ? +data.x : s0.x, z = data && isFinite(+data.z) ? +data.z : s0.z;
             if (driving) setDriving(false, true);
@@ -1699,15 +1752,36 @@
             if (!pendingSpawn) return;
             pendingSpawn = false;
             if (res && res.ok) {
-                if (myCar) myCar.cid = res.cid;
+                if (myCar) { myCar.cid = res.cid; myCar.unreg = false; }
                 lastCarSent = '';
             } else {
-                nlog('сервер не створив машину: ' + (res && res.code));
-                removeMyCarLocal();
-                toast(I18.t(res && res.code === 'rate' ? 'car_wait' : 'car_failed'));
+                var code = res && res.code;
+                nlog('сервер не створив машину: ' + code);
+                // Слабкий інтернет (тайм-аут, обрив, помилка): машину НЕ прибираємо й нічого не пишемо — вона вже стоїть у мене,
+                // а реєстрацію на сервері тихо повторюємо, поки не вдасться (див. retryRegister).
+                if (myCar && (code === 'timeout' || code === 'offline' || code === 'error' || code === 'rate' || code === 'too_far' || code === 'not_in_game' || !code)) {
+                    myCar.unreg = true; myCar.regAt = nowMs() + (code === 'rate' ? 1600 : 2500); myCar.regTry = (myCar.regTry || 0) + 1;
+                } else {
+                    removeMyCarLocal();
+                    toast(I18.t(code === 'rate' ? 'car_wait' : 'car_failed'));
+                }
             }
-        }
+        },
+        // Події сервера для нових можливостей: чат, двері коробки, ядерна подія
+        serverEvent: function (name, data) { if (Feat) Feat.onServerEvent(name, data); },
+        // Відповідь на запит, надісланий через Android.rpc
+        rpcResult: function (id, res) { if (Feat) Feat.rpcResult(id, res); }
     };
+
+    // Тиха повторна реєстрація машини на сервері після невдалого spawn (слабкий інтернет)
+    function retryRegister(dt) {
+        if (!myCar || !myCar.unreg || pendingSpawn || !walker) return;
+        if (nowMs() < (myCar.regAt || 0)) return;
+        if (!N.carSpawn) { myCar.unreg = false; return; }
+        myCar.regAt = nowMs() + 4000;
+        pendingSpawn = true;
+        call(N.carSpawn, myCar.type, myCar.x, myCar.y, myCar.z, myCar.ry);
+    }
 
     // Для перевірки у браузері й автотестах
     window.KishkaGameDebug = {
@@ -1723,6 +1797,23 @@
 
     function boot() {
         try {
+            if (Features && Nuke && Structures && !Feat) {
+                Feat = Features.create({
+                    World: World, Phys: Phys, Models: Models, Structures: Structures, Nuke: Nuke, M: M, I18: I18, $: $, stk: new Float32Array(16),
+                    toast: toast, nowMs: nowMs, standalone: standalone,
+                    me: function () { return { walker: walker, car: myCar, driving: driving }; },
+                    myId: function () { return myId; }, myNick: function () { return myNick; }, remoteCars: function () { return remoteCars; },
+                    setDriving: setDriving, releaseAll: releaseAll,
+                    teleport: function (x, y, z, ry) {
+                        if (!walker) return;
+                        walker.x = x; walker.y = y; walker.z = z; walker.vx = 0; walker.vy = 0; walker.vz = 0; walker.onGround = false;
+                        if (isFinite(ry)) { walker.ry = ry; cam.yaw = ry + Math.PI; }
+                        lastSent = '';
+                    },
+                    nativeRpc: N.rpc, setBurn: setBurn, setTint: function (t) { worldTint = t; }, addShake: function (v) { shake = Math.max(shake, v); }
+                });
+                Feat.init();
+            }
             resize();
             tagsCtx = tagsCanvas.getContext('2d');
             R = createRenderer(canvas, { aa: TIER_CFG.aa, fogNear: Math.round(TIER_CFG.fogFar * 0.38), fogFar: TIER_CFG.fogFar });
