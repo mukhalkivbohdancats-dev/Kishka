@@ -1,3 +1,13 @@
+import java.util.Properties
+
+// Дані підпису: спочатку змінні середовища, потім локальний keystore.properties (не потрапляє в git)
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun signingValue(env: String, prop: String): String? =
+    System.getenv(env)?.takeIf { it.isNotBlank() } ?: keystoreProps.getProperty(prop)?.takeIf { it.isNotBlank() }
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -21,31 +31,37 @@ android {
         }
     }
 
+    // Підпис релізу. Ключ і паролі НЕ лежать у репозиторії: вони беруться зі змінних середовища (GitHub Secrets у workflow)
+    // або з локального файла keystore.properties (він у .gitignore). Якщо їх немає — збирається непідписаний APK.
     signingConfigs {
         create("release") {
-            val keystoreFile = file("keystore.jks")
-            if (keystoreFile.exists()) {
-                storeFile = keystoreFile
-                storePassword = "kishkapassword"
-                keyAlias = "kishka"
-                keyPassword = "kishkapassword"
-            } else {
-                storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
+            val storePath = signingValue("KISHKA_KEYSTORE_FILE", "storeFile")
+            val storePass = signingValue("KISHKA_KEYSTORE_PASSWORD", "storePassword")
+            val alias = signingValue("KISHKA_KEY_ALIAS", "keyAlias")
+            val keyPass = signingValue("KISHKA_KEY_PASSWORD", "keyPassword")
+            if (storePath != null && storePass != null && alias != null && keyPass != null && file(storePath).exists()) {
+                storeFile = file(storePath)
+                storePassword = storePass
+                keyAlias = alias
+                keyPassword = keyPass
             }
         }
     }
 
     buildTypes {
         release {
+            // Справжній релізний APK: не debuggable, без тестових позначок
+            isDebuggable = false
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release")
+            val releaseSigning = signingConfigs.getByName("release")
+            if (releaseSigning.storeFile != null) signingConfig = releaseSigning
         }
         debug {
-            signingConfig = signingConfigs.getByName("release")
+            // Налагоджувальна збірка підписується стандартним debug-ключем Android Studio (без наших секретів)
         }
     }
 
@@ -100,5 +116,7 @@ dependencies {
     }
 
     // Coil для аватарок
+    // Голосовий канал дзвінків: WebSocket на окремий сервіс Kishka-call (див. Voicechannel.kt і папку calls/)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("io.coil-kt:coil-compose:2.6.0")
 }
