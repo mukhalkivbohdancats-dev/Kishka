@@ -1,55 +1,15 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="uk">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KishkaBlox</title>
-<link rel="icon" href="Assets/Kishkablox.png">
-<link rel="stylesheet" href="web.css">
+<title>Kishka Messenger</title>
+<link rel="icon" href="logo_watermark.png">
+<link rel="stylesheet" href="link.css">
 </head>
 <body>
-<header>
-  <img src="Assets/Kishkablox.png" alt="">
-  <span class="brand">KishkaBlox</span>
-  <span class="sp"></span>
-  <div class="langs"><button data-lang="uk">UA</button><button data-lang="ru">RU</button><button data-lang="en">EN</button></div>
-</header>
-<main>
-  <!-- Вхід -->
-  <section id="loginView" class="card login">
-    <h1 id="tLogin"></h1>
-    <p class="sub" id="tLoginSub"></p>
-    <label for="nick" id="tNick"></label>
-    <input id="nick" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" maxlength="20">
-    <label for="pass" id="tPass"></label>
-    <input id="pass" type="password" autocomplete="current-password" maxlength="128">
-    <div class="row"><input id="showPass" type="checkbox"><label for="showPass" id="tShow" style="margin:0"></label></div>
-    <button id="loginBtn" class="btn full" type="button"></button>
-    <div id="loginMsg" class="msg info"></div>
-  </section>
-
-  <!-- Головна після входу -->
-  <section id="homeView" class="hidden">
-    <div class="hello">
-      <div class="avatar" id="avatar"></div>
-      <div class="nick" id="helloNick"></div>
-      <div class="sp"></div>
-      <button id="logoutBtn" class="btn ghost" type="button"></button>
-    </div>
-    <div class="card">
-      <div class="tiles">
-        <div class="tile" id="tileCars"><img src="Assets/Realistic_cars.jpg" alt=""><div>Realistic cars</div></div>
-      </div>
-      <div class="play">
-        <button id="playBtn" class="btn green" type="button"></button>
-        <span id="playHint" class="msg info" style="margin:0"></span>
-      </div>
-      <div class="help" id="help"></div>
-    </div>
-  </section>
-</main>
-<script src="web-config.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.5/dist/socket.io.min.js"></script>
-<script src="lobby.js"></script>
+<div id="app"></div>
+<script>window.KishkaMessengerSite = { home: './' };</script>
+<script src="link.js"></script>
 </body>
 </html>
