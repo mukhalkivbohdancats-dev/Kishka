@@ -1,176 +1,190 @@
 package com.kishka.messenger
 
 import android.os.Handler
-import android.os.HandlerThread
+import android.os.Looper
 import android.os.SystemClock
-import io.socket.client.Ack
-import io.socket.client.IO
-import io.socket.client.Socket
-import io.socket.engineio.client.transports.WebSocket
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okio.ByteString
 import org.json.JSONObject
+import java.util.concurrent.TimeUnit
 
 /**
- * Окремий голосовий канал для дзвінків.
+ * Голосовий канал дзвінків — тепер через ОКРЕМИЙ СЕРВІС «Kishka-call» (папка calls/ у репозиторії).
  *
- * Раніше голос ішов тим самим сокетом, що й усе інше (повідомлення, Gemini, ChatGPT, ВІДЕО-кадри камери й екрана).
- * Один великий кадр відео — і голосові пакети стояли за ним у черзі: звук «рвався», а коли «пінг» запізнювався — рвався
- * весь зв'язок і дзвінок. Тепер голос має власне WebSocket-з'єднання, на якому більше нічого нема:
- *  - відео, чати й синхронізація голосу не заважають;
- *  - з'єднання саме перепідключається за долі секунди, а не разом з основним;
- *  - раз на 2 секунди перевіряється, чи канал живий (немає відповіді 6 с — канал перезапускається),
- *    а поки він не готовий, голос іде основним сокетом (старий шлях) — розмова не мовчить ні секунди.
+ * Чому було «при-… (дивні звуки) … -віт»: голос ішов Socket.IO-сокетом основного сервера, який одночасно обслуговує повідомлення,
+ * Gemini, ChatGPT, відео й базу даних. Кожен пакет їхав як JSON + окремий бінарний кадр, а слабкий безкоштовний інстанс
+ * «підвисав» на пів секунди — і звук рвався, а потім приходив залпом.
+ *
+ * Тепер:
+ *  - голос іде СИРИМИ бінарними кадрами WebSocket на власний сервер, який лише пересилає байти співрозмовнику
+ *    (без JSON, без Socket.IO, TCP_NODELAY, старі кадри відкидаються, а не накопичують затримку);
+ *  - з'єднання саме відновлюється за долі секунди (серцебиття OkHttp кожні 3 с);
+ *  - поки канал не готовий (сервіс «прокидається», мережа змінилась), голос іде основним сокетом, як раніше, —
+ *    розмова не мовчить ні секунди.
+ *
+ * Адреса сервісу — CALL_SERVER_URL нижче. Якщо рядок порожній, канал вимкнений і все працює як раніше (через основний сервер).
  */
 object VoiceChannel {
-    private const val PING_EVERY_MS = 2000L
-    private const val DEAD_AFTER_MS = 6000L
-    private const val FRESH_MS = 4500L
+    /** Адреса сервісу Kishka-call на Render (wss://<назва-сервісу>.onrender.com). Змініть, якщо Render видав іншу. */
+    const val CALL_SERVER_URL = "wss://kishka-call.onrender.com"
 
-    private var socket: Socket? = null
+    private const val RECONNECT_MIN_MS = 300L
+    private const val RECONNECT_MAX_MS = 2500L
+    private const val MAX_QUEUE_BYTES = 48 * 1024L      // якщо в черзі відправки накопичилось більше — канал «душить», шлемо основним
+
+    private val main = Handler(Looper.getMainLooper())
+    private val client: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .pingInterval(3, TimeUnit.SECONDS)            // серцебиття: немає відповіді — з'єднання вважається мертвим і відновлюється
+            .connectTimeout(6, TimeUnit.SECONDS)
+            .readTimeout(0, TimeUnit.MILLISECONDS)
+            .retryOnConnectionFailure(true)
+            .build()
+    }
+
+    private var ws: WebSocket? = null
     private var email = ""
-    private var thread: HandlerThread? = null
-    private var handler: Handler? = null
-    private var pinger: Runnable? = null
+    private var peer = ""
+    private var generation = 0
+    private var backoff = RECONNECT_MIN_MS
 
     @Volatile private var listener: ((ByteArray) -> Unit)? = null
-    @Volatile private var joined = false
-    @Volatile private var lastAckAt = 0L
+    @Volatile private var ready = false                  // сервер підтвердив «hi»
+    @Volatile private var peerOn = false                 // співрозмовник теж підключений до сервісу (інакше голос іде запасним шляхом)
+    @Volatile private var wantOpen = false
 
-    /** Відкрити канал (викликається, щойно почався дзвінок — ще до відповіді, щоб до розмови канал уже був готовий). */
+    /**
+     * Відкрити канал для розмови [myEmail] <-> [peerEmail] (викликається, щойно почався дзвінок — ще до відповіді,
+     * щоб до розмови канал уже був готовий).
+     */
     @Synchronized
-    fun open(myEmail: String) {
-        val clean = myEmail.trim().lowercase()
-        if (clean.isEmpty()) return
-        if (socket != null && email == clean) return
-        close()
-        email = clean
-        try {
-            val options = IO.Options().apply {
-                forceNew = true
-                reconnection = true
-                reconnectionAttempts = Int.MAX_VALUE
-                reconnectionDelay = 300
-                reconnectionDelayMax = 2000
-                timeout = 8000
-                transports = arrayOf(WebSocket.NAME)
-            }
-            val s = IO.socket(KishkaManager.SERVER_URL, options)
-            s.on(Socket.EVENT_CONNECT) { join(s) }
-            s.on(Socket.EVENT_DISCONNECT) { joined = false }
-            s.on(Socket.EVENT_CONNECT_ERROR) { joined = false }
-            s.on("voice_rx") { args ->
-                val bytes = args.firstOrNull() as? ByteArray
-                if (bytes != null && bytes.isNotEmpty()) listener?.invoke(bytes)
-            }
-            socket = s
-            lastAckAt = SystemClock.elapsedRealtime()
-            joined = false
-
-            val t = HandlerThread("KishkaVoiceWatch").also { it.start() }
-            thread = t
-            val h = Handler(t.looper)
-            handler = h
-            val r = object : Runnable {
-                override fun run() {
-                    watchdog()
-                    handler?.postDelayed(this, PING_EVERY_MS)
-                }
-            }
-            pinger = r
-            h.postDelayed(r, PING_EVERY_MS)
-            s.connect()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+    fun open(myEmail: String, peerEmail: String) {
+        val me = myEmail.trim().lowercase()
+        val other = peerEmail.trim().lowercase()
+        if (CALL_SERVER_URL.isBlank() || me.isEmpty() || other.isEmpty() || me == other) return
+        if (wantOpen && ws != null && email == me && peer == other) return
+        closeInternal()
+        email = me
+        peer = other
+        wantOpen = true
+        backoff = RECONNECT_MIN_MS
+        connect(++generation)
     }
 
     /** Закрити канал (дзвінок завершено). */
     @Synchronized
     fun close() {
+        closeInternal()
+        email = ""
+        peer = ""
+        listener = null
+    }
+
+    private fun closeInternal() {
+        wantOpen = false
+        ready = false
+        peerOn = false
+        generation++
+        val w = ws
+        ws = null
         try {
-            pinger?.let { handler?.removeCallbacks(it) }
-            pinger = null
-            handler = null
-            thread?.quitSafely()
-            thread = null
-            val s = socket
-            socket = null
-            joined = false
-            listener = null
-            if (s != null) {
-                s.off()
-                s.disconnect()
-                s.close()
-            }
+            w?.close(1000, "bye")
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        email = ""
     }
 
-    /** Хто отримує пакети голосу, що прийшли цим каналом. */
+    /** Хто отримує кадри голосу, що прийшли цим каналом. */
     fun setListener(l: ((ByteArray) -> Unit)?) {
         listener = l
     }
 
-    /** true — пакет пішов голосовим каналом; false — канал не готовий, надсилайте основним сокетом. */
-    fun send(target: String, packet: ByteArray): Boolean {
-        val s = socket ?: return false
-        if (!joined || !s.connected()) return false
-        if (SystemClock.elapsedRealtime() - lastAckAt > FRESH_MS) return false
+    /** true — кадр пішов голосовим каналом; false — канал не готовий або «душиться», надсилайте основним сокетом. */
+    fun send(@Suppress("UNUSED_PARAMETER") target: String, packet: ByteArray): Boolean {
+        val w = ws ?: return false
+        if (!ready || !peerOn) return false
+        if (w.queueSize() > MAX_QUEUE_BYTES) return false
         return try {
-            val json = JSONObject().apply {
-                put("targetEmail", target.trim().lowercase())
-                put("chunk", packet)
-            }
-            s.emit("voice_tx", json)
-            true
+            w.send(ByteString.of(*packet))
         } catch (e: Exception) {
             e.printStackTrace()
             false
         }
     }
 
-    private fun join(s: Socket) {
+    @Synchronized
+    private fun connect(myGen: Int) {
+        if (!wantOpen || myGen != generation) return
         try {
-            val json = JSONObject().put("email", email)
-            s.emit("voice_join", json, Ack { args ->
-                val ok = (args.firstOrNull() as? JSONObject)?.optBoolean("ok", false) ?: false
-                if (ok) {
-                    joined = true
-                    lastAckAt = SystemClock.elapsedRealtime()
+            val request = Request.Builder().url(CALL_SERVER_URL).build()
+            ws = client.newWebSocket(request, object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    if (myGen != generation) {
+                        webSocket.close(1000, "stale")
+                        return
+                    }
+                    val hello = JSONObject().put("t", "hi").put("me", email).put("peer", peer)
+                    webSocket.send(hello.toString())
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    if (myGen != generation) return
+                    if (text.startsWith("{")) {
+                        val obj = try { JSONObject(text) } catch (e: Exception) { null }
+                        when (obj?.optString("t")) {
+                            "hi" -> if (obj.optBoolean("ok", false)) {
+                                ready = true
+                                backoff = RECONNECT_MIN_MS
+                            }
+                            "peer" -> peerOn = obj.optBoolean("on", false)
+                        }
+                    }
+                }
+
+                override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                    if (myGen != generation) return
+                    val data = bytes.toByteArray()
+                    if (data.isNotEmpty()) listener?.invoke(data)
+                }
+
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    lost(webSocket, myGen)
+                }
+
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    lost(webSocket, myGen)
                 }
             })
         } catch (e: Exception) {
             e.printStackTrace()
+            scheduleReconnect(myGen)
         }
     }
 
-    /** Раз на 2 секунди: канал живий? Немає відповіді — перепідключаємо; не в кімнаті — заходимо знову. */
-    private fun watchdog() {
-        val s = socket ?: return
-        try {
-            if (!s.connected()) {
-                joined = false
-                s.connect()
-                return
-            }
-            val json = JSONObject().put("email", email)
-            s.emit("voice_ping", json, Ack { args ->
-                val res = args.firstOrNull() as? JSONObject
-                if (res != null && res.optBoolean("ok", false)) {
-                    lastAckAt = SystemClock.elapsedRealtime()
-                    if (!res.optBoolean("inRoom", true)) join(s)
-                }
-            })
-            if (SystemClock.elapsedRealtime() - lastAckAt > DEAD_AFTER_MS) {
-                // З'єднання «зависло» (мережа змінилась, а сокет цього не помітив): перезапускаємо
-                joined = false
-                lastAckAt = SystemClock.elapsedRealtime()
-                s.disconnect()
-                s.connect()
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
+    private fun lost(webSocket: WebSocket, myGen: Int) {
+        if (myGen != generation) return
+        synchronized(this) {
+            if (ws === webSocket) ws = null
         }
+        ready = false
+        peerOn = false
+        scheduleReconnect(myGen)
     }
+
+    private fun scheduleReconnect(myGen: Int) {
+        if (!wantOpen || myGen != generation) return
+        val wait = backoff
+        backoff = (backoff * 2).coerceAtMost(RECONNECT_MAX_MS)
+        main.postDelayed({ connect(myGen) }, wait)
+    }
+
+    /** Для діагностики: коли канал готовий, голос іде ним, інакше — основним сервером. */
+    fun isReady(): Boolean = ready && peerOn && ws != null
+
+    @Suppress("unused")
+    private fun now(): Long = SystemClock.elapsedRealtime()
 }
