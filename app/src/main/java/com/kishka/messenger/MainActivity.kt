@@ -38,6 +38,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Reply
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
@@ -330,6 +332,15 @@ class MainActivity : ComponentActivity() {
         launchIntent.getStringExtra(EXTRA_OPEN_CHAT)?.let {
             openChatRequest.value = it
             launchIntent.removeExtra(EXTRA_OPEN_CHAT)
+        }
+
+        // Посилання на профіль (kishka://user/153663): сайт відкрив застосунок — показуємо цього користувача
+        launchIntent.data?.let { link ->
+            val uid = ShareLinks.parseUid(link)
+            if (uid != null) {
+                DeepLinks.openUserRequest.value = uid
+                launchIntent.data = null
+            }
         }
 
         when (launchIntent.getStringExtra(CallCoordinator.EXTRA_CALL_ACTION)) {
@@ -684,6 +695,22 @@ fun KishkaApp() {
                     }
                 }
             }
+        }
+
+        // Відкрито посилання на профіль: показуємо цього користувача (ім'я, аватарка, «Додати в контакти» / «Написати»)
+        val linkUid = DeepLinks.openUserRequest.value
+        if (linkUid != null && signedIn && currentUserEmail.isNotEmpty()) {
+            UserLinkDialog(
+                uid = linkUid,
+                manager = manager,
+                myEmail = currentUserEmail,
+                lang = currentLanguage,
+                onOpenChat = { user ->
+                    selectedUserForChat = user
+                    selectedBottomTabRaw = TAB_CHATS
+                },
+                onDismiss = { DeepLinks.openUserRequest.value = null }
+            )
         }
 
         // Єдине місце, де показуються повідомлення (вікно з кнопкою OK замість "білих смужок")
@@ -1216,6 +1243,11 @@ fun AccountTab(
     var showAiSettings by rememberSaveable { mutableStateOf(false) }
     // «Адмін» — окремий екран (лише для адміністратора): входимо з цієї вкладки, виходимо стрілкою зверху зліва
     var showAdmin by rememberSaveable { mutableStateOf(false) }
+    // Числовий ID акаунта (видає сервер по черзі) і панель «Поділитися» / «Запросити друзів»
+    var myUid by remember(email) { mutableStateOf<Long?>(null) }
+    var shareMode by remember { mutableStateOf<ShareMode?>(null) }
+    LaunchedEffect(email) { manager.getMyUid(email) { myUid = it } }
+    val accountContext = androidx.compose.ui.platform.LocalContext.current
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -1234,7 +1266,27 @@ fun AccountTab(
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text(Strings.get("account_settings", currentLang), fontWeight = FontWeight.Bold) }) }
+        topBar = {
+            TopAppBar(
+                title = { Text(Strings.get("account_settings", currentLang), fontWeight = FontWeight.Bold) },
+                actions = {
+                    // Стрілка «поділитися» зверху справа (як у TikTok): відкриває панель з посиланням на цей акаунт
+                    IconButton(onClick = {
+                        if (myUid == null) {
+                            android.widget.Toast.makeText(accountContext, ShareText.get("loading_id", currentLang), android.widget.Toast.LENGTH_SHORT).show()
+                        } else {
+                            shareMode = ShareMode.PROFILE
+                        }
+                    }) {
+                        Icon(
+                            Icons.Default.Reply,
+                            contentDescription = ShareText.get("share_cd", currentLang),
+                            modifier = Modifier.graphicsLayer(scaleX = -1f)
+                        )
+                    }
+                }
+            )
+        }
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
             // Прокручується і не розтягується на всю ширину планшета: усі кнопки завжди влазять
@@ -1269,6 +1321,22 @@ fun AccountTab(
 
                 AiSettingsEntry(lang = currentLang, onOpen = { showAiSettings = true })
 
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = {
+                        if (myUid == null) {
+                            android.widget.Toast.makeText(accountContext, ShareText.get("loading_id", currentLang), android.widget.Toast.LENGTH_SHORT).show()
+                        } else {
+                            shareMode = ShareMode.INVITE
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(ShareText.get("invite_btn", currentLang), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+
                 if (isAdmin) {
                     Spacer(modifier = Modifier.height(8.dp))
                     AdminEntry(lang = currentLang, onOpen = { showAdmin = true })
@@ -1287,6 +1355,23 @@ fun AccountTab(
 
                 Spacer(modifier = Modifier.height(8.dp))
                 Text("${Strings.get("email_label", currentLang)}: $email", color = Color.Gray, fontSize = 14.sp)
+                // ID акаунта й посилання на профіль: торкніться посилання — відкриється панель «Поділитися»
+                val uidNow = myUid
+                Text(
+                    "${ShareText.get("id_label", currentLang)}: ${uidNow?.toString() ?: "…"}",
+                    color = Color.Gray,
+                    fontSize = 14.sp
+                )
+                if (uidNow != null) {
+                    Text(
+                        ShareLinks.profileUrl(uidNow),
+                        color = ViberPurple,
+                        fontSize = 14.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.clickable { shareMode = ShareMode.PROFILE }
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(20.dp))
 
@@ -1326,6 +1411,20 @@ fun AccountTab(
                 }
             }
         }
+    }
+
+    // Панель знизу (не на весь екран): хрестик зверху зліва, копіювання посилання, три крапки -> мова -> вікно «Поділитися» Android
+    val modeNow = shareMode
+    val uidForSheet = myUid
+    if (modeNow != null && uidForSheet != null) {
+        ShareProfileSheet(
+            mode = modeNow,
+            uid = uidForSheet,
+            name = displayName.ifEmpty { email.substringBefore("@") },
+            avatarUrl = avatarUrl,
+            lang = currentLang,
+            onDismiss = { shareMode = null }
+        )
     }
 }
 
