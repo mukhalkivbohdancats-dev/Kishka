@@ -472,7 +472,7 @@
         var lp = [];
         prof.forEach(function (p) { lp.push([p[0], p[1]]); });
         // lathe навколо осі Y, потім повертаємо вісь на X
-        lathe(g, { profile: lp.map(function (p) { return [p[0], p[1]]; }), seg: 26, rot: [0, 0, Math.PI / 2], color: TIRE });
+        lathe(g, { profile: lp.map(function (p) { return [p[0], p[1]]; }), seg: 40, rot: [0, 0, Math.PI / 2], color: TIRE });
         // бічні стінки світліші біля диска
         lathe(g, { profile: [[R * 0.6, -hw * 0.985], [R * 0.74, -hw * 1.005], [R * 0.74, hw * 1.005], [R * 0.6, hw * 0.985]], seg: 22, rot: [0, 0, Math.PI / 2], color: TIRE_HI });
         // диск: вигнутий (дальній від центру борт глибше), спиці з обох боків
@@ -1006,19 +1006,86 @@
     }
     var CAR_DETAILS = { sedan: addSedanDetails, van: addVanDetails, truck: addTruckDetails };
 
+    // ---------------------------------------------------------------- друга хвиля деталізації (листопад 2026), однакова для всіх машин:
+    // номерні знаки з цифрами на обох бамперах (відлітають разом із бампером), кермо з обідом, спицями й хабом на колонці, приладова
+    // панель із двома шкалами, центральна консоль із важелем, дзеркало салону, омивач і «дворники» під лобовим склом.
+    var PLATE_GLYPHS = {
+        K: ['101', '101', '110', '101', '101'], I: ['111', '010', '010', '010', '111'], S: ['111', '100', '111', '001', '111'],
+        H: ['101', '101', '111', '101', '101'], A: ['010', '101', '111', '101', '101'], '1': ['010', '110', '010', '010', '111'],
+        '2': ['111', '001', '111', '100', '111'], '6': ['111', '100', '111', '101', '111'], '0': ['111', '101', '101', '101', '111']
+    };
+    function plateOn(g, cx, cy, z, dir, w) {
+        // dir = +1 — табличка дивиться на +Z (передня), -1 — на -Z (задня); w — ширина. Текст читається зліва направо з боку глядача.
+        var h = w * 0.22, d = 0.035 * dir, sg = dir > 0 ? 1 : -1;
+        box(g, { c: [cx, cy, z + d * 0.5], s: [w / 2, h / 2, 0.02], color: [0.96, 0.96, 0.9] });
+        box(g, { c: [cx + sg * (-w / 2 + w * 0.045), cy, z + d], s: [w * 0.04, h / 2, 0.012], color: [0.1, 0.25, 0.75] });     // синя смуга зліва
+        var text = 'KISHKA'.split(''), ps = w * 0.0225;
+        for (var i = 0; i < text.length; i++) {
+            var gl = PLATE_GLYPHS[text[i]];
+            for (var gy = 0; gy < 5; gy++) for (var gx = 0; gx < 3; gx++) {
+                if (gl[gy].charAt(gx) !== '1') continue;
+                box(g, { c: [cx + sg * (-w * 0.36 + i * (w * 0.135) + gx * ps * 1.5), cy + (2 - gy) * ps * 1.5, z + d * 1.6], s: [ps * 0.7, ps * 0.7, 0.006], color: [0.06, 0.06, 0.08] });
+            }
+        }
+    }
+    function geoExtent(g, axis) {
+        var lo = 1e9, hi = -1e9;
+        for (var i = axis; i < g.pos.length; i += 3) { if (g.pos[i] < lo) lo = g.pos[i]; if (g.pos[i] > hi) hi = g.pos[i]; }
+        return [lo, hi];
+    }
+    function addCommonDetails(m, def) {
+        var k, sx = def.seat[0], sy = def.seat[1], sz = def.seat[2], body = m.opaque;
+        // номерні знаки: по межах геометрії бамперів (де саме бампер — береться з самої моделі)
+        var fb = m.parts.fbump && m.parts.fbump.geo, rb = m.parts.rbump && m.parts.rbump.geo;
+        if (fb && fb.pos.length) {
+            var zf = geoExtent(fb, 2)[1], yf = geoExtent(fb, 1);
+            plateOn(fb, 0, yf[0] + (yf[1] - yf[0]) * 0.34, zf, 1, Math.min(1.9, def.wid * 0.36));
+        }
+        if (rb && rb.pos.length) {
+            var zr = geoExtent(rb, 2)[0], yr = geoExtent(rb, 1);
+            plateOn(rb, 0, yr[0] + (yr[1] - yr[0]) * 0.5, zr, -1, Math.min(1.9, def.wid * 0.36));
+        }
+        // кермо: обід із 16 сегментів, три спиці, хаб, колонка
+        var wx = sx, wy = sy + 0.95, wz = sz + 1.3, R = 0.46, tilt = 1.1;
+        var ct = Math.cos(tilt), st = Math.sin(tilt);        // «вгору» площини керма в координатах моделі = (0, st, ct)
+        for (k = 0; k < 16; k++) {
+            var a = k / 16 * Math.PI * 2, px = Math.cos(a) * R, pv = Math.sin(a) * R;
+            // площина керма нахилена до водія: локальне «вгору» керма = (0, st, ct) у координатах моделі
+            box(body, { c: [wx + px, wy + pv * st, wz + pv * ct], s: [0.075, 0.075, 0.075], rot: [tilt, 0, a], color: [0.07, 0.07, 0.09] });
+        }
+        for (k = 0; k < 3; k++) {
+            var sa = k * (Math.PI * 2 / 3) + Math.PI / 2, sr = R * 0.5;
+            box(body, { c: [wx + Math.cos(sa) * sr, wy + Math.sin(sa) * sr * st, wz + Math.sin(sa) * sr * ct], s: [0.04, R * 0.5, 0.04], rot: [tilt, 0, sa + Math.PI / 2], color: [0.13, 0.13, 0.16] });
+        }
+        cylinder(body, { c: [wx, wy, wz], r: 0.15, h: 0.1, rot: [tilt, 0, 0], color: [0.2, 0.2, 0.25], seg: 12 });
+        cylinder(body, { c: [wx, wy - 0.18, wz - 0.28], r: 0.07, h: 0.55, rot: [tilt, 0, 0], color: [0.12, 0.12, 0.15], seg: 8 });       // колонка керма
+        // приладова панель перед водієм і пасажиром, дві шкали, центральна консоль, важіль, дзеркало салону
+        var dz = sz + 1.7, dy = sy + 0.78, half = Math.min(def.wid / 2 - 0.55, 2.0);
+        box(body, { c: [0, dy, dz], s: [half, 0.22, 0.28], color: [0.09, 0.095, 0.115] });
+        box(body, { c: [0, dy + 0.26, dz - 0.05], s: [half * 0.96, 0.05, 0.22], color: [0.05, 0.05, 0.065] });
+        cylinder(body, { c: [wx - 0.28, dy + 0.12, dz - 0.3], r: 0.2, h: 0.03, rot: [Math.PI / 2, 0, 0], color: [0.1, 0.55, 0.75], seg: 14 });
+        cylinder(body, { c: [wx + 0.28, dy + 0.12, dz - 0.3], r: 0.2, h: 0.03, rot: [Math.PI / 2, 0, 0], color: [0.85, 0.35, 0.15], seg: 14 });
+        box(body, { c: [0, sy + 0.45, sz + 0.2], s: [0.3, 0.3, 1.1], color: [0.08, 0.085, 0.1] });
+        cylinder(body, { c: [0, sy + 0.95, sz + 0.5], r: 0.05, h: 0.5, color: [0.7, 0.72, 0.76], seg: 8 });
+        sphere(body, [0, sy + 1.22, sz + 0.5], 0.1, [0.12, 0.12, 0.14], { seg: [8, 6] });
+        box(body, { c: [0, dy + 1.05, dz - 0.15], s: [0.32, 0.1, 0.05], color: [0.08, 0.08, 0.1] });
+        // «дворники» й омивач: дві чорні планки біля основи лобового скла
+        for (k = -1; k <= 1; k += 2) box(body, { c: [k * 0.9, dy + 0.34, dz + 0.12], s: [0.7, 0.012, 0.025], rot: [0, k * 0.08, 0], color: [0.04, 0.04, 0.05] });
+    }
+
+
     function buildCar(type) {
         var def = CAR_DEFS[type];
         if (!def) throw new Error('unknown car type: ' + type);
         var m = assembleCar(def.spec());
         if (CAR_DETAILS[type]) CAR_DETAILS[type](m);
-        // кермо перед водієм
-        cylinder(m.opaque, { c: [def.seat[0], def.seat[1] + 0.95, def.seat[2] + 1.3], r: 0.5, h: 0.09, rot: [1.1, 0, 0], color: [0.1, 0.1, 0.12], seg: 14 });
+        addCommonDetails(m, def);
         var wheelPos = def.wheels.map(function (w) {
             return { x: w[0], y: def.wheelR, z: w[1], steer: !!w[2], flip: w[0] < 0 };
         });
         return {
             type: type, opaque: m.opaque, glass: m.glass, parts: m.parts,
-            wheel: wheelGeo(def.wheelR, def.wheelW, 5), wheelPos: wheelPos, wheelR: def.wheelR,
+            wheel: wheelGeo(def.wheelR, def.wheelW, 10), wheelPos: wheelPos, wheelR: def.wheelR,
             seat: def.seat, height: def.height, len: def.len, wid: def.wid
         };
     }
