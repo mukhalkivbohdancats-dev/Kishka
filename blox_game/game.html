@@ -41,10 +41,10 @@
   #jump.down { background: rgba(255,255,255,0.42); }
   .ico { position: absolute; left: 50%; top: 50%; width: 46%; height: 46%; transform: translate(-50%, -50%); pointer-events: none; }
 
-  /* ---------- Кнопка «Cars» (зліва приблизно посередині) ---------- */
+  /* ---------- Кнопка «Cars» (зверху, у ряду з меню й чатом) ---------- */
   #carsBtn {
-    position: fixed; left: calc(var(--safe-l) + 12px); top: calc(50% - 30px);
-    width: 62px; height: 62px; border-radius: 18px; border: 1.5px solid rgba(255,255,255,0.5);
+    position: fixed; left: calc(var(--safe-l) + 12px + (var(--topbtn) + 10px) * 2); top: calc(var(--safe-t) + 10px);
+    width: var(--topbtn); height: var(--topbtn); border-radius: 18px; border: 1.5px solid rgba(255,255,255,0.5);
     background: linear-gradient(160deg, rgba(60,70,95,0.78), rgba(25,30,45,0.78));
     box-shadow: 0 4px 14px rgba(0,0,0,0.35);
     color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
@@ -164,6 +164,108 @@
     opacity: 0; transition: opacity .25s; pointer-events: none; text-align: center; z-index: 30;
   }
   #toast.show { opacity: 1; }
+
+  /* ================= Нові елементи: чат, HP, код-панель, кнопка дії, напис ядерної тривоги ================= */
+  :root { --topbtn: 62px; }           /* розмір круглих кнопок угорі зліва (меню — у застосунку, чат — тут); веб-версія ставить 46px */
+  @media (max-height: 459px) { :root { --topbtn: 52px; } }      /* те саме правило, що в застосунку (Bloxmenu.kt: екран нижче 460dp -> кнопка 52dp) */
+
+  /* ---------- Чат: зверху ліворуч, під кнопками. Без вкладок «Here / Global» і без мікрофона ---------- */
+  #chatBtn {
+    position: fixed; left: calc(var(--safe-l) + 12px + var(--topbtn) + 10px); top: calc(var(--safe-t) + 10px);
+    width: var(--topbtn); height: var(--topbtn); border-radius: 50%; border: 0; padding: 0; cursor: pointer; touch-action: manipulation;
+    background: rgba(20,22,26,0.86); box-shadow: 0 3px 10px rgba(0,0,0,0.35); z-index: 12;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #chatBtn svg { width: 46%; height: 46%; }
+  #chatBtn.on { background: rgba(48,52,60,0.92); }
+  #chatBtn:active { transform: scale(0.93); }
+  #chatPanel {
+    position: fixed; left: calc(var(--safe-l) + 12px); top: calc(var(--safe-t) + 10px + var(--topbtn) + 10px);
+    width: 340px; max-width: 46vw; box-sizing: border-box; z-index: 11;
+    background: rgba(18,20,24,0.62); border-radius: 12px; overflow: hidden; color: #fff;
+    display: flex; flex-direction: column; -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+  }
+  #chatPanel.hidden { display: none; }
+  #chatList { height: 116px; overflow-y: auto; padding: 8px 10px 4px; font-size: 14px; line-height: 1.32; touch-action: pan-y; -webkit-overflow-scrolling: touch; }
+  #chatList .cm { margin-bottom: 3px; word-wrap: break-word; overflow-wrap: anywhere; text-shadow: 0 1px 2px rgba(0,0,0,0.7); }
+  #chatList .cm b { font-weight: 800; }
+  #chatInput {
+    -webkit-user-select: text; user-select: text; touch-action: manipulation;
+    margin: 0 8px 8px; height: 38px; box-sizing: border-box; border: 0; border-radius: 19px; padding: 0 14px;
+    background: rgba(10,12,16,0.7); color: #fff; font-size: 15px; outline: none; font-family: inherit;
+  }
+  #chatInput::placeholder { color: rgba(255,255,255,0.55); }
+
+  /* ---------- Смужка здоров'я: зверху праворуч, як у Roblox. Колір задає JS: червоний -> зелений ---------- */
+  #hp {
+    position: fixed; right: calc(var(--safe-r) + 16px); top: calc(var(--safe-t) + 16px); width: 168px; height: 18px; box-sizing: border-box;
+    border: 2.5px solid rgba(255,255,255,0.92); border-radius: 10px; background: rgba(0,0,0,0.5); overflow: hidden; z-index: 12;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4); pointer-events: none;
+  }
+  #hpFill { height: 100%; width: 100%; background: hsl(120,82%,46%); transition: width .18s ease-out, background-color .18s; }
+  #hurt { position: fixed; left: 0; top: 0; right: 0; bottom: 0; background: radial-gradient(ellipse at center, rgba(255,0,0,0) 40%, rgba(220,0,0,0.75) 100%); opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 13; }
+
+  /* ---------- Код-панель: НЕ на весь екран, хрестик зверху справа ---------- */
+  #kpModal {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 262px; box-sizing: border-box; z-index: 25;
+    padding: 12px 14px 14px; border-radius: 22px; color: #fff; touch-action: manipulation;
+    background: rgba(18,21,30,0.9); border: 1.5px solid rgba(255,255,255,0.28); box-shadow: 0 14px 40px rgba(0,0,0,0.55);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); animation: pop .18s ease-out;
+  }
+  #kpModal.hidden { display: none; }
+  #kpHead { position: relative; height: 38px; display: flex; align-items: center; justify-content: center; }
+  #kpTitle { font-size: 17px; font-weight: 800; letter-spacing: .3px; }
+  #kpClose {
+    position: absolute; right: -2px; top: 0; width: 36px; height: 36px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.85);
+    background: #e5484d; padding: 0; cursor: pointer; display: flex; align-items: center; justify-content: center; touch-action: manipulation;
+  }
+  #kpClose svg { width: 16px; height: 16px; }
+  #kpDisp {
+    margin: 8px 0 4px; height: 46px; border-radius: 12px; background: #0d2418; border: 1.5px solid #1d4a31; color: #7dffa6;
+    font-family: 'Courier New', monospace; font-size: 28px; font-weight: 800; letter-spacing: 3px; display: flex; align-items: center; justify-content: center; overflow: hidden;
+  }
+  #kpMsg { height: 20px; text-align: center; font-size: 14px; font-weight: 700; color: #9bf0ad; }
+  #kpMsg.bad { color: #ff6b6b; }
+  #kpKeys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 4px; }
+  #kpKeys button {
+    height: 52px; border-radius: 14px; border: 1.5px solid rgba(255,255,255,0.22); background: rgba(255,255,255,0.12); color: #fff;
+    font-size: 24px; font-weight: 800; cursor: pointer; touch-action: manipulation; padding: 0; display: flex; align-items: center; justify-content: center;
+  }
+  #kpKeys button:active { background: rgba(255,255,255,0.3); transform: scale(0.95); }
+  #kpKeys button.kx { background: rgba(229,72,77,0.55); }
+  #kpKeys button.kv { background: rgba(40,190,90,0.6); }
+  #kpKeys svg { width: 24px; height: 24px; }
+
+  /* ---------- Кнопка дії поруч із панеллю чи червоною кнопкою ---------- */
+  #useBtn {
+    position: fixed; right: calc(var(--safe-r) + 22px); bottom: calc(var(--safe-b) + 240px); height: 54px; padding: 0 22px; border-radius: 27px;
+    border: 2px solid rgba(255,255,255,0.75); background: rgba(25,30,45,0.86); color: #fff; font-size: 17px; font-weight: 900; letter-spacing: .5px;
+    display: none; align-items: center; cursor: pointer; touch-action: manipulation; box-shadow: 0 3px 14px rgba(0,0,0,0.4); z-index: 8;
+  }
+  #useBtn.show { display: flex; }
+  #useBtn.red { background: linear-gradient(180deg, #ff4a3d, #c4160c); border-color: #fff; animation: spawnPulse 1s ease-in-out infinite; }
+  #useBtn:active { transform: scale(0.95); }
+
+  /* ---------- Ядерна тривога: напис між верхом і серединою екрана, праворуч від нього відлік 59С -> 0 ---------- */
+  #nukeBanner {
+    position: fixed; left: 50%; top: 16%; transform: translate(-50%, -50%); z-index: 40; display: none; align-items: center; gap: 22px; pointer-events: none;
+    max-width: 96vw; white-space: nowrap;
+  }
+  #nukeBanner.show { display: flex; animation: nukeIn .45s ease-out; }
+  @keyframes nukeIn { from { opacity: 0; transform: translate(-50%, -80%) scale(.9); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
+  #nbText, #nbCount {
+    font-family: Impact, 'Haettenschweiler', 'Arial Black', 'Arial Narrow Bold', 'Roboto Condensed', sans-serif; font-weight: 900; text-transform: uppercase;
+    letter-spacing: 2px; text-shadow: 0 0 14px rgba(255,40,0,0.85), 0 3px 0 rgba(0,0,0,0.75), 0 0 34px rgba(255,120,0,0.55);
+  }
+  #nbText { font-size: 30px; color: #fff3e0; animation: nukePulse 1s ease-in-out infinite; }
+  #nbCount { font-size: 44px; color: #ff3d2e; min-width: 92px; text-align: left; }
+  #nbCount.low { animation: nukePulse .5s ease-in-out infinite; color: #ff1a1a; }
+  @keyframes nukePulse { 0%, 100% { opacity: 1; } 50% { opacity: .72; } }
+  @media (max-width: 760px) { #nbText { font-size: 20px; } #nbCount { font-size: 30px; min-width: 66px; } #nukeBanner { gap: 12px; } }
+  #flashOv { position: fixed; left: 0; top: 0; right: 0; bottom: 0; background: #fff6e0; opacity: 0; pointer-events: none; z-index: 45; }
+
+  /* Під час кінематографічної камери ховаємо кнопки керування */
+  body.cine #stick, body.cine #jump, body.cine .ctl, body.cine #carAct, body.cine #carsBtn, body.cine #speedo, body.cine #useBtn, body.cine #flipBtn { display: none !important; }
 </style>
 </head>
 <body>
@@ -218,12 +320,50 @@
 
 <div id="toast"></div>
 
-<!-- Порядок важливий: світ -> фізика -> камера -> переклади -> моделі -> гра -->
+<!-- ===== Нові елементи (керує features.js) ===== -->
+<button id="chatBtn" type="button" aria-label="Chat" class="on">
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-8l-5 4.2V17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" fill="#fff"/><path d="M6.5 8.2h11M6.5 11.8h7" stroke="#16181c" stroke-width="1.7" stroke-linecap="round"/></svg>
+</button>
+<div id="chatPanel">
+  <div id="chatList" aria-live="polite"></div>
+  <input id="chatInput" type="text" maxlength="160" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="send" placeholder="Tap here to chat">
+</div>
+
+<div id="hp" role="progressbar" aria-label="Health" aria-valuemin="0" aria-valuemax="100"><div id="hpFill"></div></div>
+<div id="hurt"></div>
+
+<div id="kpModal" class="hidden" role="dialog">
+  <div id="kpHead">
+    <div id="kpTitle">Door code</div>
+    <button id="kpClose" type="button" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M5 5l14 14M19 5L5 19" stroke="#fff" stroke-width="3.4" stroke-linecap="round"/></svg></button>
+  </div>
+  <div id="kpDisp" class="empty"></div>
+  <div id="kpMsg" class="kpmsg"></div>
+  <div id="kpKeys">
+    <button type="button" data-k="1">1</button><button type="button" data-k="2">2</button><button type="button" data-k="3">3</button>
+    <button type="button" data-k="4">4</button><button type="button" data-k="5">5</button><button type="button" data-k="6">6</button>
+    <button type="button" data-k="7">7</button><button type="button" data-k="8">8</button><button type="button" data-k="9">9</button>
+    <button type="button" data-k="x" class="kx" aria-label="Erase"><svg viewBox="0 0 24 24"><path d="M5 5l14 14M19 5L5 19" stroke="#fff" stroke-width="3.2" stroke-linecap="round"/></svg></button>
+    <button type="button" data-k="0">0</button>
+    <button type="button" data-k="v" class="kv" aria-label="Enter"><svg viewBox="0 0 24 24"><path d="M4 12.5l5.5 5.5L20 6.5" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+  </div>
+</div>
+
+<button id="useBtn" type="button"><span id="useTxt"></span></button>
+
+<div id="nukeBanner"><div id="nbText"></div><div id="nbCount"></div></div>
+<div id="flashOv"></div>
+
+
+<!-- Порядок важливий: світ -> фізика -> камера -> переклади -> моделі -> споруди -> ядерний таймлайн -> нові можливості -> гра -->
 <script src="world.js"></script>
 <script src="physics.js"></script>
 <script src="camera.js"></script>
 <script src="i18n.js"></script>
 <script src="models.js"></script>
+<script src="structures.js"></script>
+<script src="nuke.js"></script>
+<script src="features.js"></script>
 <script src="game.js"></script>
 </body>
 </html>
