@@ -23,7 +23,7 @@
 // Файли беруться з папки blox_game/ (змінна BLOX_GAME_DIR) + дві картинки з Assets/ (див. BLOX_ASSET_ALIASES).
 // Помилки завжди повертаються як JSON { ok:false, error, message } з відповідним HTTP-статусом — ніколи не HTML.
 // Сервер сам надсилає подію 'blox_update' у кімнату пошти (усі пристрої цього акаунта Kishka), коли змінились друзі/запити.
-// Коди помилок: bad_nick, bad_password, taken, has_account, not_found, wrong_password, too_many, not_logged_in, self, error
+// Коди помилок: bad_nick, bad_password, taken, (has_account — більше не повертається: акаунтів може бути безліч), not_found, wrong_password, too_many, not_logged_in, self, error
 //
 // Правила, як у Roblox: нік 3–20 символів (літери, цифри, підкреслення), унікальний (регістр не враховується);
 // пароль — будь-який, від 6 символів. Підтвердження поштою не потрібне. Один акаунт Kishka = один акаунт KishkaBlox.
@@ -415,7 +415,10 @@ module.exports = function initKishkaBlox(ctx) {
         // Якщо колонка вже є — база поверне помилку, її ігноруємо.
         try { await dbRun('ALTER TABLE blox_accounts ADD COLUMN owner_email TEXT'); } catch (e) { /* вже є */ }
         try { await dbRun('ALTER TABLE blox_accounts ADD COLUMN logged_in INTEGER DEFAULT 0'); } catch (e) { /* вже є */ }
-        await dbRun('CREATE UNIQUE INDEX IF NOT EXISTS idx_blox_owner ON blox_accounts (owner_email)');
+        // Безліміт акаунтів: один акаунт Kishka може мати СКІЛЬКИ ЗАВГОДНО акаунтів KishkaBlox (раніше тут був унікальний індекс «один власник — один акаунт»).
+        // Індекс лишається звичайним (не унікальним) лише для швидкого пошуку. Активний акаунт — той, у якого logged_in = 1 (на власника він один).
+        try { await dbRun('DROP INDEX IF EXISTS idx_blox_owner'); } catch (e) { /* немає */ }
+        await dbRun('CREATE INDEX IF NOT EXISTS idx_blox_owner_any ON blox_accounts (owner_email)');
 
         await dbRun(`CREATE TABLE IF NOT EXISTS blox_friend_requests (
             from_lower TEXT NOT NULL,
@@ -450,13 +453,27 @@ module.exports = function initKishkaBlox(ctx) {
         });
     }
 
+    // Активний акаунт власника: той, що зараз увійшов; якщо жоден не увійшов — останній створений/використаний
     async function accountByOwner(email) {
         if (!email) return null;
         const rows = await dbAll(
-            'SELECT nick_lower, nick, pass_salt, pass_hash, logged_in, owner_email FROM blox_accounts WHERE owner_email = ?',
+            'SELECT nick_lower, nick, pass_salt, pass_hash, logged_in, owner_email FROM blox_accounts WHERE owner_email = ? ORDER BY logged_in DESC, created DESC',
             [email]
         );
         return rows[0] || null;
+    }
+
+    // Усі акаунти KishkaBlox цього власника (безліміт): ніки, найновіші першими
+    async function nicksByOwner(email) {
+        if (!email) return [];
+        const rows = await dbAll('SELECT nick FROM blox_accounts WHERE owner_email = ? ORDER BY created DESC', [email]);
+        return rows.map((r) => r.nick);
+    }
+
+    // Робить акаунт активним, а решту акаунтів цього власника — вийшовшими (одночасно увійти можна лише в один)
+    async function activate(email, nickLower) {
+        await dbRun('UPDATE blox_accounts SET logged_in = 0 WHERE owner_email = ? AND nick_lower <> ?', [email, nickLower]);
+        await dbRun('UPDATE blox_accounts SET logged_in = 1 WHERE owner_email = ? AND nick_lower = ?', [email, nickLower]);
     }
 
     async function accountByNick(nickLower) {
@@ -524,7 +541,7 @@ module.exports = function initKishkaBlox(ctx) {
             if (!email) return done({ success: false, code: 'error' });
             const acc = await accountByOwner(email);
             if (!acc) return done({ success: true, state: 'none' });
-            if (Number(acc.logged_in) !== 1) return done({ success: true, state: 'out', nick: acc.nick });
+            if (Number(acc.logged_in) !== 1) return done({ success: true, state: 'out', nick: acc.nick, nicks: await nicksByOwner(email) });
 
             const friends = await dbAll(
                 `SELECT a.nick AS nick FROM blox_friends f JOIN blox_accounts a ON a.nick_lower = f.b_lower
@@ -559,9 +576,7 @@ module.exports = function initKishkaBlox(ctx) {
             if (!validNick(nick)) return done({ success: false, code: 'bad_nick' });
             if (!validPassword(password)) return done({ success: false, code: 'bad_password' });
 
-            // Один акаунт Kishka — один акаунт KishkaBlox
-            if (await accountByOwner(email)) return done({ success: false, code: 'has_account' });
-
+            // Безліміт: один акаунт Kishka може створити скільки завгодно акаунтів KishkaBlox (різні ніки)
             const nickLower = nick.toLowerCase();
             if (await accountByNick(nickLower)) return done({ success: false, code: 'taken' });
 
@@ -572,11 +587,11 @@ module.exports = function initKishkaBlox(ctx) {
                     [nickLower, nick, salt, hashPassword(password, salt), Date.now(), email]
                 );
             } catch (e) {
-                // Двоє одночасно зайняли один нік (або один акаунт Kishka створив двічі): база пропустила лише першого
+                // Двоє одночасно зайняли один нік: база пропустила лише першого
                 if (await accountByNick(nickLower)) return done({ success: false, code: 'taken' });
-                if (await accountByOwner(email)) return done({ success: false, code: 'has_account' });
                 throw e;
             }
+            await activate(email, nickLower);                 // новий акаунт стає активним, інші акаунти цього власника — «вийшли»
             notifyOwner(email);
             done({ success: true, nick });
         });
@@ -598,18 +613,11 @@ module.exports = function initKishkaBlox(ctx) {
                 done({ success: false, code });
             };
 
-            const mine = await accountByOwner(email);
-            let target;
-            if (mine) {
-                // В акаунта Kishka вже є свій KishkaBlox: увійти можна лише в нього
-                if (mine.nick_lower !== nickLower) return fail('wrong_password');
-                target = mine;
-            } else {
-                target = await accountByNick(nickLower);
-                if (!target) return fail('not_found');
-                // Чужий акаунт (прив'язаний до іншого акаунта Kishka) — не відкриваємо, не розкриваючи подробиць
-                if (target.owner_email && target.owner_email !== email) return fail('wrong_password');
-            }
+            // Безліміт: у свої акаунти KishkaBlox (їх може бути багато) можна входити за ніком; в чужі — ні
+            const target = await accountByNick(nickLower);
+            if (!target) return fail('not_found');
+            // Чужий акаунт (прив'язаний до іншого акаунта Kishka) — не відкриваємо, не розкриваючи подробиць
+            if (target.owner_email && target.owner_email !== email) return fail('wrong_password');
 
             if (!safeEqualHex(hashPassword(password, target.pass_salt), target.pass_hash)) return fail('wrong_password');
 
@@ -618,9 +626,8 @@ module.exports = function initKishkaBlox(ctx) {
                 await dbRun('UPDATE blox_accounts SET owner_email = ?, logged_in = 1 WHERE nick_lower = ? AND owner_email IS NULL', [email, target.nick_lower]);
                 const after = await accountByNick(target.nick_lower);
                 if (!after || after.owner_email !== email) return fail('wrong_password');
-            } else {
-                await dbRun('UPDATE blox_accounts SET logged_in = 1 WHERE nick_lower = ? AND owner_email = ?', [target.nick_lower, email]);
             }
+            await activate(email, target.nick_lower);          // решта акаунтів цього власника стають «вийшли»
 
             failures.delete(nickLower);
             failures.delete(emailKey);
@@ -652,7 +659,7 @@ module.exports = function initKishkaBlox(ctx) {
             if (!safeEqualHex(hashPassword(password, target.pass_salt), target.pass_hash)) return fail('wrong_password');
             // Старий акаунт без прив'язки до акаунта Kishka: його спершу треба один раз відкрити в застосунку (там він прив'язується)
             if (!target.owner_email) return done({ success: false, code: 'not_bound' });
-            await dbRun('UPDATE blox_accounts SET logged_in = 1 WHERE nick_lower = ? AND owner_email = ?', [target.nick_lower, target.owner_email]);
+            await activate(target.owner_email, target.nick_lower);
             failures.delete(nickLower);
             failures.delete(ipKey);
             socket.userEmail = target.owner_email;
