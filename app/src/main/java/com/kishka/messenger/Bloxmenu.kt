@@ -2,6 +2,7 @@ package com.kishka.messenger
 
 import android.content.Intent
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -68,6 +69,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -103,7 +105,7 @@ private fun avatarColor(nick: String): Color {
     return Color(AVATAR_COLORS[h % AVATAR_COLORS.size])
 }
 
-/** Верхній ряд у грі: лише одна кругла кнопка меню (значок «три смуги»). Іконку людей, логотип і решту іконок прибрано. */
+/** Верхній ряд у грі: кругла кнопка меню зі значком-логотипом Kishka (замість «трьох смуг»). Поруч в HTML гри — кнопки чату й машин (blox_game/game.html). */
 @Composable
 fun BoxScope.BloxTopBar(lang: String, menuOpen: Boolean, onToggle: () -> Unit) {
     val b: (String) -> String = { key -> BloxStrings.get(key, lang) }
@@ -120,7 +122,13 @@ fun BoxScope.BloxTopBar(lang: String, menuOpen: Boolean, onToggle: () -> Unit) {
             .clickable(onClick = onToggle),
         contentAlignment = Alignment.Center
     ) {
-        Icon(Icons.Default.Menu, contentDescription = b("menu"), tint = Color.White, modifier = Modifier.size(30.dp))
+        // Значок меню — логотип Kishka (res/drawable-nodpi/logo_watermark.png) замість «трьох смуг»
+        Image(
+            painter = painterResource(R.drawable.logo_watermark),
+            contentDescription = b("menu"),
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize().padding(if (compact) 7.dp else 8.dp)
+        )
     }
 }
 
